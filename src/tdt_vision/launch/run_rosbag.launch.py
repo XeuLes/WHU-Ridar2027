@@ -90,6 +90,7 @@ def generate_launch_description():
         radar_detect_node, radar_resolve_node, foxglove_node, ros_bag_player_node
     )
 
+    # 地图服务
     plugin_map_launch_cmd = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
             [
@@ -102,3 +103,6 @@ def generate_launch_description():
         ),
     )
     return LaunchDescription([cam_detector, plugin_map_launch_cmd])
+
+    # # 暂时略过地图服务
+    # return LaunchDescription([cam_detector])  # 仅保留cam_detector（检测、rosbag、可视化节点）
