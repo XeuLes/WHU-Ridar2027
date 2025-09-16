@@ -325,8 +325,14 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
     }
     if (dart_cloud.size() > 5) {  // 点数超过5时，判定为检测到飞镖
         RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Find dart cloud!");
-        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Dart cloud size: %d",
+        // // 原代码
+        // RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Dart cloud size: %d",
+        //             dart_cloud.size());
+
+        // 修改后
+        RCLCPP_WARN(rclcpp::get_logger("rclcpp"), "Dart cloud size: %zu",
                     dart_cloud.size());
+
         lidar_detect.dart_state = 1;  // 设置飞镖警告状态
     }
 
