@@ -1,41 +1,47 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
+  <!-- 基础信息 -->
   <name>rosbag_player</name>
-  <version>0.0.0</version>
-  <description>ros bag toolkit</description>
+  <version>0.0.1</version>
+  <description>ROS 2 功能包，提供rosbag播放功能，支持将PointCloud2点云转换并保存为LVX2格式（Livox动态点云格式），同时处理图像和匹配信息消息。</description>
+  
   <maintainer email="xun_001@outlook.com">tdt</maintainer>
-  <license>TODO: License declaration</license>
+  <license>Apache-2.0</license>
 
+  <!-- 编译工具依赖 -->
   <buildtool_depend>ament_cmake</buildtool_depend>
 
+  <!-- 编译依赖 -->
+  <build_depend>rosidl_default_generators</build_depend>
+  <build_depend>pcl_conversions</build_depend>  <!-- 补充PCL转换依赖的编译时声明 -->
+  <build_depend>rosbag2_storage</build_depend>
+  <build_depend>vision_interface</build_depend>
+
+  <!-- 运行依赖 -->
+  <exec_depend>rclcpp</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>tf2</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>tf2_sensor_msgs</exec_depend>
+  <exec_depend>rosbag2_cpp</exec_depend>
+  <exec_depend>rosidl_generator_traits</exec_depend>
+  <exec_depend>rosidl_typesupport_cpp</exec_depend>
+  <exec_depend>opencv2</exec_depend>  <!-- 修正：ROS 2中OpenCV的标准依赖名称为opencv2 -->
+  <exec_depend>cv_bridge</exec_depend>
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>pcl_conversions</exec_depend>
+  <exec_depend>vision_interface</exec_depend>
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
+  <!-- 测试依赖 -->
   <test_depend>ament_lint_auto</test_depend>
   <test_depend>ament_lint_common</test_depend>
-  <depend>rclcpp</depend>
-  <depend>tf2</depend>
-  <depend>tf2_ros</depend>
-  <depend>tf2_sensor_msgs</depend>
-  <depend>rosbag2_cpp</depend>
-  <depend>rosbag2_storage</depend>
-  <depend>rosidl_generator_traits</depend>
-  <depend>rosidl_typesupport_cpp</depend>
-  <depend>rclcpp_components</depend>
-  <depend>OpenCV</depend>
-    <depend>cv_bridge</depend>
-    <depend>image_transport</depend>
-    <depend>sensor_msgs</depend>
-    <depend>std_msgs</depend>
-    <depend>PCL</depend>
-    <depend>pcl_conversions</depend>
-    <depend>vision_interface</depend>
 
-  
-  <build_depend>rosidl_default_generators</build_depend>
-  <exec_depend>rosidl_default_runtime</exec_depend>
+  <!-- 消息接口声明（如需自定义消息保留） -->
   <member_of_group>rosidl_interface_packages</member_of_group>
-
-  
-
 
   <export>
     <build_type>ament_cmake</build_type>
