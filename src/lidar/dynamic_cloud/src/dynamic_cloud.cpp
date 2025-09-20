@@ -23,14 +23,16 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
         PCL_ERROR("Couldn't read file map.pcd \n");  // 加载失败时打印错误
     }
 
-    // 对地图点云进行体素下采样（减少点数量，提高后续处理效率）
-    pcl::VoxelGrid<pcl::PointXYZ> sor;  // 体素滤波器
-    sor.setInputCloud(temp_cloud);      // 设置输入点云
-    sor.setLeafSize(0.1f, 0.1f, 0.1f);  // 体素大小（0.1m×0.1m×0.1m）
-    auto result = pcl::PointCloud<pcl::PointXYZ>::Ptr(
-        new pcl::PointCloud<pcl::PointXYZ>);
-    sor.filter(*result);  // 执行下采样
-    map_cloud = result;   // 保存下采样后的地图点云
+    // // 对地图点云进行体素下采样（减少点数量，提高后续处理效率）
+    // pcl::VoxelGrid<pcl::PointXYZ> sor;  // 体素滤波器
+    // sor.setInputCloud(temp_cloud);      // 设置输入点云
+    // sor.setLeafSize(0.1f, 0.1f, 0.1f);  // 体素大小（0.1m×0.1m×0.1m）
+    // auto result = pcl::PointCloud<pcl::PointXYZ>::Ptr(
+    //     new pcl::PointCloud<pcl::PointXYZ>);
+    // sor.filter(*result);  // 执行下采样
+    // map_cloud = result;   // 保存下采样后的地图点云
+
+    map_cloud = temp_cloud;
 
     // 构建KD-Tree（用于后续快速最近邻搜索）
     kd_Tree.setInputCloud(map_cloud);
