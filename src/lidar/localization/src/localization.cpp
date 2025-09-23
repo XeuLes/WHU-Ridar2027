@@ -138,12 +138,21 @@ private:
             // 目的：去除超出场景范围的噪声点，减少计算量
             pcl::PointCloud<pcl::PointXYZ>::Ptr final_cloud(
                 new pcl::PointCloud<pcl::PointXYZ>());
+            // RCLCPP_INFO(this->get_logger(), "[ROI] 过滤前点数：%",
+            //             result->size());  // 打印栅格处理后的点数
             for (auto point : result->points) {
                 if (point.x > 5 && point.x < 30 && point.y > -10 &&
                     point.y < 8 && point.z < 7) {
-                    final_cloud->push_back(point);  // 保留ROI内的点
+                    final_cloud->push_back(point);
                 }
             }
+            // RCLCPP_WARN(this->get_logger(), "[ROI] 过滤后点数：%d",
+            //             final_cloud->size());  // 关键！看是否为0
+            // if (final_cloud->empty()) {
+            //     RCLCPP_ERROR(this->get_logger(),
+            //                  "[ROI] 所有点都被过滤了！请调整ROI范围");
+            //     return;  // 为空则退出，避免后续无意义处理
+            // }
 
             // 6. 下采样（体素网格滤波）：减少点数量，加速配准计算
             pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled(
@@ -207,7 +216,7 @@ private:
         RCLCPP_WARN(this->get_logger(), "calib result : %f",
                     registration->getFitnessScore());
 
-        if (registration->getFitnessScore() < 0.2) {
+        if (registration->getFitnessScore() < 0.15) {
             has_aligned_ = true;
         }
 
