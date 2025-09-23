@@ -21,4 +21,12 @@ rclcpp_components_register_node(${LOCALIZATION_NODE}
 )
 target_link_libraries(${LOCALIZATION_NODE} ${PCL_LIBRARIES})
 
+# 安装launch文件
+install(DIRECTORY
+  launch
+  config
+  DESTINATION share/${PROJECT_NAME}
+)
+
+
 ament_auto_package ()
