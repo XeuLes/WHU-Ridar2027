@@ -24,8 +24,7 @@ def generate_launch_description():
             plugin='tdt_radar::Localization',
             name='localization_node',
             parameters=[{
-                # 可在这里覆盖PCD地图路径参数
-                # "target_pcd_file": os.path.join(localization_share_dir, "config", "RM2025.pcd")
+                
             }],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
