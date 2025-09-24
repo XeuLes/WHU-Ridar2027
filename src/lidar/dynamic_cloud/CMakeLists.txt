@@ -46,10 +46,15 @@ install(DIRECTORY
 
 # 7.3 安装config.rviz（核心修正：用ROS 2标准路径替代CATKIN变量）
 install(
-  FILES config/config.rviz  # 你的config文件实际路径（相对包根目录）
-  DESTINATION share/${PROJECT_NAME}/config  # 正确目标路径：install/dynamic_cloud/share/dynamic_cloud/config/
+    DIRECTORY config
+  DESTINATION share/${PROJECT_NAME}
+  FILES_MATCHING
+  PATTERN "*.rviz"
+  PATTERN "*.yaml"
+  PATTERN "*.xml"
+  PATTERN ".git" EXCLUDE  # 排除版本控制文件
+  PATTERN "*~" EXCLUDE    # 排除临时文件
 )
-
 # 8. 消除头文件安装路径警告（原逻辑保留）
 set(USE_SCOPED_HEADER_INSTALL_DIR ON)
 
