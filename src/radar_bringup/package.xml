@@ -1,0 +1,38 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>radar_bringup</name>
+  <version>0.0.0</version>
+  <description>Launch package for radar system (includes localization, dynamic cloud, cluster and driver nodes)</description>
+  <maintainer email="your_email@example.com">Your Name</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- 构建依赖 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 运行依赖：launch基础功能 -->
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+
+  <!-- 运行依赖：激光雷达驱动 -->
+  <exec_depend>livox_ros_driver2</exec_depend>
+
+  <!-- 运行依赖：功能节点 -->
+  <exec_depend>localization</exec_depend>
+  <exec_depend>dynamic_cloud</exec_depend>
+  <exec_depend>cluster</exec_depend>
+
+  <!-- 运行依赖：点云处理 -->
+  <exec_depend>pcl_ros</exec_depend>
+
+  <!-- 运行依赖：可视化 -->
+  <exec_depend>rviz2</exec_depend>
+
+  <!-- 测试相关依赖（可选） -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
