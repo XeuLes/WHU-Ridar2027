@@ -1,0 +1,9 @@
+# 节点名称（后续启动时要对应，类比雷达的livox_lidar_node）
+hk_camera_node:
+  ros__parameters:
+    camera_ip: "192.168.1.64"    # 必须改！从MVS的“设备搜索”里看相机IP
+    resolution: [1280, 720]      # 图像分辨率（MVS里能看到支持的分辨率）
+    fps: 30                      # 帧率（相机支持的帧率，如10/20/30）
+    frame_id: "camera_link"      # 图像的坐标系名称（类比雷达的livox_frame）
+    publish_topic: "/camera/image_raw"  # 发布的图像话题名（后续用这个看图像）
+
