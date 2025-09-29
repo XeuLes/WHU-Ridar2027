@@ -282,15 +282,24 @@ else(ROS_EDITION STREQUAL "ROS2")
   target_include_directories(${PROJECT_NAME} PRIVATE ${livox_sdk_INCLUDE_DIRS})
 
   # get include directories of custom msg headers
-  if(HUMBLE_ROS STREQUAL "humble")
-    rosidl_get_typesupport_target(cpp_typesupport_target
-    ${LIVOX_INTERFACES} "rosidl_typesupport_cpp")
-    target_link_libraries(${PROJECT_NAME} "${cpp_typesupport_target}")
-  else()
-    set(LIVOX_INTERFACE_TARGET "${LIVOX_INTERFACES}__rosidl_typesupport_cpp")
-    add_dependencies(${PROJECT_NAME} ${LIVOX_INTERFACES})
-    get_target_property(LIVOX_INTERFACES_INCLUDE_DIRECTORIES ${LIVOX_INTERFACE_TARGET} INTERFACE_INCLUDE_DIRECTORIES)
-  endif()
+
+  # if(HUMBLE_ROS STREQUAL "humble")
+  #   rosidl_get_typesupport_target(cpp_typesupport_target
+  #   ${LIVOX_INTERFACES} "rosidl_typesupport_cpp")
+  #   target_link_libraries(${PROJECT_NAME} "${cpp_typesupport_target}")
+  # else()
+  #   set(LIVOX_INTERFACE_TARGET "${LIVOX_INTERFACES}__rosidl_typesupport_cpp")
+  #   add_dependencies(${PROJECT_NAME} ${LIVOX_INTERFACES})
+  #   get_target_property(LIVOX_INTERFACES_INCLUDE_DIRECTORIES ${LIVOX_INTERFACE_TARGET} INTERFACE_INCLUDE_DIRECTORIES)
+  # endif()
+
+  # 添加对消息生成目标的依赖
+  add_dependencies(${PROJECT_NAME} ${LIVOX_INTERFACES})
+
+  # 直接链接消息支持库（Humble简化版）
+  target_link_libraries(${PROJECT_NAME}
+    ${LIVOX_INTERFACES}__rosidl_typesupport_cpp
+  )
 
   # include file direcotry
   target_include_directories(${PROJECT_NAME} PUBLIC
