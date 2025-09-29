@@ -6,7 +6,6 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 ADD_COMPILE_OPTIONS(-std=c++14)
-ADD_COMPILE_OPTIONS(-std=c++14)
 set(CMAKE_CXX_FLAGS "-std=c++14 -O3")
 
 add_definitions(-DROOT_DIR=\"${CMAKE_CURRENT_SOURCE_DIR}/\")
@@ -15,7 +14,7 @@ set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -fexceptions")
 set(CMAKE_CXX_STANDARD 14)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -pthread -std=c++0x -std=c++14 -fexceptions")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14 -pthread -fexceptions")
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
 
 message("Current CPU archtecture: ${CMAKE_SYSTEM_PROCESSOR}")
@@ -79,6 +78,8 @@ set(dependencies
 # Thirdparty libraries
 find_package(Eigen3 REQUIRED)
 find_package(PCL REQUIRED COMPONENTS common io)
+# 查找 Boost 库（移到此处，与其他依赖库保持一致）
+find_package(Boost REQUIRED COMPONENTS date_time)
 
 message(Eigen: ${EIGEN3_INCLUDE_DIR})
 message(STATUS "PCL: ${PCL_INCLUDE_DIRS}")
@@ -92,14 +93,29 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 ament_export_dependencies(rosidl_default_runtime)
 
-add_executable(fastlio_mapping src/laserMapping.cpp include/ikd-Tree/ikd_Tree.cpp src/preprocess.cpp)
+# 1. 先定义目标（关键：必须在 link 之前）
+add_executable(fastlio_mapping 
+  src/laserMapping.cpp 
+  include/ikd-Tree/ikd_Tree.cpp 
+  src/preprocess.cpp
+)
+
+# 2. 设置包含目录
 target_include_directories(fastlio_mapping PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${PCL_INCLUDE_DIRS}
+  ${Boost_INCLUDE_DIRS}  # 添加 Boost 头文件目录
+  ${PYTHON_INCLUDE_DIRS}
 )
-target_link_libraries(fastlio_mapping ${PCL_LIBRARIES} ${PYTHON_LIBRARIES} Eigen3::Eigen)
-target_include_directories(fastlio_mapping PRIVATE ${PYTHON_INCLUDE_DIRS})
+
+# 3. 链接所有依赖库（包括 Boost::date_time）
+target_link_libraries(fastlio_mapping 
+  ${PCL_LIBRARIES} 
+  ${PYTHON_LIBRARIES} 
+  Eigen3::Eigen 
+  Boost::date_time  # 在这里添加 Boost 组件
+)
 
 list(APPEND EOL_LIST "foxy" "galactic" "eloquent" "dashing" "crystal")
 
