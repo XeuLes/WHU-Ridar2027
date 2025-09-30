@@ -15,6 +15,11 @@ include_directories(
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
+find_package(OpenCV 4.5 REQUIRED)  # 自动匹配系统安装的 4.5.4
+
+if(NOT OpenCV_VERSION MATCHES "4.5.*")
+  message(FATAL_ERROR "需要 OpenCV 4.5.x！当前版本: ${OpenCV_VERSION}")
+endif()
 
 option(CUDA_USE_STATIC_CUDA_RUNTIME OFF)
 set(CMAKE_BUILD_TYPE Debug)
@@ -52,6 +57,7 @@ target_link_libraries(${RADAR_DETECT}
     nvonnxparser 
     fmt 
     ${PCL_LIBRARIES}
+    ${OpenCV_LIBRARIES}
     )
 rclcpp_components_register_node(${RADAR_DETECT}
     PLUGIN "tdt_radar::Detect"
