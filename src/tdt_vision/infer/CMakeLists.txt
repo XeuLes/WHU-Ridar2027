@@ -50,3 +50,12 @@ target_link_libraries(infer
     ${OpenCV_LIBS}
     ${PCL_LIBRARIES}  # 若infer依赖PCL，需添加此句
 )
+
+install(
+  TARGETS infer  # 目标库名：infer
+  EXPORT inferTargets
+  LIBRARY DESTINATION lib  # 安装到 install/tdt_vision/lib
+  ARCHIVE DESTINATION lib
+  RUNTIME DESTINATION bin
+  INCLUDES DESTINATION include
+)

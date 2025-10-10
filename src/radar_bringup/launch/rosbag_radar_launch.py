@@ -41,24 +41,7 @@ def generate_launch_description():
     )
     
     # 定义各个节点（移除参数中的qos_profile，QoS在节点代码内配置）
-    # Livox驱动节点
-    livox_driver = Node(
-        package='livox_ros_driver2',
-        executable='livox_ros_driver2_node',
-        name='livox_lidar_publisher',
-        output='screen',
-        parameters=[{
-            "xfer_format": 0,
-            "multi_topic": 0,
-            "data_src": 0,
-            "publish_freq": 10.0,
-            "output_data_type": 0,
-            "frame_id": 'livox_frame',
-            "user_config_path": user_config_path,
-            "cmdline_input_bd_code": 'livox0000000001'
-        }]
-    )
-
+    
     def get_localization_node():
         return ComposableNode(
             package='localization',
@@ -166,23 +149,25 @@ def generate_launch_description():
         )
         
     # 地图点云发布节点
-    def get_map_pcd_publisher():
+    def get_map_pcd_publisher(): 
         return ComposableNode(
-            package='pcl_ros',
-            plugin='pcl_ros::PCDToPointCloud',
-            name='map_pcd_publisher',
+            package='pcl_ros',  
+            plugin='pcl_ros::PCDToPointCloud', 
+            name='map_pcd_publisher', 
             parameters=[{
-                'pcd_file': map_pcd_path,
-                'frame_id': 'map',
-                'publish_rate': 0.1
-                # 移除qos_profile参数
+                
+                'file_name': map_pcd_path,  
+                'frame_id': 'map',  # 坐标系参数名一致，无需修改
+                'publish_rate': 0.1  # 发布频率参数名一致，无需修改
             }],
-            remappings=[('cloud', '/map_point_cloud')],
+            remappings=[('cloud', '/map_point_cloud')],  # 话题重映射与 Node 配置一致，无需修改
             extra_arguments=[
-                {'use_intra_process_comms': True},
+                {'use_intra_process_comms': True},  # 组件内通信配置，合理保留
+                # QoS 配置格式正确，保留（若后续仍有 QoS 警告可调整，但当前优先解决加载问题）
                 {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
             ]
         )
+
 
     # 创建节点容器
     container = ComposableNodeContainer(
@@ -222,7 +207,6 @@ def generate_launch_description():
         log_rviz_path,
         log_map_path,
         log_debug_map_path,
-        livox_driver,
         container,
         rviz_node
     ])
