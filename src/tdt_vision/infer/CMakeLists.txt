@@ -1,24 +1,52 @@
 cmake_minimum_required(VERSION 3.10)
+
+# 关键：启用必要的CMake策略（与根目录保持一致）
 cmake_policy(SET CMP0079 NEW)
+cmake_policy(SET CMP0104 NEW)  # 解决CUDA_ARCHITECTURES警告
 
 project(infer)
+
+# 1. 编译配置（与根目录保持版本一致）
 add_definitions(-std=c++17)
 add_definitions(-DAPI_EXPORTS)
 option(CUDA_USE_STATIC_CUDA_RUNTIME ON)
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-deprecated-declarations")
-# TODO(Call for PR): make cmake compatible with Windows
-find_package(CUDA)
+
+# 2. CUDA配置（继承根目录的架构设置，显式指定RTX 4060的8.9）
+find_package(CUDA REQUIRED)
+enable_language(CUDA)  # 确保启用CUDA语言支持
+set(CMAKE_CUDA_ARCHITECTURES 8.7)  # 关键：匹配RTX 4060的CUDA架构
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -arch=sm_87")  # 显式传递给nvcc
+
+# 3. TensorRT和其他依赖（保留原逻辑）
 include(../cmake/modules/libnvinferConfig.cmake)
-
-# include and link dirs of cuda and tensorrt, you need adapt them if yours are different
-# cuda
-include_directories(${CUDA_INCLUDE_DIRS})
-include_directories(${nvinfer_INCLUDE_DIRS})
-include_directories(${PROJECT_SOURCE_DIR}/include)
-
 find_package(OpenCV REQUIRED)
 
-file(GLOB_RECURSE SRCS ${PROJECT_SOURCE_DIR}/src/*.cpp ${PROJECT_SOURCE_DIR}/src/*.cu)
-add_library(infer  ${SRCS})
-target_link_libraries(infer ${nvinfer_LIBRARY} cudart nvonnxparser ${OpenCV_LIBS})
+# 4. 头文件目录（补充CUDA和根目录头文件）
+include_directories(
+    ${CUDA_INCLUDE_DIRS}
+    ${nvinfer_INCLUDE_DIRS}
+    ${PROJECT_SOURCE_DIR}/include
+    ${PROJECT_SOURCE_DIR}/../utils/include  # 引入上层utils的头文件
+)
+
+# 5. 源文件和目标编译（显式指定CUDA文件处理）
+file(GLOB_RECURSE SRCS 
+    ${PROJECT_SOURCE_DIR}/src/*.cpp 
+    ${PROJECT_SOURCE_DIR}/src/*.cu  # 包含CUDA源文件
+)
+add_library(infer SHARED ${SRCS})
+
+# 6. 确保CUDA目标使用正确的架构
+set_property(TARGET infer PROPERTY CUDA_ARCHITECTURES 8.7)
+
+# 7. 链接依赖库（补充可能的PCL依赖）
+target_link_libraries(infer 
+    ${nvinfer_LIBRARY} 
+    cudart 
+    nvonnxparser 
+    ${OpenCV_LIBS}
+    ${PCL_LIBRARIES}  # 若infer依赖PCL，需添加此句
+)

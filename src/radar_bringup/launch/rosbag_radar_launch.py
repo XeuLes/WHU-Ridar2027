@@ -1,6 +1,7 @@
 import os
 from launch_ros.descriptions import ComposableNode
 from launch_ros.actions import ComposableNodeContainer
+from launch_ros.actions import Node
 from launch import LaunchDescription
 from launch.actions import Shutdown, LogInfo, ExecuteProcess
 from ament_index_python.packages import get_package_share_directory
@@ -18,6 +19,7 @@ def generate_launch_description():
 
     # 获取各个功能包的路径
     localization_share_dir = get_package_share_directory('localization')
+    livox_share_dir = get_package_share_directory('livox_ros_driver2')
     dynamic_cloud_share_dir = get_package_share_directory('dynamic_cloud')
     tdt_vision_share_dir = get_package_share_directory('tdt_vision')
     debug_map_share_dir = get_package_share_directory('debug_map')
@@ -25,6 +27,11 @@ def generate_launch_description():
     
     # 地图点云文件路径
     map_pcd_path = os.path.join(localization_share_dir, 'config', 'RM2025.pcd')
+
+    # Livox驱动配置
+    cur_config_path = os.path.join(livox_share_dir, 'config')
+    user_config_path = os.path.join(cur_config_path, 'MID360_config.json')
+
     
     # RViz配置文件路径
     rviz_config_path = os.path.join(
@@ -34,6 +41,24 @@ def generate_launch_description():
     )
     
     # 定义各个节点（移除参数中的qos_profile，QoS在节点代码内配置）
+    # Livox驱动节点
+    livox_driver = Node(
+        package='livox_ros_driver2',
+        executable='livox_ros_driver2_node',
+        name='livox_lidar_publisher',
+        output='screen',
+        parameters=[{
+            "xfer_format": 0,
+            "multi_topic": 0,
+            "data_src": 0,
+            "publish_freq": 10.0,
+            "output_data_type": 0,
+            "frame_id": 'livox_frame',
+            "user_config_path": user_config_path,
+            "cmdline_input_bd_code": 'livox0000000001'
+        }]
+    )
+
     def get_localization_node():
         return ComposableNode(
             package='localization',
@@ -197,6 +222,7 @@ def generate_launch_description():
         log_rviz_path,
         log_map_path,
         log_debug_map_path,
+        livox_driver,
         container,
         rviz_node
     ])
