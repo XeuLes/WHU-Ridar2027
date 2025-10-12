@@ -125,13 +125,21 @@ def generate_launch_description():
             name='debug_map_node',
             parameters=[{
                 'map_path': os.path.join(debug_map_share_dir, 'config', 'RM2025.png')
-                # 移除qos_profile参数
+                
             }],
             extra_arguments=[
                 {'use_intra_process_comms': True},
                 {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
             ]
         )
+    
+    # def get_radar_calib_node(package, plugin):
+    #     return ComposableNode(
+    #         package=package,
+    #         plugin=plugin,
+    #         name='radar_calib_node',
+    #         extra_arguments=[{'use_intra_process_comms': True}]
+    #     )
     
     def get_rosbag_player_node():
         return ComposableNode(
@@ -150,23 +158,19 @@ def generate_launch_description():
         
     # 地图点云发布节点
     def get_map_pcd_publisher(): 
-        return ComposableNode(
-            package='pcl_ros',  
-            plugin='pcl_ros::PCDToPointCloud', 
-            name='map_pcd_publisher', 
+        return Node(  # ✅ 改为独立节点
+            package='pcl_ros',
+            executable='pcd_to_pointcloud',  # 独立节点需要executable参数
+            name='map_pcd_publisher',
             parameters=[{
-                
                 'file_name': map_pcd_path,  
-                'frame_id': 'map',  # 坐标系参数名一致，无需修改
-                'publish_rate': 0.1  # 发布频率参数名一致，无需修改
+                'frame_id': 'map',
+                'publish_rate': 0.1
             }],
-            remappings=[('cloud', '/map_point_cloud')],  # 话题重映射与 Node 配置一致，无需修改
-            extra_arguments=[
-                {'use_intra_process_comms': True},  # 组件内通信配置，合理保留
-                # QoS 配置格式正确，保留（若后续仍有 QoS 警告可调整，但当前优先解决加载问题）
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
+            remappings=[('cloud', '/map_point_cloud')],
+            output='screen'  # 可选：输出日志到终端
         )
+
 
 
     # 创建节点容器
@@ -179,12 +183,12 @@ def generate_launch_description():
             get_rosbag_player_node(),
             get_localization_node(),
             get_dynamic_cloud_node(),
+            get_debug_map_node(),
             get_cluster_node(),
             get_detect_node(),
             get_resolve_node(),
             get_kalman_filter_node(),
-            get_debug_map_node(),
-            get_map_pcd_publisher()
+            # get_radar_calib_node('tdt_vision', 'tdt_radar::Calibrate')
         ],
         output='both',
         emulate_tty=True,
@@ -202,11 +206,14 @@ def generate_launch_description():
         output='screen',
         on_exit=Shutdown()
     )
+    
+    mappcd_node=get_map_pcd_publisher()
 
     return LaunchDescription([
         log_rviz_path,
         log_map_path,
         log_debug_map_path,
         container,
+        mappcd_node,
         rviz_node
     ])

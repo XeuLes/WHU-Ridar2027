@@ -1,23 +1,34 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
+  <!-- 1. 基础信息：修正描述，补全规范信息 -->
   <name>debug_map</name>
   <version>0.0.0</version>
-  <description>ros bag toolkit</description>
+  <description>Debug Map Composable Component for T-DT Radar System. 
+    功能：1. 加载比赛地图并可视化目标位置；2. 发布目标坐标到哨兵；3. 上报英雄机器人状态。
+  </description>
   <maintainer email="xun_001@outlook.com">tdt</maintainer>
-  <license>TODO: License declaration</license>
+  <author email="xun_001@outlook.com">tdt</author>
+  <license>Apache-2.0</license>
 
-  <buildtool_depend>ament_cmake</buildtool_depend>
+  <!-- 2. 编译工具依赖：与 CMakeLists.txt 保持一致 -->
+  <buildtool_depend>ament_cmake_auto</buildtool_depend>
 
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
+  <!-- 3. 核心依赖：补充可组合组件必需的依赖 -->
   <depend>rclcpp</depend>
+  <depend>rclcpp_components</depend>
   <depend>vision_interface</depend>
-  <depend>OpenCV</depend>
+  <depend>opencv2</depend>
   <depend>sensor_msgs</depend>
   <depend>cv_bridge</depend>
-  
+
+  <!-- 4. 测试依赖 -->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <!-- 5. 导出配置：关键修改 - 添加组件插件导出 -->
   <export>
     <build_type>ament_cmake</build_type>
+    <rclcpp_components plugin="${prefix}/debug_map_plugin.xml" />
   </export>
 </package>

@@ -20,14 +20,20 @@ public:
                                              "/camera/image");
         this->declare_parameter<std::string>("output_topic",
                                              "/camera/enhance");
-        this->declare_parameter<double>("clahe_clip_limit", 2.5);
+        this->declare_parameter<double>("clahe_clip_limit", 2.2);
         this->declare_parameter<int>("clahe_grid_size",
-                                     16);  // 减小网格降低计算量
+                                     8);  // 减小网格降低计算量
         this->declare_parameter<double>("gamma", 0.7);
         this->declare_parameter<double>("global_gain",
                                         2.0);  // 降低增益减少溢出处理
         this->declare_parameter<int>("denoise_strength",
                                      5);  // 降低降噪强度
+        this->declare_parameter<double>("ycrcb_saturation_gain",
+                                        3.0);  // 提高默认增益
+        this->declare_parameter<int>("saturation_clamp_min",
+                                     16);  // YCrCb有效范围下限
+        this->declare_parameter<int>("saturation_clamp_max",
+                                     244);  // YCrCb有效范围上限
 
         // 获取参数
         std::string input_topic =
@@ -42,6 +48,12 @@ public:
         global_gain_ = this->get_parameter("global_gain").as_double();
         denoise_strength_ =
             this->get_parameter("denoise_strength").as_int();
+        ycrcb_sat_gain_ =
+            this->get_parameter("ycrcb_saturation_gain").as_double();
+        sat_clamp_min_ =
+            this->get_parameter("saturation_clamp_min").as_int();
+        sat_clamp_max_ =
+            this->get_parameter("saturation_clamp_max").as_int();
 
         // 预生成Gamma查找表（避免实时计算）
         precomputeGammaLUT();
@@ -54,7 +66,7 @@ public:
         qos_profile.reliability = RMW_QOS_POLICY_RELIABILITY_RELIABLE;
         qos_profile.durability = RMW_QOS_POLICY_DURABILITY_VOLATILE;
         qos_profile.history = RMW_QOS_POLICY_HISTORY_KEEP_LAST;
-        qos_profile.depth = 3;  // 减少缓冲区大小，降低延迟
+        qos_profile.depth = 2;  // 减少缓冲区大小，降低延迟
         image_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
             output_topic,
             rclcpp::QoS(rclcpp::QoSInitialization::from_rmw(qos_profile)));
@@ -110,6 +122,15 @@ private:
                 global_gain_ = param.as_double();
             } else if (param.get_name() == "denoise_strength") {
                 denoise_strength_ = param.as_int();
+            } else if (param.get_name() ==
+                       "ycrcb_saturation_gain") {  // YCrCb饱和度增益
+                ycrcb_sat_gain_ = param.as_double();
+            } else if (param.get_name() ==
+                       "saturation_clamp_min") {  // 范围下限
+                sat_clamp_min_ = param.as_int();
+            } else if (param.get_name() ==
+                       "saturation_clamp_max") {  // 范围上限
+                sat_clamp_max_ = param.as_int();
             }
         }
 
@@ -145,12 +166,12 @@ private:
             enhanced_msg->step = enhanced_msg->width * 3;
             image_pub_->publish(*enhanced_msg);
 
-            // 性能监控（每100帧输出一次耗时）
+            // 性能监控（每50帧输出一次耗时）
             static size_t frame_count = 0;
             static auto   last_time = this->now();
-            if (++frame_count % 100 == 0) {
+            if (++frame_count % 50 == 0) {
                 auto   now = this->now();
-                double fps = 100.0 / (now - last_time).seconds();
+                double fps = 50.0 / (now - last_time).seconds();
                 RCLCPP_INFO(this->get_logger(), "Processing FPS: %.1f",
                             fps);
                 last_time = now;
@@ -170,14 +191,14 @@ private:
     cv::Mat enhanceDarkImage(const cv::Mat& rgb_image)
     {
         // 1. 转换到YCrCb（仅提取亮度通道）
-        cv::Mat y_channel;
-        {
-            cv::Mat ycrcb;
-            cv::cvtColor(rgb_image, ycrcb, cv::COLOR_RGB2YCrCb);
-            std::vector<cv::Mat> channels;
-            cv::split(ycrcb, channels);
-            y_channel = channels[0];  // 仅保留亮度通道
-        }
+        cv::Mat ycrcb;
+        cv::cvtColor(rgb_image, ycrcb, cv::COLOR_RGB2YCrCb);
+        std::vector<cv::Mat> channels(3);
+        cv::split(ycrcb, channels);
+        // 明确获取三个通道（修复未定义问题）
+        cv::Mat y_channel = channels[0];   // 亮度通道
+        cv::Mat cr_channel = channels[1];  // 色度通道1
+        cv::Mat cb_channel = channels[2];  // 色度通道2
 
         // 2. 全局增益（使用整数运算优化）
         y_channel.convertTo(y_channel, -1, global_gain_, 0);
@@ -188,20 +209,55 @@ private:
         // 4. Gamma校正（使用预计算的LUT）
         cv::LUT(y_channel, gamma_lut_, y_channel);
 
-        // 5. 合并通道并转回RGB（减少中间变量）
-        cv::Mat enhanced_rgb;
-        {
-            cv::Mat              ycrcb;
-            std::vector<cv::Mat> channels(3);
-            // 复用原始图像的色度通道（减少计算）
-            cv::cvtColor(rgb_image, ycrcb, cv::COLOR_RGB2YCrCb);
-            cv::split(ycrcb, channels);
-            channels[0] = y_channel;  // 替换亮度通道
-            cv::merge(channels, ycrcb);
-            cv::cvtColor(ycrcb, enhanced_rgb, cv::COLOR_YCrCb2RGB);
+        // 5. 增强Cr/Cb通道（关键优化：显式约束有效范围）
+        if (ycrcb_sat_gain_ != 1.0) {
+            // 转换为浮点型计算，避免整数溢出
+            cr_channel.convertTo(cr_channel, CV_16F);
+            cb_channel.convertTo(cb_channel, CV_16F);
+
+            // 整数运算：避免浮点乘法（改动：用int计算，精度足够）
+            int16_t* cr_ptr = cr_channel.ptr<int16_t>();
+            int16_t* cb_ptr = cb_channel.ptr<int16_t>();
+            int      gain_int = static_cast<int>(
+                ycrcb_sat_gain_ * 100);  // 增益放大为整数（如3.0→300）
+            int pixel_count = cr_channel.rows * cr_channel.cols;
+
+            for (int i = 0; i < pixel_count; ++i) {
+                // 公式：新值 = 128 + (原值 - 128) * 增益 →
+                // 转为整数运算避免浮点
+                int cr_val = cr_ptr[i];
+                cr_ptr[i] = static_cast<int16_t>(
+                    128 + ((cr_val - 128) * gain_int) / 100);
+                int cb_val = cb_ptr[i];
+                cb_ptr[i] = static_cast<int16_t>(
+                    128 + ((cb_val - 128) * gain_int) / 100);
+            }
+
+            // 范围约束（改动：适配CV_16S类型）
+            cv::max(cr_channel, static_cast<int16_t>(sat_clamp_min_),
+                    cr_channel);
+            cv::min(cr_channel, static_cast<int16_t>(sat_clamp_max_),
+                    cr_channel);
+            cv::max(cb_channel, static_cast<int16_t>(sat_clamp_min_),
+                    cb_channel);
+            cv::min(cb_channel, static_cast<int16_t>(sat_clamp_max_),
+                    cb_channel);
+
+            // 转回8位格式
+            cr_channel.convertTo(cr_channel, CV_8U);
+            cb_channel.convertTo(cb_channel, CV_8U);
         }
 
-        // 6. 轻量降噪（替换为快速中值滤波）
+        // 6. 合并通道并转回RGB（减少中间变量）
+        channels[0] = y_channel;   // 更新亮度通道
+        channels[1] = cr_channel;  // 更新Cr通道
+        channels[2] = cb_channel;  // 更新Cb通道
+        cv::merge(channels,
+                  ycrcb);  // 直接合并之前的通道，少1次cvtColor+split
+        cv::Mat enhanced_rgb;
+        cv::cvtColor(ycrcb, enhanced_rgb, cv::COLOR_YCrCb2RGB);
+
+        // 7. 轻量降噪（替换为快速中值滤波）
         if (denoise_strength_ > 0) {
             cv::medianBlur(enhanced_rgb, enhanced_rgb,
                            3);  // 3x3中值滤波，速度远快于非局部均值
@@ -226,6 +282,10 @@ private:
     double   gamma_;
     double   global_gain_;
     int      denoise_strength_;
+    // 饱和度相关新增参数
+    double ycrcb_sat_gain_;  // YCrCb空间饱和度增益
+    int    sat_clamp_min_;   // YCrCb通道有效范围下限
+    int    sat_clamp_max_;   // YCrCb通道有效范围上限
 };
 
 }  // namespace hik_camera_ros2_driver

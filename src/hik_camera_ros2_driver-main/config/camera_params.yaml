@@ -9,5 +9,5 @@
     # camera_topic: "image"         # If not set, it will be set as <camera_name>/image
 
     acquisition_frame_rate: 200.0   # Unit: Hz
-    exposure_time: 10000               # Unit: us
-    gain: 13.0                      # Range: 0.0 ~ 16.9, Unit: dB
+    exposure_time: 4000               # Unit: us
+    gain: 21.0                      # Range: 0.0 ~ 16.9, Unit: dB
