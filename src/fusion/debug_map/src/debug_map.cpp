@@ -13,7 +13,7 @@
 #include <vision_interface/msg/radar2_sentry.hpp>
 #include <vision_interface/msg/radar_warn.hpp>
 
-namespace tdt_radar {
+namespace debug_map {
 class DebugMap : public rclcpp::Node {
 public:
     // 构造函数：初始化列表中显式初始化所有成员变量（解决随机值问题）
@@ -397,10 +397,10 @@ private:
     cv::Mat                          map;
     int                              count;
 };
-}  // namespace tdt_radar
+}  // namespace debug_map
 
 // 【关键修改】删除main函数：组件由容器加载，不需要独立入口（避免编译冲突）
 #include "rclcpp_components/register_node_macro.hpp"
 
 // 注册组件宏 - 这是解决插件找不到问题的关键
-RCLCPP_COMPONENTS_REGISTER_NODE(tdt_radar::DebugMap)
+RCLCPP_COMPONENTS_REGISTER_NODE(debug_map::DebugMap)

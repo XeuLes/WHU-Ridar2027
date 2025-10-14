@@ -121,7 +121,7 @@ def generate_launch_description():
     def get_debug_map_node():
         return ComposableNode(
             package='debug_map',
-            plugin='tdt_radar::DebugMap',
+            plugin='debug_map::DebugMap',
             name='debug_map_node',
             parameters=[{
                 'map_path': os.path.join(debug_map_share_dir, 'config', 'RM2025.png')
