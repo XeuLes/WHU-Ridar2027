@@ -1,0 +1,7 @@
+digraph G {
+"rm_frame" -> "livox_frame"[label=" Broadcaster: default_authority\nAverage rate: 10.872\nBuffer length: 5.059\nMost recent transform: 1760447727.549894\nOldest transform: 1760447722.491016\n"];
+edge [style=invis];
+ subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
+"Recorded at time: 1760447727.5519009"[ shape=plaintext ] ;
+}->"rm_frame";
+}

@@ -4,6 +4,8 @@ from launch_ros.actions import ComposableNodeContainer
 from launch_ros.actions import Node
 from launch import LaunchDescription
 from launch.actions import Shutdown, LogInfo, ExecuteProcess
+from launch.substitutions import PathJoinSubstitution
+from launch_ros.substitutions import FindPackageShare
 from ament_index_python.packages import get_package_share_directory
 # 导入QoS配置类（仅用于节点内部参考，不直接作为参数传递）
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
@@ -24,6 +26,7 @@ def generate_launch_description():
     tdt_vision_share_dir = get_package_share_directory('tdt_vision')
     debug_map_share_dir = get_package_share_directory('debug_map')
     kalman_filter_share_dir = get_package_share_directory('kalman_filter')
+    world_to_camera_calib_share_dir = get_package_share_directory('world_to_camera_calib')
     
     # 地图点云文件路径
     map_pcd_path = os.path.join(localization_share_dir, 'config', 'RM2025.pcd')
@@ -31,6 +34,7 @@ def generate_launch_description():
     # Livox驱动配置
     cur_config_path = os.path.join(livox_share_dir, 'config')
     user_config_path = os.path.join(cur_config_path, 'MID360_config.json')
+
 
     
     # RViz配置文件路径
@@ -133,14 +137,6 @@ def generate_launch_description():
             ]
         )
     
-    # def get_radar_calib_node(package, plugin):
-    #     return ComposableNode(
-    #         package=package,
-    #         plugin=plugin,
-    #         name='radar_calib_node',
-    #         extra_arguments=[{'use_intra_process_comms': True}]
-    #     )
-    
     def get_rosbag_player_node():
         return ComposableNode(
             package='rosbag_player',
@@ -171,7 +167,20 @@ def generate_launch_description():
             output='screen'  # 可选：输出日志到终端
         )
 
-
+    # 世界坐标系到相机坐标系标定节点
+    def get_world_to_camera_calib_node():
+        return Node(
+            package='world_to_camera_calib',
+            executable='world_to_camera_node',
+            name='world_to_camera_calib_node',
+            parameters=[{
+                'json_path': os.path.join(world_to_camera_calib_share_dir, 'config', 'calib.json'),
+                'output_yaml_path': os.path.join('config', 'world_to_camera.yaml')
+            }],
+            output='screen',
+            # 可选：添加remappings如果需要重映射话题
+            # remappings=[('/tf', '/tf'), ('/tf_static', '/tf_static')]
+        )
 
     # 创建节点容器
     container = ComposableNodeContainer(
@@ -199,6 +208,7 @@ def generate_launch_description():
     log_rviz_path = LogInfo(msg=f"RViz2 config path: {rviz_config_path}")
     log_map_path = LogInfo(msg=f"Map PCD file path: {map_pcd_path}")
     log_debug_map_path = LogInfo(msg=f"Debug map path: {os.path.join(debug_map_share_dir, 'config', 'RM2025.png')}")
+    log_world_to_camera_path = LogInfo(msg=f"World to camera calibration package path: {world_to_camera_calib_share_dir}")
 
     # 启动RViz2
     rviz_node = ExecuteProcess(
@@ -207,13 +217,16 @@ def generate_launch_description():
         on_exit=Shutdown()
     )
     
-    mappcd_node=get_map_pcd_publisher()
+    mappcd_node = get_map_pcd_publisher()
+    world_to_camera_node = get_world_to_camera_calib_node()
 
     return LaunchDescription([
         log_rviz_path,
         log_map_path,
         log_debug_map_path,
+        log_world_to_camera_path,
         container,
         mappcd_node,
+        world_to_camera_node,  # 新增的世界坐标系到相机坐标系标定节点
         rviz_node
     ])
