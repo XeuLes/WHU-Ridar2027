@@ -47,12 +47,22 @@ Calibrate::Calibrate(const rclcpp::NodeOptions& options)
     parser_ = new parser();
 
     // 打印初始化成功的日志信息（ASCII艺术字）
-    RCLCPP_INFO(this->get_logger(), "\n"
-                                    "  ______    ____  ______\n"
-                                    " /_  __/   / __ \\/_  __/\n"
-                                    "  / /_____/ / / / / /   \n"
-                                    " / /_____/ /_/ / / /    \n"
-                                    "/_/     /_____/ /_/     ");
+    RCLCPP_INFO(this->get_logger(),
+                "\n"
+                " oooooo   oooooo     oooo ooooo   ooooo ooooo     ooo     "
+                "    oooooooooooo   .oooooo.   ooooooo  ooooo \n"
+                "  `888.    `888.     .8'  `888'   `888' `888'     `8'     "
+                "    `888'     `8  d8P'  `Y8b   `8888    d8'  \n"
+                "   `888.   .8888.   .8'    888     888   888       8      "
+                "     888         888      888    Y888..8P    \n"
+                "    `888  .8'`888. .8'     888ooooo888   888       8      "
+                "     888oooo8    888      888     `8888'     \n"
+                "     `888.8'  `888.8'      888     888   888       8  "
+                "8888888  888         888      888    .8PY888.    \n"
+                "      `888'    `888'       888     888   `88.    .8'      "
+                "     888         `88b    d88'   d8'  `888b   \n"
+                "       `8'      `8'       o888o   o888o    `YbodP'        "
+                "    o888o         `Y8bood8P'  o888o  o88888o ");
 
     // 创建普通图像订阅者，订阅"camera_image"话题
     image_sub = this->create_subscription<sensor_msgs::msg::Image>(
