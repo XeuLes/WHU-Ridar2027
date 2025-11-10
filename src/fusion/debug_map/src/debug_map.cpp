@@ -1,7 +1,7 @@
 #include <cv_bridge/cv_bridge.h>
 #include <cstring>  // 新增：用于memset初始化数组
 #include <fstream>
-#include <opencv4/opencv2/opencv.hpp>
+#include <opencv2/opencv.hpp>
 #include <rclcpp/logger.hpp>
 #include <rclcpp/node.hpp>
 #include <rclcpp/qos.hpp>
@@ -12,6 +12,12 @@
 #include <vision_interface/msg/match_info.hpp>
 #include <vision_interface/msg/radar2_sentry.hpp>
 #include <vision_interface/msg/radar_warn.hpp>
+// 新增：包含sensor_msgs/PointCloud2的定义
+#include <sensor_msgs/msg/point_cloud2.hpp>
+// 新增：包含PCL与ROS点云转换的工具（用于plane_callback中fromROSMsg）
+#include <pcl_conversions/pcl_conversions.h>
+// 新增：包含PCL点云类型（用于存储转换后的飞机坐标）
+#include <pcl/point_types.h>
 
 namespace debug_map {
 class DebugMap : public rclcpp::Node {
@@ -43,10 +49,24 @@ public:
                              "地图文件加载失败！路径：%s",
                              map_path.c_str());
             } else {
-                cv::resize(map, map,
-                           cv::Size(28 * 25, 15 * 25));  // 缩放地图
-                RCLCPP_INFO(this->get_logger(), "地图加载成功！尺寸：%dx%d",
-                            map.cols, map.rows);
+                // 打印原始尺寸（确认加载的图像是否有效）
+                RCLCPP_INFO(this->get_logger(), "原始地图尺寸：%dx%d（cols×rows）", map.cols, map.rows);
+
+                // 计算目标尺寸并校验（核心排查：缩放参数是否合法）
+                int target_w = 28 * 25;  // 700
+                int target_h = 15 * 25;  // 375
+                if (target_w <= 0 || target_h <= 0) {
+                    RCLCPP_ERROR(this->get_logger(), "无效缩放尺寸：width=%d, height=%d（必须为正数）", target_w, target_h);
+                    map = cv::Mat();
+                } else {
+                    // 执行缩放并检查结果
+                    cv::resize(map, map, cv::Size(target_w, target_h));
+                    if (map.empty()) {
+                        RCLCPP_ERROR(this->get_logger(), "缩放失败！原始尺寸：%dx%d → 目标尺寸：%dx%d", map.cols, map.rows, target_w, target_h);
+                    } else {
+                        RCLCPP_INFO(this->get_logger(), "地图加载并缩放成功，最终尺寸：%dx%d", map.cols, map.rows);
+                    }
+                }
             }
         }
 
@@ -63,6 +83,10 @@ public:
             blue_point[i] = cv::Point2f(0, 0);
             red_point[i] = cv::Point2f(0, 0);
         }
+        // 初始化飞机变量（避免随机值）
+        memset(plane_update, 0, sizeof(plane_update));
+        plane_point[0] = cv::Point2f(0, 0);  // 初始化为(0,0)
+        plane_point[1] = cv::Point2f(0, 0);  // 初始化为(0,0)
 
         // 4. 创建订阅者（保持原逻辑，QoS与话题匹配）
         detect_result_sub =
@@ -82,6 +106,13 @@ public:
                 "/match_info", 10,
                 std::bind(&DebugMap::save_match_info, this,
                           std::placeholders::_1));
+
+        // 新增：订阅飞机坐标话题（lidar_other_cluster）
+        plane_sub = this->create_subscription<sensor_msgs::msg::PointCloud2>(
+            "/livox/lidar_other_cluster",  // 飞机坐标发布的话题
+            rclcpp::SensorDataQoS(),
+            std::bind(&DebugMap::plane_callback, this, std::placeholders::_1)
+        );
 
         // 5. 创建发布者（保持原逻辑）
         radar_warn_pub =
@@ -155,6 +186,35 @@ public:
                             cv::Point(point.x - 6, point.y + 5),
                             cv::FONT_HERSHEY_SIMPLEX, 0.5,
                             cv::Scalar(255, 255, 255));
+            }
+        }
+
+        // 绘制2架飞机
+        auto plane_now_time = std::chrono::system_clock::now();
+        double plane_time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                plane_now_time.time_since_epoch())
+                                .count() / 1000.0;
+
+        for (int i = 0; i < 2; ++i) {  // 循环2次，绘制2架飞机
+            // 检查第i架飞机坐标是否有效（500ms内更新过）
+            if (plane_time - plane_update[i] < 0.5) {
+                // 转换为图像坐标
+                cv::Point2f point(
+                    clone_map.cols * plane_point[i].x / 28,
+                    clone_map.rows * (15 - plane_point[i].y) / 15
+                );
+
+                // 越界检查
+                if (point.x >= 0 && point.x < clone_map.cols &&
+                    point.y >= 0 && point.y < clone_map.rows) {
+                    // 绘制黄色实心圆（两架飞机用相同颜色，通过文字区分）
+                    cv::circle(clone_map, point, 12, cv::Scalar(0, 255, 255), -1);
+                    // 绘制带ID的文字（如"P1"、"P2"）
+                    std::string label = "P" + std::to_string(i+1);  // P1=第1架，P2=第2架
+                    cv::putText(clone_map, label, 
+                                cv::Point(point.x - 8, point.y + 5),
+                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));  // 黑色文字
+                }
             }
         }
 
@@ -356,6 +416,60 @@ public:
         radar2sentry_pub->publish(radar2sentry);
     }
 
+    // 处理飞机坐标话题（lidar_other_cluster）
+    void plane_callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
+        // 1. 将ROS点云消息转换为PCL点云（获取飞机坐标）
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>);
+        pcl::fromROSMsg(*msg, *cloud);
+
+        if (cloud->empty()) {
+            RCLCPP_INFO(this->get_logger(), "飞机点云为空，不更新坐标");
+            return;
+        }
+
+        // 2. 提取飞机坐标（假设点云中的每个点是一架飞机的聚类中心）
+        auto now = std::chrono::system_clock::now();
+        double time = std::chrono::duration_cast<std::chrono::milliseconds>(
+                        now.time_since_epoch())
+                        .count() / 1000.0;
+
+        // 处理前2架飞机（点云中的前2个点）
+        for (int i = 0; i < 2; ++i) {  // 循环2次，对应2架飞机
+            if (i >= cloud->points.size()) {
+                // 若点云数量不足2个，跳过超出的飞机（保持上次坐标）
+                RCLCPP_WARN(this->get_logger(), "飞机点云数量不足2个（仅%zu个），第%d架飞机不更新",
+                            cloud->points.size(), i+1);
+                continue;
+            }
+
+            // 提取第i架飞机的坐标
+            pcl::PointXYZ plane_pcl = cloud->points[i];
+            cv::Point2f plane_map(plane_pcl.x, plane_pcl.y);
+
+            // 2. 根据自身颜色判断是否翻转（核心：与红蓝方逻辑一致）
+            if (match_info.self_color == 0) {  // 自身为蓝方，需要翻转坐标
+                plane_map.x = 28.0f - plane_map.x;  // x坐标翻转（同红蓝方）
+                plane_map.y = 15.0f - plane_map.y;  // y坐标翻转（同红蓝方）
+                RCLCPP_INFO(this->get_logger(), "飞机%d 原始坐标(%.2f, %.2f) → 翻转后(%.2f, %.2f)",
+                            i+1, plane_pcl.x, plane_pcl.y, plane_map.x, plane_map.y);
+            }
+
+            // 坐标范围校验
+            plane_map.x = std::clamp(plane_map.x, 0.0f, 28.0f);
+            plane_map.y = std::clamp(plane_map.y, 0.0f, 15.0f);
+
+            // 更新第i架飞机的坐标和时间戳
+            plane_point[i] = plane_map;
+            plane_update[i] = time;
+
+            RCLCPP_INFO(this->get_logger(), "收到第%d架飞机坐标：(%.2f, %.2f)",
+                        i+1, plane_map.x, plane_map.y);
+        }
+
+        // 触发地图更新
+        show_map();
+    }
+
 private:
     // 订阅者（原逻辑不变，改为private成员更规范）
     rclcpp::Subscription<vision_interface::msg::DetectResult>::SharedPtr
@@ -364,6 +478,8 @@ private:
         camera_detect_sub;
     rclcpp::Subscription<vision_interface::msg::MatchInfo>::SharedPtr
         match_info_sub;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr 
+        plane_sub;  // 飞机坐标订阅者
 
     // 发布者（原逻辑不变）
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_map_pub;
@@ -391,6 +507,10 @@ private:
     // 目标坐标（已初始化）
     cv::Point2f blue_point[6];
     cv::Point2f red_point[6];
+
+    // 飞机数据（假设最多2架飞机，可根据实际需求调整数量）
+    cv::Point2f plane_point[2];  // 飞机坐标（地图坐标系，x:0-28, y:0-15）
+    double      plane_update[2]; // 飞机最新更新时间（用于判断是否过期）
 
     // 比赛信息与地图（已处理空值）
     vision_interface::msg::MatchInfo match_info;

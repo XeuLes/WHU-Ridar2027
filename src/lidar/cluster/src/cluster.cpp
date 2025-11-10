@@ -70,7 +70,7 @@ void Cluster::process_cluster(
 
     // 欧式聚类参数设置
     pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
-    ec.setClusterTolerance(0.4);  // 聚类距离阈值
+    ec.setClusterTolerance(0.75);  // 聚类距离阈值
     ec.setMinClusterSize(5);      // 最小聚类点数
     ec.setMaxClusterSize(1000);   // 最大聚类点数
     ec.setSearchMethod(tree);
