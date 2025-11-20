@@ -5,22 +5,20 @@ cmake_minimum_required(VERSION 3.8)
 cmake_policy(SET CMP0074 NEW)
 cmake_policy(SET CMP0104 NEW)
 
-# 2. 明确指定CUDA架构（8.7，CUDA 11.8支持，供CMake验证用）
-set(CMAKE_CUDA_ARCHITECTURES 87 CACHE STRING "CUDA架构（数字格式，87对应8.7）" FORCE)
+# 2. 明确指定CUDA架构（89，对应RTX 4060 Mobile的Ada Lovelace架构，CUDA 13.0支持）
+set(CMAKE_CUDA_ARCHITECTURES 89 CACHE STRING "CUDA架构（数字格式，89对应8.9）" FORCE)
 
-# 3. 强制传递nvcc编译参数（指定计算架构和运行架构，与上面的87对应）
-set(CMAKE_CUDA_FLAGS "-gencode=arch=compute_87,code=sm_87" CACHE STRING "" FORCE)
+# 3. 强制传递nvcc编译参数（与架构89对应，适配RTX 4060）
+set(CMAKE_CUDA_FLAGS "-gencode=arch=compute_89,code=sm_89" CACHE STRING "" FORCE)
 
-# 4. 配置CUDA编译器路径
-set(CMAKE_CUDA_COMPILER /usr/local/cuda-11.8/bin/nvcc CACHE PATH "" FORCE)
+# 4. 配置CUDA编译器路径（改为已安装的CUDA 13.0路径，cuda是13.0的符号链接）
+set(CMAKE_CUDA_COMPILER /usr/local/cuda/bin/nvcc CACHE PATH "" FORCE)
 
-# 5. 启用CUDA语言（此时CMake能通过CMAKE_CUDA_ARCHITECTURES=87验证有效性）
+# 5. 启用CUDA语言（此时CMake通过CUDA 13.0+架构89验证）
 enable_language(CUDA)
-
 
 # ===================== 1. 项目初始化=====================
 project(tdt_vision)
-
 
 # ===================== 2. PCL配置=====================
 set(PCL_DIR "/usr/local/share/pcl-1.14" CACHE PATH "" FORCE)
@@ -29,7 +27,6 @@ find_package(PCL REQUIRED COMPONENTS common io)
 include_directories(${PCL_INCLUDE_DIRS})
 link_directories(${PCL_LIBRARY_DIRS})
 add_definitions(${PCL_DEFINITIONS})
-
 
 # ===================== 3. 基础编译配置=====================
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -43,7 +40,6 @@ include_directories(
   "calibrate/include"
 )
 
-
 # ===================== 4. 依赖查找=====================
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
@@ -53,11 +49,10 @@ if(NOT OpenCV_VERSION MATCHES "4.5.*")
   message(FATAL_ERROR "需要 OpenCV 4.5.x！当前版本: ${OpenCV_VERSION}")
 endif()
 
-# CUDA头文件和库
-include_directories(/usr/local/cuda-11.8/include)
-link_directories(/usr/local/cuda-11.8/lib64)
+# CUDA头文件和库（改为CUDA 13.0路径，删除11.8硬编码）
+include_directories(/usr/local/cuda/include)
+link_directories(/usr/local/cuda/lib64)
 find_package(CUDA REQUIRED)
-
 
 # ===================== 5. TensorRT配置=====================
 include(${PROJECT_SOURCE_DIR}/cmake/modules/libnvinferConfig.cmake)
@@ -65,19 +60,17 @@ message("Using Cuda Version: ${CUDA_VERSION} and TensorRT Version: ${nvinfer_VER
 add_definitions(-D use_tensorrt)
 include_directories(${nvinfer_INCLUDE_DIRS})
 
-
 # ===================== 6. 子目录编译=====================
 add_subdirectory(utils)
 include_directories(${PROJECT_SOURCE_DIR}/utils/include)
 
 add_subdirectory(infer)
-# 给infer子目录设置相同的CUDA架构
+# 给infer子目录设置相同的CUDA架构（同步改为89，适配RTX 4060）
 set_target_properties(infer PROPERTIES 
-  CUDA_ARCHITECTURES 87
-  CUDA_FLAGS "-gencode=arch=compute_87,code=sm_87"
+  CUDA_ARCHITECTURES 89
+  CUDA_FLAGS "-gencode=arch=compute_89,code=sm_89"
 )
 include_directories(${PROJECT_SOURCE_DIR}/infer/include)
-
 
 # ===================== 7. 雷达模块编译=====================
 set(RADAR_DETECT "radar_detect")
@@ -116,7 +109,6 @@ rclcpp_components_register_node(${RADAR_CALIBRATE}
   PLUGIN "tdt_radar::Calibrate"
   EXECUTABLE ${RADAR_CALIBRATE}_node
 )
-
 
 # ===================== 8. 安装=====================
 ament_auto_package(INSTALL_TO_SHARE launch)

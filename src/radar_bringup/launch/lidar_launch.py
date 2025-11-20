@@ -11,7 +11,7 @@ def generate_launch_description():
     radar_bringup_dir = get_package_share_directory('radar_bringup')
     
     # 地图点云文件路径
-    map_pcd_path = os.path.join(localization_share_dir, 'config', 'RM2025.pcd')
+    map_pcd_path = os.path.join(localization_share_dir, 'config', 'gongchuang.pcd')
     
     # Livox驱动配置
     cur_config_path = os.path.join(livox_share_dir, 'config')
