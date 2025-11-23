@@ -1,0 +1,33 @@
+manual_trans_x: 30
+manual_trans_y: 60
+manual_trans_z: 6.5
+manual_roll_deg: 0
+manual_pitch_deg: -10
+manual_yaw_deg: -90
+manual_mode: true
+auto_trigger_after_load: true  # 触发参数文件配准（true = 触发，false = 不触发，开启手动配准）
+
+
+
+#平移：manual_trans_x/y/z（范围 ±100 米）
+#旋转：manual_roll/pitch/yaw_deg（单位：度）
+#模式：manual_mode（true = 手动，false = 自动精配准）
+
+# 1. 平移参数（单位：米）
+#ros2 param set /localization_node manual_trans_x 30.0  # X轴
+#ros2 param set /localization_node manual_trans_y 60.0 # Y轴
+#ros2 param set /localization_node manual_trans_z 6.5  # Z轴（高度）
+
+# 2. 旋转参数（单位：度）
+#ros2 param set /localization_node manual_roll_deg 0.0   # 滚转
+#ros2 param set /localization_node manual_pitch_deg -10.0  # 俯仰
+#ros2 param set /localization_node manual_yaw_deg -90.0   # 偏航（平面旋转）
+
+# 3. 切换回手动模式（若之前切到自动模式）
+#ros2 param set /localization_node manual_mode true
+
+# 4. 触发自动精配准（手动配准对齐后执行）
+#ros2 param set /localization_node trigger_auto_calib true
+
+# 5. 保存当前参数到配置文件（确保下次启动时生效）
+#ros2 param set /localization_node param_save_trigger true

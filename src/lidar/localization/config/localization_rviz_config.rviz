@@ -92,7 +92,15 @@ Visualization Manager:
     Fixed Frame: rm_frame
     Frame Rate: 30
   Name: root
-  Tools: ~
+  Tools:
+    - Class: rviz_default_plugins/MoveCamera
+      Name: Move Camera
+    - Class: rviz_default_plugins/Select
+      Name: Select
+    - Class: rviz_default_plugins/Interact
+      Name: Interact
+    - Class: rviz_default_plugins/Measure
+      Name: Measure
   Transformation:
     Current:
       Class: rviz_default_plugins/TF
