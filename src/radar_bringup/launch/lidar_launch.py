@@ -11,7 +11,7 @@ def generate_launch_description():
     radar_bringup_dir = get_package_share_directory('radar_bringup')
     
     # 地图点云文件路径
-    map_pcd_path = os.path.join(localization_share_dir, 'config', 'gongchuang.pcd')
+    map_pcd_path = os.path.join(localization_share_dir, 'config', 'aligned_clean.pcd')
     
     # Livox驱动配置
     cur_config_path = os.path.join(livox_share_dir, 'config')
@@ -50,7 +50,7 @@ def generate_launch_description():
         output='screen',
         parameters=[{
             'use_map': True,
-            'map_frame': 'map'
+            'map_frame': 'rm_frame',
         }]
     )
     
@@ -75,11 +75,11 @@ def generate_launch_description():
         package='pcl_ros',
         executable='pcd_to_pointcloud',  # 使用pcl_ros的独立可执行文件
         name='map_pcd_publisher',
-        parameters=[{
-            'pcd_file': map_pcd_path,
-            'frame_id': 'map',
-            'publish_rate': 0.1
-        }],
+        arguments=[
+            '--file_name', map_pcd_path,  # PCD文件路径（必须）
+            '--frame_id', 'rm_frame',     # 坐标系（必须，与定位节点一致）
+            '--publish_rate', '0.1'       # 发布频率（可选，默认1Hz）
+        ],
         remappings=[('cloud', '/map_point_cloud')]
     )
 

@@ -363,12 +363,12 @@ private:
             pcl::PointCloud<pcl::PointXYZ>::Ptr manual_aligned_cloud(new pcl::PointCloud<pcl::PointXYZ>());
             pcl::transformPointCloud(*source_cloud, *manual_aligned_cloud, manual_transform);
 
-            // // 3. 发布手动调整后的点云
-            // sensor_msgs::msg::PointCloud2 manual_msg;
-            // pcl::toROSMsg(*manual_aligned_cloud, manual_msg);
-            // manual_msg.header.frame_id = "rm_frame";
-            // manual_msg.header.stamp = msg->header.stamp;
-            // manual_aligned_publisher_->publish(manual_msg);
+            // 3. 发布手动调整后的点云
+            sensor_msgs::msg::PointCloud2 manual_msg;
+            pcl::toROSMsg(*manual_aligned_cloud, manual_msg);
+            manual_msg.header.frame_id = "rm_frame";
+            manual_msg.header.stamp = msg->header.stamp;
+            manual_aligned_publisher_->publish(manual_msg);
 
             // 4. 发布手动TF
             publishTF(manual_transform);
@@ -380,7 +380,7 @@ private:
                                 manual_trans_x_, manual_trans_y_, manual_trans_z_,
                                 manual_roll_ * 180/M_PI, manual_pitch_*180/M_PI, manual_yaw_*180/M_PI);
 
-            // 新增：自动触发配准（仅在参数加载后触发一次）
+            // 新增：自动触发配准
             if (auto_trigger_calib_after_load_ && !has_auto_triggered_ && !trigger_auto_calib_) {
                 RCLCPP_WARN(this->get_logger(), "触发自动精配准（来自参数加载后自动触发）");
                 manual_mode_ = false;
@@ -405,7 +405,7 @@ private:
         // -------------------------- 自动精配准模式 --------------------------
         if (!has_aligned_) {
             // 0. 每帧先清空栅格地图（避免旧点叠加）
-            gridMap.clear();
+            // gridMap.clear();
 
             // 1. 累积20帧点云
             if (accumulated_clouds_.size() < accumulate_time) {
@@ -443,7 +443,7 @@ private:
             // 4. ROI过滤
             pcl::PointCloud<pcl::PointXYZ>::Ptr roi_cloud(new pcl::PointCloud<pcl::PointXYZ>());
             for (const auto& point : grid_cloud->points) {
-                if (point.x > 10 && point.x < 20 && point.y > -10 && point.y < 8 && point.z < 7) {
+                if (point.x > 5 && point.x < 30 && point.y > -10 && point.y < 20 && point.z < 7) {
                     roi_cloud->push_back(point);
                 }
             }
@@ -455,15 +455,15 @@ private:
 
             // 5. 源点云下采样
             pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_source(new pcl::PointCloud<pcl::PointXYZ>());
-            downsample_cloud(roi_cloud, downsampled_source, 0.3f);
+            downsample_cloud(roi_cloud, downsampled_source, 0.1f);
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                     "下采样后点数：%lu", downsampled_source->size());  // 新增日志，验证减点效果
 
-            // // 6. 发布过滤后的点云
-            // sensor_msgs::msg::PointCloud2 filter_msg;
-            // pcl::toROSMsg(*downsampled_source, filter_msg);
-            // filter_msg.header.frame_id = "livox_frame";
-            // filter_publisher_->publish(filter_msg);
+            // 6. 发布过滤后的点云
+            sensor_msgs::msg::PointCloud2 filter_msg;
+            pcl::toROSMsg(*downsampled_source, filter_msg);
+            filter_msg.header.frame_id = "livox_frame";
+            filter_publisher_->publish(filter_msg);
 
             // 7. GICP精配准
             RCLCPP_INFO(this->get_logger(), "开始GICP精配准（初始位姿来自手动调整）");
