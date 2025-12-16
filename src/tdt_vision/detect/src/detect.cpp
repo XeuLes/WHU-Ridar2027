@@ -181,7 +181,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
                "--saveEngine=model/TensorRT/classify.engine "
                "--minBatch 1 "
                "--optBatch 10 "
-               "--maxBatch 20 "
+               "--maxBatch 20"
                "--Shape=224x224 "      // 分类模型输入尺寸
                "--input_name=input");  // 分类模型输入名
     } else {
@@ -239,6 +239,17 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 
     // 1. 第一步：车辆检测（用yolo检测器检测整图中的车辆）
     auto result = yolo->forward(image);
+
+    // 新增：打印车辆YOLO原始结果
+    RCLCPP_INFO(this->get_logger(), "车辆YOLO检测结果数量：%lu", result.size());
+    for (size_t i = 0; i < result.size(); i++) {
+        auto& box = result[i];
+        RCLCPP_INFO(this->get_logger(), 
+            "检测框%d：left=%.2f, top=%.2f, right=%.2f, bottom=%.2f, 置信度=%.3f, 类别=%d",
+            i, box.left, box.top, box.right, box.bottom, box.confidence, box.class_label);
+    }
+
+
     // 无车辆检测结果→打印日志并返回
     if (result.size() == 0) {
         RCLCPP_INFO(this->get_logger(), "No Car!");
@@ -253,8 +264,15 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     // 存储车辆ROI图像（用于后续装甲板检测）
     std::vector<tdt_radar::Image> images;
     std::vector<cv::Mat>          car_imgs;
+    // --- 无人机 ROI 单独处理路径 ---
+    std::vector<tdt_radar::Image> uav_images;        
+    std::vector<cv::Mat> uav_imgs;
+
     // 存储车辆信息（检测框、ROI、装甲板等）
     std::vector<Car> cars;
+
+    // 存储无人机信息（使用新的 Uav 类容器）
+    std::vector<Uav> uavs;
 
     // 筛选车辆检测结果（仅保留class_label=0或1的目标，视为有效车辆）
     for (auto& box : result) {
@@ -262,8 +280,14 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             Car car;
             car.car = box;  // 保存车辆检测框
             cars.push_back(car);
+        }else if (box.class_label == 2) { // 无人机 (假设 class_label 为 2)
+            Uav uav;
+            uav.uav = box; // 使用 Uav 类的对应变量
+            uavs.push_back(uav);
         }
     }
+
+    
 
     // 提取每个车辆的安全ROI（避免越界），并保存车辆图像
     for (auto& car : cars) {
@@ -289,6 +313,39 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         images.push_back(image);
     }
 
+
+
+    // 提取每个无人机的安全ROI，并保存无人机图像
+    for (auto& uav : uavs) {
+        // 从无人机检测框构造cv::Rect
+        auto temp_rect =
+            cv::Rect(uav.uav.left, uav.uav.top,
+                     uav.uav.right - uav.uav.left,  // 宽度=右边界-左边界
+                     uav.uav.bottom - uav.uav.top  // 高度=下边界-上边界
+            );
+        
+        // 确保ROI在图像内
+        cv::Rect temp_uav_rect = getSafeRect(img, temp_rect);
+        
+        // 提取无人机ROI图像
+        auto uav_img = img(temp_uav_rect);
+        
+        // 克隆保存到 uav_imgs
+        uav_imgs.push_back(uav_img.clone()); 
+        
+        // 保存无人机安全ROI到 Uav 对象中
+        uav.uav_rect = temp_uav_rect;
+    }
+
+    // 将无人机ROI转换为检测器输入格式（tdt_radar::Image）
+    // 并保存到 uav_images
+    for (auto& uav_img : uav_imgs) {
+        auto image =
+            tdt_radar::Image(uav_img.data, uav_img.cols, uav_img.rows);
+        uav_images.push_back(image);
+    }
+
+
     // 2. 第二步：装甲板检测（批量检测所有车辆ROI中的装甲板）
     auto armor_boxes = armor_yolo->forwards(images);
     bool has_armor = false;  // 标记是否检测到装甲板
@@ -301,11 +358,11 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             has_armor = true;
         }
     }
-    // 无任何装甲板→打印日志并返回
-    if (!has_armor) {
-        RCLCPP_INFO(this->get_logger(), "No Armor!");
-        return;
-    }
+    // // 无任何装甲板→打印日志并返回
+    // if (!has_armor) {
+    //     RCLCPP_INFO(this->get_logger(), "No Armor!");
+    //     return;
+    // }
 
     // ------------------------------
     // （注释代码）调试用：保存装甲板图像到本地（用于标注或训练数据）

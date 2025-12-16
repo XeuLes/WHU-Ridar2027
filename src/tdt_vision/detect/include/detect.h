@@ -49,6 +49,16 @@ public:
     int            number = 0;
     int            color = 1;
 };
+class Uav {
+public:
+    cv::Rect       uav_rect;
+    yolo::Box      uav;
+    yolo::BoxArray armors;
+    cv::Point2f    center;
+    cv::Rect       center_rect;
+    int            number = 0;
+    int            color = 1;
+};
 }  // namespace tdt_radar
 
 #endif

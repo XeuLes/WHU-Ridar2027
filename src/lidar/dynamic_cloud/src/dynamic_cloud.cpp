@@ -18,21 +18,21 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     // 加载地图点云（PCD文件）
     auto temp_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(
         new pcl::PointCloud<pcl::PointXYZ>);
-    if (pcl::io::loadPCDFile<pcl::PointXYZ>("/home/kakaka/code/WHU-Radar-2026/src/lidar/dynamic_cloud/config/aligned.pcd",
+    if (pcl::io::loadPCDFile<pcl::PointXYZ>("/home/user/code/T-DT_Radar-main/src/lidar/dynamic_cloud/config/RM2025.pcd",
                                             *temp_cloud) == -1) {
         PCL_ERROR("Couldn't read file map.pcd \n");  // 加载失败时打印错误
     }
 
-    // // 对地图点云进行体素下采样（减少点数量，提高后续处理效率）
-    // pcl::VoxelGrid<pcl::PointXYZ> sor;  // 体素滤波器
-    // sor.setInputCloud(temp_cloud);      // 设置输入点云
-    // sor.setLeafSize(0.1f, 0.1f, 0.1f);  // 体素大小（0.1m×0.1m×0.1m）
-    // auto result = pcl::PointCloud<pcl::PointXYZ>::Ptr(
-    //     new pcl::PointCloud<pcl::PointXYZ>);
-    // sor.filter(*result);  // 执行下采样
-    // map_cloud = result;   // 保存下采样后的地图点云
+    // 对地图点云进行体素下采样（减少点数量，提高后续处理效率）
+    pcl::VoxelGrid<pcl::PointXYZ> sor;  // 体素滤波器
+    sor.setInputCloud(temp_cloud);      // 设置输入点云
+    sor.setLeafSize(0.1f, 0.1f, 0.1f);  // 体素大小（0.1m×0.1m×0.1m）
+    auto result = pcl::PointCloud<pcl::PointXYZ>::Ptr(
+        new pcl::PointCloud<pcl::PointXYZ>);
+    sor.filter(*result);  // 执行下采样
+    map_cloud = result;   // 保存下采样后的地图点云
 
-    map_cloud = temp_cloud;
+    // map_cloud = temp_cloud;
 
     // 构建KD-Tree（用于后续快速最近邻搜索）
     kd_Tree.setInputCloud(map_cloud);
@@ -218,8 +218,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
     pcl::fromROSMsg(*msg, receive_cloud);
     // 1. 打印原始点云点数（雷达输出的所有点）
     pcl::fromROSMsg(*msg, receive_cloud);
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "【阶段1】原始点数：%zu", receive_cloud.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //                     "【阶段1】原始点数：%zu", receive_cloud.size());
 
     // 新增：过滤雷达后方180度的点（x≤0的点）
     pcl::PointCloud<pcl::PointXYZ> front_cloud;
@@ -231,8 +231,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
             front_cloud.push_back(p);
         }
     }
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "【阶段2】前方点数（过滤后方后）：%zu", front_cloud.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //                     "【阶段2】前方点数（过滤后方后）：%zu", front_cloud.size());
 
     std::chrono::steady_clock::time_point t1 =
         std::chrono::steady_clock::now();  // 记录处理开始时间
@@ -266,8 +266,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
 
     // 3. 坐标变换后，打印变换后的点数（理论上和前方点数一致）
     pcl::transformPointCloud(front_cloud, transformed_cloud, transform);
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "【阶段3】变换后点数（rm_frame）：%zu", transformed_cloud.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //                     "【阶段3】变换后点数（rm_frame）：%zu", transformed_cloud.size());
 
     // 4. 过滤感兴趣区域（ROI）：保留有效场景内的点，去除噪声和无关区域
     pcl::PointCloud<pcl::PointXYZ> filtered_cloud;  // 主场景点云
@@ -276,25 +276,26 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
     for (size_t i = 0; i < transformed_cloud.size(); i++) {
         auto& point = transformed_cloud.points[i];
         // 过滤条件：去除超出场景范围、地面以下或特定干扰区域的点
-        // if (point.x < 3 || point.x > 28 || point.y < 0 || point.y > 15 ||
-        //     point.z < 0 || point.z > 1.4 ||
-        //     (point.y > 0 && point.y < 5 && point.x > 25) ||
-        //     ((21.5 - 2.9 / sqrt(2)) < (point.x + point.y) &&
-        //      (point.x + point.y) < (21.5 + 2.9 / sqrt(2)) &&
-        //      (-6.5 - 0.9 / sqrt(2)) < (point.y - point.x) &&
-        //      (point.y - point.x) < (-6.5 + 0.9 / sqrt(2)))) 
-        if (point.x < 26 || point.x > 49 ||  // 缩小x范围，只保留核心场景
-            point.y < 35 || point.y > 52 ||  // 缩小y范围
-            point.z < 0 || point.z > 10) {  // 缩小z范围，过滤地面和高空噪声
-            // 若点在飞镖或飞机检测区域，则保存到other_filtered_cloud
-            // if ((point.x > 28 - 0.5889 - 0.1885 && point.x < 28 - 0.5889) &&
-            //         (point.y > 3.925 && point.y < 4.525) &&
-            //         (point.z > 2.4722 - 0.859 + 0.1 && point.z < 2.4722) ||
-            //     (point.x > 13 && point.x < 27.5) &&
-            //         (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
-            //         (point.z > 1.7 && point.z < 3)) {
-            //     other_filtered_cloud.push_back(point);
-            // }
+        if (point.x < 3 || point.x > 28 || point.y < 0 || point.y > 15 ||
+            point.z < 0 || point.z > 1.4 ||
+            (point.y > 0 && point.y < 5 && point.x > 25) ||
+            ((21.5 - 2.9 / sqrt(2)) < (point.x + point.y) &&
+             (point.x + point.y) < (21.5 + 2.9 / sqrt(2)) &&
+             (-6.5 - 0.9 / sqrt(2)) < (point.y - point.x) &&
+             (point.y - point.x) < (-6.5 + 0.9 / sqrt(2)))) {
+            
+        // if (point.x < 26 || point.x > 49 ||  // 缩小x范围，只保留核心场景
+        //     point.y < 35 || point.y > 52 ||  // 缩小y范围
+        //     point.z < 0 || point.z > 10) {  // 缩小z范围，过滤地面和高空噪声
+            //若点在飞镖或飞机检测区域，则保存到other_filtered_cloud
+            if ((point.x > 28 - 0.5889 - 0.1885 && point.x < 28 - 0.5889) &&
+                    (point.y > 3.925 && point.y < 4.525) &&
+                    (point.z > 2.4722 - 0.859 + 0.1 && point.z < 2.4722) ||
+                (point.x > 13 && point.x < 27.5) &&
+                    (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
+                    (point.z > 1.7 && point.z < 3)) {
+                other_filtered_cloud.push_back(point);
+            }
             continue;  // 跳过无效点
         }
         filtered_cloud.push_back(point);  // 保留有效点
@@ -411,15 +412,15 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
     // 10. 发布检测警告消息
     detect_pub_->publish(lidar_detect);
 
-    // // 11. 打印回调函数总耗时（毫秒）
-    // std::chrono::steady_clock::time_point t2 =
-    //     std::chrono::steady_clock::now();
-    // RCLCPP_INFO(
-    //     rclcpp::get_logger("rclcpp"), "Dynamic callback time: %f",
-    //     std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1)
-    //             .count() /
-    //         1000.0);
-}
+    // 11. 打印回调函数总耗时（毫秒）
+    std::chrono::steady_clock::time_point t2 =
+        std::chrono::steady_clock::now();
+    RCLCPP_INFO(
+        rclcpp::get_logger("rclcpp"), "Dynamic callback time: %f",
+        std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1)
+                .count() /
+            1000.0);
+    }
 }  // namespace tdt_radar
 
 RCLCPP_COMPONENTS_REGISTER_NODE(tdt_radar::DynamicCloud)

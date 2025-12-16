@@ -450,8 +450,8 @@ public:
             if (match_info.self_color == 0) {  // 自身为蓝方，需要翻转坐标
                 plane_map.x = 28.0f - plane_map.x;  // x坐标翻转（同红蓝方）
                 plane_map.y = 15.0f - plane_map.y;  // y坐标翻转（同红蓝方）
-                RCLCPP_INFO(this->get_logger(), "飞机%d 原始坐标(%.2f, %.2f) → 翻转后(%.2f, %.2f)",
-                            i+1, plane_pcl.x, plane_pcl.y, plane_map.x, plane_map.y);
+                // RCLCPP_INFO(this->get_logger(), "飞机%d 原始坐标(%.2f, %.2f) → 翻转后(%.2f, %.2f)",
+                //             i+1, plane_pcl.x, plane_pcl.y, plane_map.x, plane_map.y);
             }
 
             // 坐标范围校验
@@ -462,8 +462,8 @@ public:
             plane_point[i] = plane_map;
             plane_update[i] = time;
 
-            RCLCPP_INFO(this->get_logger(), "收到第%d架飞机坐标：(%.2f, %.2f)",
-                        i+1, plane_map.x, plane_map.y);
+            // RCLCPP_INFO(this->get_logger(), "收到第%d架飞机坐标：(%.2f, %.2f)",
+            //             i+1, plane_map.x, plane_map.y);
         }
 
         // 触发地图更新

@@ -18,6 +18,10 @@
   <depend>tf2_ros</depend>
   <depend>geometry_msgs</depend>
   <depend>rclcpp_components</depend>
+  <depend>rosbag2_cpp</depend>
+  <depend>rosbag2_storage</depend>
+  <depend>ament_index_cpp</depend>
+
     <!-- 新增：yaml-cpp依赖（参数持久化必需） -->
   <depend>yaml-cpp</depend>
   <test_depend>ament_lint_auto</test_depend>

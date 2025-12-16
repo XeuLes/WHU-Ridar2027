@@ -46,7 +46,7 @@ def generate_launch_description():
             plugin='RosbagPlayer',
             name='rosbag_player_node',
             parameters=[{
-                'rosbag_file': "/home/kakaka/code/rosbag.db3"
+                'rosbag_file': "/home/user/DATA/rosbag.db3"
             }],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
@@ -82,7 +82,7 @@ def generate_launch_description():
             "frame_id": 'livox_frame',  # 点云坐标系（必须与localization一致！）
             "user_config_path": os.path.join(livox_share_dir, 'config', 'MID360_config.json'),  # 雷达配置文件路径
             "cmdline_input_bd_code": 'livox0000000001',  # 雷达绑定码（默认，多雷达需修改）
-            "enable_imu": False,  # 关闭IMU（无需则关闭）
+            "enable_imu": True,  # 关闭IMU（无需则关闭）
             "enable_gps": False   # 关闭GPS（无需则关闭）
         }]
     )
@@ -96,7 +96,7 @@ def generate_launch_description():
         composable_node_descriptions=[
             get_localization_node(),
             get_dynamic_cloud_node(),
-            # get_rosbag_player_node(),  # 用实时雷达时，注释rosbag播放
+            get_rosbag_player_node(),  # 用实时雷达时，注释rosbag播放
             # get_map_pcd_publisher()  # 若之前加载报错，直接注释
         ],
         output='both',
@@ -125,7 +125,7 @@ def generate_launch_description():
         log_rviz_path,
         log_map_path,
         log_livox_config,  # 新增日志
-        livox_driver_node,  # 启动Livox驱动（先启动，确保点云先发布）
+        # livox_driver_node,  # 启动Livox驱动（先启动，确保点云先发布）
         container,
         rviz_node
     ])

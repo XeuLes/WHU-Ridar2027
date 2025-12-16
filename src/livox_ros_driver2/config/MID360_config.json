@@ -28,17 +28,9 @@
       "ip" : "192.168.1.189",
       "pcl_data_type" : 1,
       "pattern_mode" : 0,
-      "fov_cfg_en" : 1,
-      "fov_cfg0" : {
-        "yaw_start" : 0,
-        "yaw_stop" : 180,
-        "pitch_start" : -10,
-        "pitch_stop" : 15,
-        "rsvd" : 0
-      },
       "extrinsic_parameter" : {
         "roll": 0.0,
-        "pitch": 25.0,
+        "pitch": 12.5,
         "yaw": 0.0,
         "x": 0,
         "y": 0,

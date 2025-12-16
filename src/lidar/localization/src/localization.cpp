@@ -17,10 +17,6 @@
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
 #include <rcl_interfaces/msg/set_parameters_result.hpp>
-// 新增：YAML文件读写和文件系统头文件
-#include <yaml-cpp/yaml.h>
-#include <fstream>
-#include <filesystem>
 
 namespace tdt_radar {
 struct Grid {
@@ -33,7 +29,7 @@ public:
         : Node("localization", node_options)
     {
         // 1. 加载目标地图点云（场地点云）
-        std::string target_pcd_file = "/home/kakaka/code/WHU-Radar-2026/src/lidar/localization/config/aligned.pcd";
+        std::string target_pcd_file = "/home/user/code/T-DT_Radar-main/src/lidar/localization/config/RM2025.pcd";
         target_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
         if (pcl::io::loadPCDFile(target_pcd_file, *target_cloud_)) {
             RCLCPP_ERROR(this->get_logger(), "Failed to load %s", target_pcd_file.c_str());
@@ -41,6 +37,7 @@ public:
         }
         // 目标点云仅下采样一次（避免重复下采样导致稀疏）
         downsample_cloud(target_cloud_, target_cloud_, 0.1f);
+        // 日志格式符 %d → %lu（匹配 std::size_t 类型）
         RCLCPP_INFO(this->get_logger(), "目标地图加载完成，下采样后点数：%lu", target_cloud_->size());
 
         // 2. 初始化订阅器/发布器
@@ -62,208 +59,54 @@ public:
         // 4. 初始化TF广播
         tf_broadcaster_ = std::make_shared<tf2_ros::TransformBroadcaster>(this);
 
-        // 5. 声明手动配准参数（含参数保存/加载相关）
+        // 5. 声明手动配准参数（移除 ParameterDescriptor，兼容旧ROS2版本）
         declare_manual_params();
-        // 6. 读取配置文件路径，加载历史参数
-        this->get_parameter("manual_calib_config_path", manual_calib_config_path_);
-        load_manual_params(); // 启动时自动加载参数
-
-        // 7. 设置参数回调（实时响应参数修改）
+        // 6. 设置参数回调（实时响应参数修改）
         param_callback_handle_ = this->add_on_set_parameters_callback(
             std::bind(&Localization::param_callback, this, std::placeholders::_1));
 
-        // 8. 参数重置定时器（处理trigger和save_trigger的重置）
+        // -------------------------- 新增：参数重置定时器 --------------------------
+        // 用于在参数回调外重置 trigger_auto_calib 参数（避免线程冲突）
         param_reset_timer_ = this->create_wall_timer(
-            std::chrono::milliseconds(100),
+            std::chrono::milliseconds(100), // 100ms周期检查
             std::bind(&Localization::param_reset_callback, this));
 
-        // 打印功能提示
-        RCLCPP_INFO(this->get_logger(), "手动配准模式已启动！（支持参数持久化）");
-        RCLCPP_INFO(this->get_logger(), "预览话题：/livox/manual_aligned_cloud");
-        RCLCPP_INFO(this->get_logger(), "参数配置文件：%s", manual_calib_config_path_.c_str());
+        RCLCPP_INFO(this->get_logger(), "手动配准模式已启动！");
+        RCLCPP_INFO(this->get_logger(), "可通过参数调整位姿，预览话题：/livox/manual_aligned_cloud");
         RCLCPP_INFO(this->get_logger(), "可用参数列表：");
-        RCLCPP_INFO(this->get_logger(), "  manual_trans_x/y/z: 平移（米，范围±100）");
+        RCLCPP_INFO(this->get_logger(), "  manual_trans_x/y/z: 平移（米，范围±50）");
         RCLCPP_INFO(this->get_logger(), "  manual_roll/pitch/yaw_deg: 旋转（度）");
         RCLCPP_INFO(this->get_logger(), "  manual_mode: 手动模式开关（true/false）");
         RCLCPP_INFO(this->get_logger(), "  trigger_auto_calib: 触发自动精配准（true）");
-        RCLCPP_INFO(this->get_logger(), "  param_save_trigger: 保存当前参数到文件（true）");
     }
 
 private:
-    // -------------------------- 参数重置定时器回调 --------------------------
+    // -------------------------- 新增：参数重置定时器回调 --------------------------
+    // 独立线程中重置 trigger_auto_calib 参数，避免参数回调内修改
     void param_reset_callback() {
-        // 重置自动配准触发参数
         if (need_reset_trigger_) {
-            this->set_parameter(rclcpp::Parameter("trigger_auto_calib", false));
-            need_reset_trigger_ = false;
-        }
-        // 重置参数保存触发参数
-        if (need_reset_save_trigger_) {
-            this->set_parameter(rclcpp::Parameter("param_save_trigger", false));
-            need_reset_save_trigger_ = false;
+            this->set_parameter(rclcpp::Parameter("trigger_auto_calib", false)); // 安全重置
+            need_reset_trigger_ = false; // 重置标志位
         }
     }
 
-    // -------------------------- 声明手动配准参数（含保存/加载参数） --------------------------
+    // -------------------------- 手动配准核心功能 --------------------------
+    // 声明手动配准参数（移除 ParameterDescriptor，兼容旧版本）
     void declare_manual_params() {
-        // 平移参数（单位：米）
+        // 平移参数（单位：米，范围±50米，已扩大）
         this->declare_parameter<double>("manual_trans_x", 0.0);
         this->declare_parameter<double>("manual_trans_y", 0.0);
         this->declare_parameter<double>("manual_trans_z", 0.0);
-        // 旋转参数（单位：度）
+        // 旋转参数（单位：度，用户易操作，内部转弧度）
         this->declare_parameter<double>("manual_roll_deg", 0.0);
         this->declare_parameter<double>("manual_pitch_deg", 0.0);
         this->declare_parameter<double>("manual_yaw_deg", 0.0);
         // 模式控制参数
-        this->declare_parameter<bool>("manual_mode", true);
+        this->declare_parameter<bool>("manual_mode", false);
         this->declare_parameter<bool>("trigger_auto_calib", false);
-        // 新增：参数保存触发和配置文件路径
-        this->declare_parameter<bool>("param_save_trigger", false);
-        this->declare_parameter<std::string>(
-            "manual_calib_config_path",
-            "/home/kakaka/code/WHU-Radar-2026/src/lidar/localization/config/manual_calib_params.yaml"
-        );
-        // 新增：控制是否自动触发配准（默认true，即自动触发）
-        this->declare_parameter<bool>("auto_trigger_after_load", true);
     }
 
-    // -------------------------- 新增：同步节点参数到成员变量（关键修复） --------------------------
-    void sync_params_to_member() {
-        // 从节点参数中读取当前值，同步到成员变量
-        manual_trans_x_ = this->get_parameter("manual_trans_x").get_value<double>();
-        manual_trans_y_ = this->get_parameter("manual_trans_y").get_value<double>();
-        manual_trans_z_ = this->get_parameter("manual_trans_z").get_value<double>();
-        
-        // 旋转参数：节点参数是“度”，成员变量是“弧度”，需转换
-        double roll_deg = this->get_parameter("manual_roll_deg").get_value<double>();
-        double pitch_deg = this->get_parameter("manual_pitch_deg").get_value<double>();
-        double yaw_deg = this->get_parameter("manual_yaw_deg").get_value<double>();
-        manual_roll_ = roll_deg * M_PI / 180.0;
-        manual_pitch_ = pitch_deg * M_PI / 180.0;
-        manual_yaw_ = yaw_deg * M_PI / 180.0;
-        
-        manual_mode_ = this->get_parameter("manual_mode").get_value<bool>();
-
-        // 打印同步后的成员变量（验证是否生效）
-        RCLCPP_INFO(this->get_logger(), "成员变量同步完成：");
-        RCLCPP_INFO(this->get_logger(), "  trans(x:%.2f, y:%.2f, z:%.2f)",
-                    manual_trans_x_, manual_trans_y_, manual_trans_z_);
-        RCLCPP_INFO(this->get_logger(), "  roll:%.1f° (%.3frad) | pitch:%.1f° (%.3frad) | yaw:%.1f° (%.3frad)",
-                    roll_deg, manual_roll_, pitch_deg, manual_pitch_, yaw_deg, manual_yaw_);
-        RCLCPP_INFO(this->get_logger(), "  manual_mode: %s", manual_mode_ ? "true" : "false");
-    }
-
-    // -------------------------- 加载历史参数（从YAML文件）+ 同步成员变量（关键修复） --------------------------
-    void load_manual_params() {
-        // 输出实际读取的文件路径（方便排查路径错误）
-        RCLCPP_INFO(this->get_logger(), "尝试加载参数文件：%s", manual_calib_config_path_.c_str());
-
-        // 检查文件是否存在
-        if (!std::filesystem::exists(manual_calib_config_path_)) {
-            RCLCPP_WARN(this->get_logger(), "参数文件不存在！将使用默认值");
-            // 即使无文件，也同步默认参数到成员变量
-            sync_params_to_member();
-            return;
-        }
-
-        try {
-            // 读取YAML文件
-            YAML::Node config = YAML::LoadFile(manual_calib_config_path_);
-
-            // 定义需要加载的参数（参数名必须和节点声明完全一致）
-            std::map<std::string, double> double_params = {
-                {"manual_trans_x", 0.0}, {"manual_trans_y", 0.0}, {"manual_trans_z", 0.0},
-                {"manual_roll_deg", 0.0}, {"manual_pitch_deg", 0.0}, {"manual_yaw_deg", 0.0}
-            };
-            std::map<std::string, bool> bool_params = {
-                {"manual_mode", true}
-            };
-
-            // 加载浮点型参数
-            for (auto& [param_name, default_val] : double_params) {
-                double val = default_val;
-                if (config[param_name]) {
-                    val = config[param_name].as<double>();
-                    RCLCPP_INFO(this->get_logger(), "从文件加载参数 %-15s: %.2f", param_name.c_str(), val);
-                } else {
-                    RCLCPP_WARN(this->get_logger(), "文件中无参数 %s，使用默认值 %.2f", param_name.c_str(), default_val);
-                }
-                // 设置到节点参数
-                this->set_parameter(rclcpp::Parameter(param_name, val));
-            }
-
-            // 加载布尔型参数
-            for (auto& [param_name, default_val] : bool_params) {
-                bool val = default_val;
-                if (config[param_name]) {
-                    val = config[param_name].as<bool>();
-                    RCLCPP_INFO(this->get_logger(), "从文件加载参数 %-15s: %s", param_name.c_str(), val ? "true" : "false");
-                } else {
-                    RCLCPP_WARN(this->get_logger(), "文件中无参数 %s，使用默认值 %s", param_name.c_str(), default_val ? "true" : "false");
-                }
-                // 设置到节点参数
-                this->set_parameter(rclcpp::Parameter(param_name, val));
-            }
-
-            // 关键修复：加载参数后，同步到成员变量
-            sync_params_to_member();
-
-            RCLCPP_INFO(this->get_logger(), "参数文件加载并同步完成！");
-        } catch (const YAML::Exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "参数文件解析失败（格式错误）：%s", e.what());
-            // 解析失败时，使用默认参数同步成员变量
-            sync_params_to_member();
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "加载参数失败：%s", e.what());
-            sync_params_to_member();
-        }
-
-        // 读取自动触发控制参数（允许用户通过文件/命令行关闭）
-        auto_trigger_calib_after_load_ = this->get_parameter("auto_trigger_after_load").get_value<bool>();
-        if (auto_trigger_calib_after_load_) {
-            RCLCPP_INFO(this->get_logger(), "已开启「加载参数后自动触发精配准」");
-            RCLCPP_INFO(this->get_logger(), "第一帧雷达点云到来后，将自动使用加载的位姿启动GICP配准");
-        } else {
-            RCLCPP_INFO(this->get_logger(), "已关闭「自动触发精配准」，将保持手动模式");
-        }
-    }
-
-
-    // -------------------------- 保存当前参数（到YAML文件） --------------------------
-    void save_manual_params() {
-        try {
-            // 创建父目录（避免目录不存在导致保存失败）
-            std::filesystem::path config_path(manual_calib_config_path_);
-            std::filesystem::create_directories(config_path.parent_path());
-
-            // 读取当前节点的参数值
-            YAML::Node config;
-            config["manual_trans_x"] = this->get_parameter("manual_trans_x").get_value<double>();
-            config["manual_trans_y"] = this->get_parameter("manual_trans_y").get_value<double>();
-            config["manual_trans_z"] = this->get_parameter("manual_trans_z").get_value<double>();
-            config["manual_roll_deg"] = this->get_parameter("manual_roll_deg").get_value<double>();
-            config["manual_pitch_deg"] = this->get_parameter("manual_pitch_deg").get_value<double>();
-            config["manual_yaw_deg"] = this->get_parameter("manual_yaw_deg").get_value<double>();
-            config["manual_mode"] = this->get_parameter("manual_mode").get_value<bool>();
-
-            // 写入文件
-            std::ofstream fout(manual_calib_config_path_);
-            if (!fout.is_open()) {
-                RCLCPP_ERROR(this->get_logger(), "无法打开文件：%s", manual_calib_config_path_.c_str());
-                return;
-            }
-            fout << config; // 写入YAML（格式自动美化）
-            fout.close();
-
-            RCLCPP_INFO(this->get_logger(), "参数已保存到：%s", manual_calib_config_path_.c_str());
-        } catch (const YAML::Exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "保存参数文件失败：%s", e.what());
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "保存参数失败：%s", e.what());
-        }
-    }
-
-    // -------------------------- 参数回调（处理参数修改和保存触发） --------------------------
+    // 参数回调：实时更新手动配准参数（不再直接修改参数）
     rcl_interfaces::msg::SetParametersResult param_callback(
         const std::vector<rclcpp::Parameter>& parameters) {
         rcl_interfaces::msg::SetParametersResult result;
@@ -271,11 +114,10 @@ private:
         result.reason = "success";
 
         for (const auto& param : parameters) {
-            // 平移参数更新
+            // 平移参数更新（范围±50米）
             if (param.get_name() == "manual_trans_x") update_param_with_range(param, manual_trans_x_, -100.0, 100.0);
             else if (param.get_name() == "manual_trans_y") update_param_with_range(param, manual_trans_y_, -100.0, 100.0);
             else if (param.get_name() == "manual_trans_z") update_param_with_range(param, manual_trans_z_, -100.0, 100.0);
-            // 旋转参数更新（度转弧度）
             else if (param.get_name() == "manual_roll_deg") {
                 double deg = param.as_double();
                 if (deg < -180 || deg > 180) { result.successful = false; result.reason = "roll范围±180度"; return result; }
@@ -294,25 +136,23 @@ private:
             // 模式切换
             else if (param.get_name() == "manual_mode") {
                 manual_mode_ = param.as_bool();
-                RCLCPP_WARN(this->get_logger(), "切换到【%s】", manual_mode_ ? "手动配准模式" : "自动精配准模式");
-                if (manual_mode_) has_aligned_ = false;
+                if (manual_mode_) {
+                    RCLCPP_WARN(this->get_logger(), "切换到【手动配准模式】");
+                    has_aligned_ = false; // 重置自动配准状态
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "切换到【自动精配准模式】");
+                }
             }
-            // 触发自动精配准
+            // 触发自动精配准（关键修改：仅设置标志位，不直接修改参数）
             else if (param.get_name() == "trigger_auto_calib" && param.as_bool()) {
                 trigger_auto_calib_ = true;
-                need_reset_trigger_ = true;
-            }
-            // 触发参数保存（核心新增）
-            else if (param.get_name() == "param_save_trigger" && param.as_bool()) {
-                param_save_trigger_ = true;
-                need_reset_save_trigger_ = true;
-                save_manual_params(); // 立即保存当前参数
+                need_reset_trigger_ = true; // 标记需要重置参数
             }
         }
         return result;
     }
 
-    // -------------------------- 辅助函数：参数范围检查 --------------------------
+    // 辅助函数：更新参数并检查范围
     template<typename T>
     void update_param_with_range(const rclcpp::Parameter& param, T& var, T min, T max) {
         T val = param.as_double();
@@ -323,7 +163,7 @@ private:
         var = val;
     }
 
-    // -------------------------- 生成手动变换矩阵 --------------------------
+    // 生成手动调整的变换矩阵（Z-Y-X旋转顺序，符合ROS坐标系）
     Eigen::Matrix4f create_manual_transform() {
         Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
         // 旋转矩阵：roll(X) → pitch(Y) → yaw(Z)
@@ -339,7 +179,8 @@ private:
         return transform;
     }
 
-    // -------------------------- 原有核心功能（无修改） --------------------------
+    // -------------------------- 原有核心功能 --------------------------
+    // 下采样辅助函数（复用代码）
     void downsample_cloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& input,
                           pcl::PointCloud<pcl::PointXYZ>::Ptr& output,
                           float leaf_size) {
@@ -349,6 +190,7 @@ private:
         voxelgrid.filter(*output);
     }
 
+    // 回调函数：整合手动/自动配准逻辑
     void callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg) {
         // 转换原始雷达点云到PCL格式
         pcl::PointCloud<pcl::PointXYZ>::Ptr source_cloud(new pcl::PointCloud<pcl::PointXYZ>());
@@ -359,55 +201,42 @@ private:
             // 1. 生成手动变换矩阵
             Eigen::Matrix4f manual_transform = create_manual_transform();
 
-            // 2. 应用变换到雷达点云
+            // 2. 应用变换到雷达点云（转换到地图坐标系，方便RViz叠加预览）
             pcl::PointCloud<pcl::PointXYZ>::Ptr manual_aligned_cloud(new pcl::PointCloud<pcl::PointXYZ>());
             pcl::transformPointCloud(*source_cloud, *manual_aligned_cloud, manual_transform);
 
-            // 3. 发布手动调整后的点云
+            // 3. 发布手动调整后的点云（RViz中查看叠加效果）
             sensor_msgs::msg::PointCloud2 manual_msg;
             pcl::toROSMsg(*manual_aligned_cloud, manual_msg);
-            manual_msg.header.frame_id = "rm_frame";
+            manual_msg.header.frame_id = "rm_frame"; // 地图坐标系
             manual_msg.header.stamp = msg->header.stamp;
             manual_aligned_publisher_->publish(manual_msg);
 
-            // 4. 发布手动TF
+            // 4. 发布手动TF（实时预览位姿）
             publishTF(manual_transform);
 
-            // 5. 打印当前参数（1秒一次）
+            // 5. 打印当前参数（1秒打印一次，避免刷屏）
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                 "手动配准参数：trans(x:%.2f, y:%.2f, z:%.2f) | "
                                 "roll:%.1f° pitch:%.1f° yaw:%.1f°",
                                 manual_trans_x_, manual_trans_y_, manual_trans_z_,
                                 manual_roll_ * 180/M_PI, manual_pitch_*180/M_PI, manual_yaw_*180/M_PI);
 
-            // 新增：自动触发配准
-            if (auto_trigger_calib_after_load_ && !has_auto_triggered_ && !trigger_auto_calib_) {
-                RCLCPP_WARN(this->get_logger(), "触发自动精配准（来自参数加载后自动触发）");
-                manual_mode_ = false;
-                initial_transform_ = manual_transform;  // 使用加载的手动位姿作为初始猜测
-                gridMap.clear();
-                accumulated_clouds_.clear();
-                has_auto_triggered_ = true;  // 标记已触发，避免重复
-                return;  // 直接进入自动配准模式
-            }
-            // 6. 触发自动精配准
+            // 6. 若触发自动精配准，切换模式并初始化GICP初始位姿
             if (trigger_auto_calib_) {
                 manual_mode_ = false;
-                initial_transform_ = manual_transform;
+                initial_transform_ = manual_transform; // 手动位姿作为GICP初始猜测
                 RCLCPP_WARN(this->get_logger(), "触发自动精配准！初始位姿已设置为手动调整值");
-                gridMap.clear();
-                accumulated_clouds_.clear();
-                trigger_auto_calib_ = false;
+                gridMap.clear(); // 重置栅格地图
+                accumulated_clouds_.clear(); // 重置累积点云
+                trigger_auto_calib_ = false; // 重置触发标志
             }
             return;
         }
 
         // -------------------------- 自动精配准模式 --------------------------
         if (!has_aligned_) {
-            // 0. 每帧先清空栅格地图（避免旧点叠加）
-            // gridMap.clear();
-
-            // 1. 累积20帧点云
+            // 1. 累积20帧点云（提高稳定性）
             if (accumulated_clouds_.size() < accumulate_time) {
                 accumulated_clouds_.push_back(source_cloud);
                 return;
@@ -416,10 +245,10 @@ private:
                 accumulated_clouds_.push_back(source_cloud);
             }
 
-            // 2. 栅格地图构建
+            // 2. 栅格地图构建（保留最远点）
             for (auto& cloud : accumulated_clouds_) {
                 for (const auto& point : *cloud) {
-                    if (point.x <= 0) continue;
+                    if (point.x <= 0) continue; // 只处理前方点
                     double azimuth = std::atan2(point.y, point.x);
                     double elevation = std::atan2(point.z, std::sqrt(point.x*point.x + point.y*point.y));
                     int az_idx = static_cast<int>(floor(azimuth * 180/M_PI / gridSizeDegrees));
@@ -440,10 +269,10 @@ private:
                 if (grid.maxDistance > 0.0) grid_cloud->push_back(grid.farthestPoint);
             }
 
-            // 4. ROI过滤
+            // 4. ROI过滤（根据实际场景调整范围）
             pcl::PointCloud<pcl::PointXYZ>::Ptr roi_cloud(new pcl::PointCloud<pcl::PointXYZ>());
             for (const auto& point : grid_cloud->points) {
-                if (point.x > 5 && point.x < 30 && point.y > -10 && point.y < 20 && point.z < 7) {
+                if (point.x > 5 && point.x < 30 && point.y > -10 && point.y < 8 && point.z < 7) {
                     roi_cloud->push_back(point);
                 }
             }
@@ -456,28 +285,27 @@ private:
             // 5. 源点云下采样
             pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_source(new pcl::PointCloud<pcl::PointXYZ>());
             downsample_cloud(roi_cloud, downsampled_source, 0.1f);
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                    "下采样后点数：%lu", downsampled_source->size());  // 新增日志，验证减点效果
 
-            // 6. 发布过滤后的点云
+            // 6. 发布过滤后的点云（调试用）
             sensor_msgs::msg::PointCloud2 filter_msg;
             pcl::toROSMsg(*downsampled_source, filter_msg);
             filter_msg.header.frame_id = "livox_frame";
             filter_publisher_->publish(filter_msg);
 
-            // 7. GICP精配准
+            // 7. GICP精配准（兼容所有PCL版本）
             RCLCPP_INFO(this->get_logger(), "开始GICP精配准（初始位姿来自手动调整）");
             auto gicp = pcl::make_shared<pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ>>();
-            gicp->setMaximumIterations(500);
-            gicp->setTransformationEpsilon(1e-8);
-            gicp->setEuclideanFitnessEpsilon(1e-6);
+            gicp->setMaximumIterations(500);       // 增加迭代次数
+            gicp->setTransformationEpsilon(1e-8);  // 收敛阈值
+            gicp->setEuclideanFitnessEpsilon(1e-6); // 配准精度阈值
             transform = align(gicp, target_cloud_, downsampled_source, initial_transform_);
         }
 
-        // 发布最终TF变换
+        // 发布最终TF变换（自动配准成功后固定）
         publishTF(transform);
     }
 
+    // -------------------------- align函数（兼容所有PCL版本） --------------------------
     Eigen::Matrix4f
     align(pcl::shared_ptr<pcl::GeneralizedIterativeClosestPoint<pcl::PointXYZ, pcl::PointXYZ>> gicp,
           const pcl::PointCloud<pcl::PointXYZ>::Ptr& target_cloud,
@@ -488,7 +316,7 @@ private:
 
         pcl::PointCloud<pcl::PointXYZ>::Ptr aligned_cloud(new pcl::PointCloud<pcl::PointXYZ>());
         auto t1 = std::chrono::system_clock::now();
-        gicp->align(*aligned_cloud, initial_transform);
+        gicp->align(*aligned_cloud, initial_transform); // 直接传入初始变换
         auto t2 = std::chrono::system_clock::now();
 
         // 打印配准信息
@@ -496,23 +324,24 @@ private:
         long long calib_time = std::chrono::duration_cast<std::chrono::milliseconds>(t2 - t1).count();
         RCLCPP_WARN(this->get_logger(), "配准耗时：%lldms | 配准分数：%.4f", calib_time, fit_score);
 
-        // 配准成功判断
+        // 配准成功判断（分数越低越好，可根据场景调整阈值）
         if (fit_score < 0.15) {
             has_aligned_ = true;
             RCLCPP_INFO(this->get_logger(), "配准成功！TF变换已固定");
-        //     // 打印最终变换矩阵
-        //     RCLCPP_INFO(this->get_logger(), "最终变换矩阵：");
-        //     RCLCPP_INFO(this->get_logger(), "%.3f %.3f %.3f %.3f",
-        //                 transform(0,0), transform(0,1), transform(0,2), transform(0,3));
-        //     RCLCPP_INFO(this->get_logger(), "%.3f %.3f %.3f %.3f",
-        //                 transform(1,0), transform(1,1), transform(1,2), transform(1,3));
-        //     RCLCPP_INFO(this->get_logger(), "%.3f %.3f %.3f %.3f",
-        //                 transform(2,0), transform(2,1), transform(2,2), transform(2,3));
+            // 打印最终变换矩阵（可选保存到文件）
+            RCLCPP_INFO(this->get_logger(), "最终变换矩阵：");
+            RCLCPP_INFO(this->get_logger(), "%.3f %.3f %.3f %.3f",
+                        transform(0,0), transform(0,1), transform(0,2), transform(0,3));
+            RCLCPP_INFO(this->get_logger(), "%.3f %.3f %.3f %.3f",
+                        transform(1,0), transform(1,1), transform(1,2), transform(1,3));
+            RCLCPP_INFO(this->get_logger(), "%.3f %.3f %.3f %.3f",
+                        transform(2,0), transform(2,1), transform(2,2), transform(2,3));
         }
 
         return gicp->getFinalTransformation();
     }
 
+    // TF发布函数（无修改）
     void publishTF(const Eigen::Matrix4f& transform) {
         geometry_msgs::msg::TransformStamped ts;
         ts.header.stamp = this->now();
@@ -531,44 +360,35 @@ private:
         tf_broadcaster_->sendTransform(ts);
     }
 
-    // -------------------------- 成员变量（新增参数保存/加载相关） --------------------------
-    // 手动配准核心参数
-    bool manual_mode_ = true;
-    double manual_trans_x_ = 0.0;
-    double manual_trans_y_ = 0.0;
-    double manual_trans_z_ = 0.0;
-    double manual_roll_ = 0.0;
-    double manual_pitch_ = 0.0;
-    double manual_yaw_ = 0.0;
-    bool trigger_auto_calib_ = false;
-    bool need_reset_trigger_ = false;
+    // -------------------------- 成员变量 --------------------------
+    // 手动配准参数
+    bool manual_mode_ = false;                // 手动模式开关
+    double manual_trans_x_ = 0.0;            // X平移（米）
+    double manual_trans_y_ = 0.0;            // Y平移（米）
+    double manual_trans_z_ = 0.0;            // Z平移（米）
+    double manual_roll_ = 0.0;               // 滚转（弧度）
+    double manual_pitch_ = 0.0;              // 俯仰（弧度）
+    double manual_yaw_ = 0.0;                // 偏航（弧度）
+    bool trigger_auto_calib_ = false;        // 自动精配准触发标志
+    bool need_reset_trigger_ = false;        // 新增：需要重置trigger的标志位
+    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
+    rclcpp::TimerBase::SharedPtr param_reset_timer_; // 新增：参数重置定时器
 
-    // 新增：参数保存/加载相关
-    std::string manual_calib_config_path_;  // 参数配置文件路径
-    bool param_save_trigger_ = false;       // 保存参数触发标志
-    bool need_reset_save_trigger_ = false;  // 重置保存触发标志
-    // 新增：自动触发配准相关
-    bool auto_trigger_calib_after_load_ = true;  // 加载参数后自动触发配准的标志
-    bool has_auto_triggered_ = false;            // 避免重复触发的标志
-
-
-    // 原有变量
-    bool has_aligned_ = false;
-    Eigen::Matrix4f transform = Eigen::Matrix4f::Identity();
-    Eigen::Matrix4f initial_transform_ = Eigen::Matrix4f::Identity();
-    pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud_;
+    // 原有变量 + 初始变换矩阵
+    bool has_aligned_ = false;               // 自动配准完成标志
+    Eigen::Matrix4f transform = Eigen::Matrix4f::Identity(); // 最终位姿变换矩阵
+    Eigen::Matrix4f initial_transform_ = Eigen::Matrix4f::Identity(); // GICP初始位姿（来自手动调整）
+    pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud_;       // 目标地图点云
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
-    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> accumulated_clouds_;
-    int accumulate_time = 20;
+    std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> accumulated_clouds_; // 累积点云
+    int accumulate_time = 30;                // 累积帧数
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr filter_publisher_;
-    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr manual_aligned_publisher_;
-    rclcpp::TimerBase::SharedPtr timer_;
-    double gridSizeDegrees = 0.1;
-    std::map<std::pair<int, int>, Grid> gridMap;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr manual_aligned_publisher_; // 手动配准预览发布器
+    rclcpp::TimerBase::SharedPtr timer_;     // 地图发布计时器
+    double gridSizeDegrees = 0.1;            // 栅格大小（0.1°×0.1°）
+    std::map<std::pair<int, int>, Grid> gridMap; // 栅格地图
     std::shared_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
-    rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr param_callback_handle_;
-    rclcpp::TimerBase::SharedPtr param_reset_timer_;
 };
 }  // namespace tdt_radar
 

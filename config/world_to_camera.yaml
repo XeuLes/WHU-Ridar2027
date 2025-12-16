@@ -4,9 +4,9 @@ world_rvec: !!opencv-matrix
   rows: 3
   cols: 1
   dt: d
-  data: [ 1.25591, -0.682831, -1.17163 ]
+  data: [ 1.25675, -0.681946, -1.17291 ]
 world_tvec: !!opencv-matrix
   rows: 3
   cols: 1
   dt: d
-  data: [ -4.98519, -0.828837, 3.9598 ]
+  data: [ -4.97682, -0.833904, 3.99246 ]

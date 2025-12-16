@@ -66,7 +66,7 @@ def generate_launch_description():
             name='localization_node',
             parameters=[{
                 'use_map': True,
-                'map_frame': 'map'
+                'map_frame': 'rm_frame'
             }],
             extra_arguments=[
                 {'use_intra_process_comms': True},
@@ -157,7 +157,7 @@ def generate_launch_description():
             name='map_pcd_publisher',
             parameters=[{
                 'file_name': map_pcd_path,
-                'frame_id': 'map',
+                'frame_id': 'rm_frame',
                 'publish_rate': 0.1
             }],
             remappings=[('cloud', '/map_point_cloud')],
