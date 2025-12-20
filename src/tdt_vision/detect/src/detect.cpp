@@ -9,6 +9,7 @@
 #include <rclcpp/logging.hpp>
 // ROS 2节点关闭工具
 #include <rclcpp/utilities.hpp>
+#include <future> // 用于异步并行任务
 
 // 自定义信息输出宏（替代std::cout，统一输出格式）
 #define TDT_INFO(msg) std::cout << msg << std::endl
@@ -113,6 +114,18 @@ cv::Rect getSafeRect(cv::Mat& image, cv::Rect& rect)
     return save_rect;
 }
 
+float calculateIOU(const yolo::Box& a, const yolo::Box& b) {
+    float left = std::max(a.left, b.left);
+    float top = std::max(a.top, b.top);
+    float right = std::min(a.right, b.right);
+    float bottom = std::min(a.bottom, b.bottom);
+    if (left >= right || top >= bottom) return 0.0f;
+    float inter_area = (right - left) * (bottom - top);
+    float union_area = (a.right - a.left) * (a.bottom - a.top) + 
+                       (b.right - b.left) * (b.bottom - b.top) - inter_area;
+    return inter_area / union_area;
+}
+
 /**
  * @brief Detect类构造函数（初始化节点、检测器、ROS通信）
  * @param node_options ROS 2节点选项（如参数配置）
@@ -140,6 +153,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     fs["yolo_path"] >> yolo_path;    // 车辆检测TensorRT引擎路径
     fs["armor_path"] >> armor_path;  // 装甲板检测TensorRT引擎路径
     fs["classify_path"] >> classify_path;  // 装甲板分类TensorRT引擎路径
+    fs["uav_path"] >> uav_path;  // 无人机检测TensorRT引擎路径
     fs.release();                          // 释放文件资源
 
     // 检查车辆检测TRT引擎是否存在，不存在则从ONNX转换
@@ -206,6 +220,17 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);
     TDT_INFO("Load yolo engine success!");
 
+    std::ifstream file_uav(uav_path.c_str());
+    if (file_uav.good()) {
+        auto tmp_uav = uav::load(uav_path, 0.5f, 0.3f);
+        if (tmp_uav != nullptr) {
+            this->uav_detector = tmp_uav;
+            TDT_INFO("Load uav engine success from: " << uav_path);
+        } else {
+            TDT_INFO("UAV engine load FAILED despite file existing!");
+        }
+    }
+
     // 创建ROS
     // 2图像订阅者：订阅"camera_image"话题（传感器数据QoS，确保实时性）
     image_sub = this->create_subscription<sensor_msgs::msg::Image>(
@@ -237,18 +262,33 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     // 转换为自定义Image类型（适配检测器输入）
     tdt_radar::Image image(img.data, img.cols, img.rows);
 
-    // 1. 第一步：车辆检测（用yolo检测器检测整图中的车辆）
-    auto result = yolo->forward(image);
+    // --- 第一步：并行全局检测 (都是 1280 尺寸) ---
+    // 使用 std::async 异步启动车辆检测
+    auto future_car = std::async(std::launch::async, [&]() {
+        return yolo->forward(image);
+    });
 
-    // 新增：打印车辆YOLO原始结果
-    RCLCPP_INFO(this->get_logger(), "车辆YOLO检测结果数量：%lu", result.size());
-    for (size_t i = 0; i < result.size(); i++) {
-        auto& box = result[i];
-        RCLCPP_INFO(this->get_logger(), 
-            "检测框%d：left=%.2f, top=%.2f, right=%.2f, bottom=%.2f, 置信度=%.3f, 类别=%d",
-            i, box.left, box.top, box.right, box.bottom, box.confidence, box.class_label);
+    // 使用 std::async 异步启动无人机检测
+    auto future_uav = std::async(std::launch::async, [&]() {
+        // 检查空指针安全性
+        if (uav_detector == nullptr) return std::vector<yolo::Box>(); 
+        return uav_detector->forward(image);
+    });
+
+    // 在等待 GPU 回传结果的阻塞时间内，CPU 可以先执行一些轻量化逻辑（如旧目标的预测）
+    // ... 这里可以放一些不依赖当前帧结果的逻辑 ...
+
+    // 阻塞并获取结果
+    auto result = future_car.get();         // 获取车辆检测结果
+    auto uav_raw_result = future_uav.get(); // 获取无人机检测结果
+
+    // --- 【并行化改造结束】 ---
+
+    // 后续处理逻辑（保持原有逻辑，但建议加上耗时控制）
+    if (result.empty() && uav_raw_result.empty()) {
+        // 如果都没搜到，直接返回，节省后续 ROI 裁剪时间
+        return;
     }
-
 
     // 无车辆检测结果→打印日志并返回
     if (result.size() == 0) {
@@ -264,15 +304,11 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     // 存储车辆ROI图像（用于后续装甲板检测）
     std::vector<tdt_radar::Image> images;
     std::vector<cv::Mat>          car_imgs;
-    // --- 无人机 ROI 单独处理路径 ---
-    std::vector<tdt_radar::Image> uav_images;        
-    std::vector<cv::Mat> uav_imgs;
 
     // 存储车辆信息（检测框、ROI、装甲板等）
     std::vector<Car> cars;
 
-    // 存储无人机信息（使用新的 Uav 类容器）
-    std::vector<Uav> uavs;
+    
 
     // 筛选车辆检测结果（仅保留class_label=0或1的目标，视为有效车辆）
     for (auto& box : result) {
@@ -280,10 +316,6 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             Car car;
             car.car = box;  // 保存车辆检测框
             cars.push_back(car);
-        }else if (box.class_label == 2) { // 无人机 (假设 class_label 为 2)
-            Uav uav;
-            uav.uav = box; // 使用 Uav 类的对应变量
-            uavs.push_back(uav);
         }
     }
 
@@ -315,37 +347,6 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 
 
 
-    // 提取每个无人机的安全ROI，并保存无人机图像
-    for (auto& uav : uavs) {
-        // 从无人机检测框构造cv::Rect
-        auto temp_rect =
-            cv::Rect(uav.uav.left, uav.uav.top,
-                     uav.uav.right - uav.uav.left,  // 宽度=右边界-左边界
-                     uav.uav.bottom - uav.uav.top  // 高度=下边界-上边界
-            );
-        
-        // 确保ROI在图像内
-        cv::Rect temp_uav_rect = getSafeRect(img, temp_rect);
-        
-        // 提取无人机ROI图像
-        auto uav_img = img(temp_uav_rect);
-        
-        // 克隆保存到 uav_imgs
-        uav_imgs.push_back(uav_img.clone()); 
-        
-        // 保存无人机安全ROI到 Uav 对象中
-        uav.uav_rect = temp_uav_rect;
-    }
-
-    // 将无人机ROI转换为检测器输入格式（tdt_radar::Image）
-    // 并保存到 uav_images
-    for (auto& uav_img : uav_imgs) {
-        auto image =
-            tdt_radar::Image(uav_img.data, uav_img.cols, uav_img.rows);
-        uav_images.push_back(image);
-    }
-
-
     // 2. 第二步：装甲板检测（批量检测所有车辆ROI中的装甲板）
     auto armor_boxes = armor_yolo->forwards(images);
     bool has_armor = false;  // 标记是否检测到装甲板
@@ -358,11 +359,11 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             has_armor = true;
         }
     }
-    // // 无任何装甲板→打印日志并返回
-    // if (!has_armor) {
-    //     RCLCPP_INFO(this->get_logger(), "No Armor!");
-    //     return;
-    // }
+    // 无任何装甲板→打印日志并返回
+    if (!has_armor) {
+        RCLCPP_INFO(this->get_logger(), "No Armor!");
+        return;
+    }
 
     // ------------------------------
     // （注释代码）调试用：保存装甲板图像到本地（用于标注或训练数据）
@@ -443,6 +444,107 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             }
         }
     }
+
+    // --- 新增：UAV ROI 缓存容器 ---
+    std::vector<cv::Mat> uav_roi_imgs;            // 保持内存生命周期
+    std::vector<tdt_radar::Image> uav_roi_inputs; // 准备给第二层推理的接口输入
+    std::vector<Uav> uavs;
+
+    // 1. 预处理追踪器：先假设所有追踪目标在本帧都会丢失（miss_count++）
+    for (auto& tracked : tracked_uavs) {
+        tracked.miss_count++;
+    }
+
+    // 2. 关联当前帧检测结果 (uav_result) 与 追踪器 (tracked_uavs)
+    for (auto& box : uav_raw_result) {
+        bool matched = false;
+        float max_iou = 0.4f; // 关联阈值：IOU 大于 0.4 视为同一目标
+        TrackedUav* best_match = nullptr;
+
+        // 寻找 IOU 最大的已有目标
+        for (auto& tracked : tracked_uavs) {
+            float iou = calculateIOU(box, tracked.box);
+            if (iou > max_iou) {
+                max_iou = iou;
+                best_match = &tracked;
+                matched = true;
+            }
+        }
+
+        if (matched) {
+            // --- 动态置信度逻辑 ---
+            // 已确认目标（confirmed）采用低维持阈值 0.35；新目标采用高准入阈值 0.6
+            float current_thresh = best_match->confirmed ? 0.05f : 0.7f;
+            
+            if (box.confidence > current_thresh) {
+                best_match->box = box;
+                best_match->hit_count++;
+                best_match->miss_count = 0; // 重置丢失计数
+                // 闪烁过滤：连续命中 3 帧才确认为真（confirmed）
+                if (best_match->hit_count >= 3) {
+                    best_match->confirmed = true;
+                }
+            }
+        } else if (box.confidence > 0.5f) { 
+            // 发现全新目标：只有置信度极高（> 0.75）才开启新追踪，过滤边缘假阳性
+            TrackedUav new_tracked;
+            new_tracked.box = box;
+            new_tracked.hit_count = 1;
+            new_tracked.miss_count = 0;
+            new_tracked.confirmed = false;
+            tracked_uavs.push_back(new_tracked);
+        }
+    }
+
+    // 3. 清理过期目标：连续丢失超过 5 帧则移除
+    tracked_uavs.erase(
+        std::remove_if(tracked_uavs.begin(), tracked_uavs.end(),
+                       [](const TrackedUav& t) { return t.miss_count > 5; }),
+        tracked_uavs.end());
+
+    // 4. 对所有“已确认（confirmed）”的目标进行 ROI 处理和缓存
+    for (auto& tracked : tracked_uavs) {
+        if (tracked.confirmed) {
+            Uav uav_obj;
+            uav_obj.box = tracked.box; // 使用追踪器中最新的位置信息
+            
+            // --- 你原有的 Padding 和 ROI 提取逻辑 ---
+            cv::Rect raw_rect(uav_obj.box.left, uav_obj.box.top, 
+                              uav_obj.box.right - uav_obj.box.left, 
+                              uav_obj.box.bottom - uav_obj.box.top);
+            float pad = 0.1f; 
+            raw_rect.x -= raw_rect.width * pad;
+            raw_rect.y -= raw_rect.height * pad;
+            raw_rect.width *= (1.0f + 2.0f * pad);
+            raw_rect.height *= (1.0f + 2.0f * pad);
+
+            uav_obj.uav_rect = getSafeRect(img, raw_rect);
+            
+            if (uav_obj.uav_rect.area() > 0) {
+                // 克隆图片并存入 vector，确保内存生命周期
+                cv::Mat uav_roi = img(uav_obj.uav_rect).clone();
+                uav_roi_imgs.push_back(uav_roi); 
+
+                // 构造推理接口输入
+                uav_roi_inputs.emplace_back(uav_roi.data, uav_roi.cols, uav_roi.rows);
+                uavs.push_back(uav_obj);
+
+                // Debug 绘制
+                if (debug) {
+                    // 确认为真使用绿色
+                    cv::rectangle(img, uav_obj.uav_rect, cv::Scalar(0, 255, 0), 2); 
+                    std::string info = "UAV Confirmed " + std::to_string(uav_obj.box.confidence).substr(0,4);
+                    cv::putText(img, info, uav_obj.uav_rect.tl(), 
+                                cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 0), 2);
+                }
+            }
+        }
+    }
+
+    // --- 占位说明：后续若有第二层模型，在此处调用 ---
+    // if (!uav_roi_inputs.empty()) {
+    //    auto second_stage_results = second_detector->forwards(uav_roi_inputs);
+    // }
 
     // 4. 第四步：构造检测结果消息（vision_interface::msg::DetectResult）
     vision_interface::msg::DetectResult detect_result;

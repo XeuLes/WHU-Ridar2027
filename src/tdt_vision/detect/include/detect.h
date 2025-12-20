@@ -15,8 +15,23 @@
 #include "vision_interface/msg/detect_result.hpp"
 #include "yolos.hpp"
 #include "BaseInfer.hpp"
+#include "uav.hpp"
 #include <fstream>
 namespace tdt_radar {
+
+// --- 新增：无人机结构体 ---
+class Uav {
+public:
+    yolo::Box   box;        // 第一层检测到的原始框
+    cv::Rect    uav_rect;   // 裁剪后的 ROI
+    cv::Point2f center;     // 预留：第二层精细定位的中心点坐标
+};
+struct TrackedUav {
+    yolo::Box box;          // 当前检测框
+    int hit_count = 0;      // 连续命中的帧数
+    int miss_count = 0;     // 连续丢失的帧数
+    bool confirmed = false; // 是否已激活（通过闪烁过滤）
+};
 
 class Detect final : public rclcpp::Node {
 public:
@@ -29,6 +44,7 @@ public:
 private:
     std::shared_ptr<Infer<yolo::BoxArray>>     yolo;
     std::shared_ptr<Infer<yolo::BoxArray>>     armor_yolo;
+    std::shared_ptr<Infer<yolo::BoxArray>>     uav_detector;
     std::shared_ptr<Infer<int>> classifier;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr pub;
 
@@ -38,6 +54,11 @@ private:
     std::string yolo_path;
     std::string armor_path;
     std::string classify_path;
+    std::string uav_path;
+
+    std::vector<TrackedUav> tracked_uavs;
+    const int HIT_THRESHOLD = 3;   // 连续3帧出现才认为有效
+    const int MAX_MISS_COUNT = 5;  // 连续丢失5帧才删除
 };
 class Car {
 public:
@@ -49,16 +70,8 @@ public:
     int            number = 0;
     int            color = 1;
 };
-class Uav {
-public:
-    cv::Rect       uav_rect;
-    yolo::Box      uav;
-    yolo::BoxArray armors;
-    cv::Point2f    center;
-    cv::Rect       center_rect;
-    int            number = 0;
-    int            color = 1;
-};
+
+
 }  // namespace tdt_radar
 
 #endif
