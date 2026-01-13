@@ -1,0 +1,12 @@
+# camera_intrinsics.yaml
+# Compatible with camera_field_calib_tool::LoadCameraIntrinsicsYaml()
+
+width: 4096
+height: 3072
+
+camera_matrix:
+  - [3617.422853, 0.0,       2046.972383]
+  - [0.0,         3617.561167, 1515.242535]
+  - [0.0,         0.0,       1.0]
+
+dist_coeffs: [-0.064321, 0.114219, -0.000746, 0.000801, 0.0]

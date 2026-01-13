@@ -1,5 +1,18 @@
 #include "radar_utils.h"
 
+#include <yaml-cpp/yaml.h>
+
+#include <stdexcept>
+
+// -----------------------------------------------------------------------------
+// Fixed config paths (same idea as out_matrix): keep them local and explicit.
+// -----------------------------------------------------------------------------
+namespace {
+static const std::string kOutMatrixPath     = "./config/out_matrix.yaml";
+static const std::string kCameraParamsPath  = "./config/camera_params.yaml";
+static const std::string kRegionPointsPath  = "./config/RM2025_Points.yaml";
+}  // namespace
+
 // 定义装甲板高度常量（单位：米）
 #define ARMOR_HEIGHT 0.15
 
@@ -27,7 +40,7 @@ parser::parser()
 {
     // 读取世界坐标系到相机坐标系的变换矩阵（旋转向量和平移向量）
     cv::FileStorage fs;
-    fs.open("./config/out_matrix.yaml", cv::FileStorage::READ);
+    fs.open(kOutMatrixPath, cv::FileStorage::READ);
     fs["world_tvec"] >> this->world_tvec;  // 平移向量
     fs["world_rvec"] >> this->world_rvec;  // 旋转向量
     std::cout << world_tvec << std::endl;  // 打印平移向量（调试用）
@@ -36,7 +49,7 @@ parser::parser()
 
     // 读取相机内参和畸变系数
     cv::FileStorage fs1;
-    fs1.open("./config/camera_params.yaml", cv::FileStorage::READ);
+    fs1.open(kCameraParamsPath, cv::FileStorage::READ);
     fs1["camera_matrix"] >> this->camera_matrix;  // 相机内参矩阵
     fs1["dist_coeffs"] >> this->dist_coeffs;      // 畸变系数
     fs1.release();
@@ -45,21 +58,37 @@ parser::parser()
     std::cout << "Resolve dist" << dist_coeffs
               << std::endl;  // 打印畸变系数（调试用）
 
-    // 初始化不同区域的点集解析器（如中线、左路、右路等）
-    points_map["Middle_Line"] = new Parser_Points("Middle_Line");
-    points_map["Left_Road"] = new Parser_Points("Left_Road");
-    points_map["Right_Road"] = new Parser_Points("Right_Road");
-    points_map["Enemy_Buff"] = new Parser_Points("Enemy_Buff");
-    points_map["Self_Fortress"] = new Parser_Points("Self_Fortress");
-    points_map["Enemy_Fortress"] = new Parser_Points("Enemy_Fortress");
+    // ---------------------------------------------------------------------
+    // 从 YAML 读取区域列表（不再在 CPP 里写死区域名/高度）。
+    // 规则：
+    //   - 区域名 = RM2025_Points.yaml 的一级 key
+    //   - 区域高度 = 该区域点集里第一个点的 z（若没有点则为 0）
+    //     这样你在编辑/保存点集时，只需要把正确的 z 写进 YAML，即可自动生效。
+    // ---------------------------------------------------------------------
+    YAML::Node root;
+    try {
+        root = YAML::LoadFile(kRegionPointsPath);
+    } catch (const std::exception& e) {
+        throw std::runtime_error(std::string("Failed to load region points yaml: ") + e.what());
+    }
 
-    // 设置各区域的高度参数（单位：米，用于坐标转换）
-    points_map["Middle_Line"]->Height = 0.3;
-    points_map["Left_Road"]->Height = 0.2;
-    points_map["Right_Road"]->Height = 0.2;
-    points_map["Enemy_Buff"]->Height = 0.6;
-    points_map["Self_Fortress"]->Height = 0.15;
-    points_map["Enemy_Fortress"]->Height = 0.15;
+    if (!root || !root.IsMap()) {
+        throw std::runtime_error("Region points yaml is empty or not a map: " + kRegionPointsPath);
+    }
+
+    for (auto it = root.begin(); it != root.end(); ++it) {
+        const std::string region_name = it->first.as<std::string>();
+
+        // 构造时 Parser_Points 内部仍然读取点集并做投影；
+        // 这里负责动态发现 key（区域名）并根据点集的 z 自动设置高度。
+        points_map[region_name] = new Parser_Points(region_name);
+
+        float inferred_height = 0.0f;
+        if (!points_map[region_name]->Points_3D.empty()) {
+            inferred_height = points_map[region_name]->Points_3D.front().z;
+        }
+        points_map[region_name]->Height = inferred_height;
+    }
 }
 
 /**
@@ -70,7 +99,7 @@ void parser::Change_Matrix()
 {
     // 重新读取世界变换矩阵
     cv::FileStorage fs;
-    fs.open("./config/out_matrix.yaml", cv::FileStorage::READ);
+    fs.open(kOutMatrixPath, cv::FileStorage::READ);
     fs["world_tvec"] >> this->world_tvec;
     fs["world_rvec"] >> this->world_rvec;
     fs.release();
@@ -179,7 +208,7 @@ std::vector<cv::Point3f>
 Parser_Points::ReadPoints(const std::string& points_name)
 {
     // 打开存储点集的YAML文件
-    cv::FileStorage fs("./config/RM2025_Points.yaml",
+    cv::FileStorage fs(kRegionPointsPath,
                        cv::FileStorage::READ);
 
     if (!fs.isOpened()) {  // 检查文件是否打开成功
@@ -242,13 +271,13 @@ Parser_Points::Parser_Points(const std::string& points_name)
 {
     // 读取相机内参和畸变系数
     cv::FileStorage fs;
-    fs.open("./config/camera_params.yaml", cv::FileStorage::READ);
+    fs.open(kCameraParamsPath, cv::FileStorage::READ);
     fs["camera_matrix"] >> this->camera_matrix;
     fs["dist_coeffs"] >> this->dist_coeffs;
     fs.release();
 
     // 读取世界到相机的变换矩阵
-    fs.open("./config/out_matrix.yaml", cv::FileStorage::READ);
+    fs.open(kOutMatrixPath, cv::FileStorage::READ);
     fs["world_tvec"] >> this->world_tvec;
     fs["world_rvec"] >> this->world_rvec;
     fs.release();
@@ -283,7 +312,7 @@ void Parser_Points::Update()
 {
     // 重新读取世界变换矩阵
     cv::FileStorage fs;
-    fs.open("./config/out_matrix.yaml", cv::FileStorage::READ);
+    fs.open(kOutMatrixPath, cv::FileStorage::READ);
     fs["world_tvec"] >> this->world_tvec;
     fs["world_rvec"] >> this->world_rvec;
     fs.release();
