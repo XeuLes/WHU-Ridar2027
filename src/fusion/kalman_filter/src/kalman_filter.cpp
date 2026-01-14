@@ -31,10 +31,10 @@ KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options)
         this->create_publisher<vision_interface::msg::DetectResult>(
             "/kalman_detect", 10);
 
-    // 创建订阅器：订阅检测结果
+    // 创建订阅器：订阅检测结果（来自 Resolve 节点的坐标转换后数据）
     sub_detect_ =
         this->create_subscription<vision_interface::msg::DetectResult>(
-            "/resolve_result",
+            "resolve_result",
             rclcpp::SensorDataQoS(),  // 使用传感器数据质量服务
             std::bind(&KalmanFilter::detect_callback, this,
                       std::placeholders::_1));
@@ -69,10 +69,81 @@ void KalmanFilter::match_callback(
 void KalmanFilter::detect_callback(
     const vision_interface::msg::DetectResult::SharedPtr msg)
 {
+    static int callback_count = 0;
+    callback_count++;
+    
     rclcpp::Time time = msg->header.stamp;  // 获取消息时间戳
+    
+    // 【数据流追踪】记录接收到的数据
+    bool has_vehicle_data = false;
+    std::string recv_log = "[KalmanFilter接收] resolve_result (第" + std::to_string(callback_count) + "次): ";
+    
+    for (int i = 0; i < 7; i++) {
+        if (msg->blue_x[i] != 0 || msg->blue_y[i] != 0) {
+            recv_log += "B" + std::to_string(i+1) + "(";
+            recv_log += std::to_string((int)msg->blue_x[i]) + ",";
+            recv_log += std::to_string((int)msg->blue_y[i]) + ") ";
+            has_vehicle_data = true;
+        }
+        if (msg->red_x[i] != 0 || msg->red_y[i] != 0) {
+            recv_log += "R" + std::to_string(i+1) + "(";
+            recv_log += std::to_string((int)msg->red_x[i]) + ",";
+            recv_log += std::to_string((int)msg->red_y[i]) + ") ";
+            has_vehicle_data = true;
+        }
+    }
+    
+    if (has_vehicle_data) {
+        RCLCPP_WARN(this->get_logger(), "%s", recv_log.c_str());
+    }
+    
+    // 【临时修复】直接转发 Resolve 数据到 /kalman_detect，不依赖雷达融合
+    // 原问题：如果没有雷达点云 (/livox/lidar_cluster)，主callback()不执行，数据流中断
+    vision_interface::msg::DetectResult forward_msg = *msg;
+    
+    // 保持原逻辑：根据self_color镜像坐标
+    if (match_info.self_color == 0) {
+        // 【修复】循环7次以支持UAV（索引6），允许单个坐标为0的情况
+        for (int i = 0; i < 7; i++) {
+            // 改用OR条件，允许x或y其中一个为0的情况
+            if (forward_msg.blue_x[i] != 0 || forward_msg.blue_y[i] != 0) {
+                forward_msg.blue_x[i] = 28 - forward_msg.blue_x[i];
+                forward_msg.blue_y[i] = 15 - forward_msg.blue_y[i];
+            }
+            if (forward_msg.red_x[i] != 0 || forward_msg.red_y[i] != 0) {
+                forward_msg.red_x[i] = 28 - forward_msg.red_x[i];
+                forward_msg.red_y[i] = 15 - forward_msg.red_y[i];
+            }
+        }
+    }
+    
+    // 【调试日志已注释】避免卡顿
+    // std::string forward_log = "[KalmanFilter发布] /kalman_detect: ";
+    // bool has_forward_data = false;
+    // for (int i = 0; i < 7; i++) {
+    //     if (forward_msg.blue_x[i] != 0 || forward_msg.blue_y[i] != 0) {
+    //         forward_log += "B" + std::to_string(i+1) + "(";
+    //         forward_log += std::to_string((int)forward_msg.blue_x[i]) + ",";
+    //         forward_log += std::to_string((int)forward_msg.blue_y[i]) + ") ";
+    //         has_forward_data = true;
+    //     }
+    //     if (forward_msg.red_x[i] != 0 || forward_msg.red_y[i] != 0) {
+    //         forward_log += "R" + std::to_string(i+1) + "(";
+    //         forward_log += std::to_string((int)forward_msg.red_x[i]) + ",";
+    //         forward_log += std::to_string((int)forward_msg.red_y[i]) + ") ";
+    //         has_forward_data = true;
+    //     }
+    // }
+    // 
+    // if (has_forward_data) {
+    //     RCLCPP_WARN(this->get_logger(), "%s [直接转发模式]", forward_log.c_str());
+    // }
+    
+    radar_detect_pub_->publish(forward_msg);
 
-    // 处理红色方检测点（颜色编号2）
-    for (int i = 0; i < 6; i++) {
+    // 保留原camera_match逻辑（用于雷达融合，暂时不影响）
+    // 【修复】循环7次以支持UAV的camera_match
+    for (int i = 0; i < 7; i++) {
         pcl::PointXY red_point;                    // 创建2D点
         red_point.x = msg->red_x[i];               // 设置x坐标
         red_point.y = msg->red_y[i];               // 设置y坐标
@@ -229,8 +300,10 @@ void KalmanFilter::callback(
 
     // 填充检测结果消息
     for (auto kf : KFs) {
-        if (kf.detect_history.size() == 0)  // 跳过无检测历史的滤波器
-            continue;
+        // 【临时修复】暂时注释掉阻塞条件，让所有卡尔曼滤波器的数据都能发布
+        // 原问题：只发布有相机检测历史(detect_history)的目标，会导致纯雷达目标被丢弃
+        // if (kf.detect_history.size() == 0)  // 跳过无检测历史的滤波器
+        //     continue;
 
         if (kf.get_color() == 0) {         // 蓝色目标
             int number = kf.get_number();  // 获取目标编号
@@ -246,7 +319,8 @@ void KalmanFilter::callback(
 
     // 坐标转换：根据己方颜色调整坐标系
     if (match_info.self_color == 0) {  // 如果己方是蓝色
-        for (int i = 0; i < 6; i++) {
+        // 【修复】循环7次以支持UAV（索引6）
+        for (int i = 0; i < 7; i++) {
             // 蓝色方坐标镜像转换
             if (detect_msg.blue_x[i] != 0 && detect_msg.blue_y[i] != 0) {
                 detect_msg.blue_x[i] = 28 - detect_msg.blue_x[i];
@@ -260,6 +334,29 @@ void KalmanFilter::callback(
         }
     }
 
+    // 【数据流追踪】记录发布的融合数据
+    bool has_kalman_data = false;
+    std::string kalman_log = "[KalmanFilter发布] /kalman_detect: ";
+    
+    for (int i = 0; i < 7; i++) {
+        if (detect_msg.blue_x[i] != 0 || detect_msg.blue_y[i] != 0) {
+            kalman_log += "B" + std::to_string(i+1) + "(";
+            kalman_log += std::to_string((int)detect_msg.blue_x[i]) + ",";
+            kalman_log += std::to_string((int)detect_msg.blue_y[i]) + ") ";
+            has_kalman_data = true;
+        }
+        if (detect_msg.red_x[i] != 0 || detect_msg.red_y[i] != 0) {
+            kalman_log += "R" + std::to_string(i+1) + "(";
+            kalman_log += std::to_string((int)detect_msg.red_x[i]) + ",";
+            kalman_log += std::to_string((int)detect_msg.red_y[i]) + ") ";
+            has_kalman_data = true;
+        }
+    }
+    
+    if (has_kalman_data) {
+        RCLCPP_WARN(this->get_logger(), "%s [KF数量=%zu]", kalman_log.c_str(), KFs.size());
+    }
+    
     radar_detect_pub_->publish(detect_msg);  // 发布检测结果
 
     // 创建发送给哨兵的雷达消息

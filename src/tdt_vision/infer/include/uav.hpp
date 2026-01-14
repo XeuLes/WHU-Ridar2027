@@ -17,8 +17,8 @@ namespace uav {
  */
 std::shared_ptr<tdt_radar::Infer<yolo::BoxArray>> load(
     const std::string& engine_file, 
-    float confidence_threshold = 0.5f, 
-    float nms_threshold = 0.45f
+    float confidence_threshold = 0.2f, 
+    float nms_threshold = 0.2f
 );
 
 } // namespace uav

@@ -25,7 +25,7 @@ def generate_launch_description():
             parameters=[
                 {
                     "rosbag_file":
-                    "/home/z/code/DataForTest/rosbag.db3"
+                    "/home/user/DATA/rosbag.db3"
                 }
             ],
             extra_arguments=[{"use_intra_process_comms": True}],

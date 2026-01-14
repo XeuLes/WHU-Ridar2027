@@ -25,12 +25,28 @@ public:
     yolo::Box   box;        // 第一层检测到的原始框
     cv::Rect    uav_rect;   // 裁剪后的 ROI
     cv::Point2f center;     // 预留：第二层精细定位的中心点坐标
+    int color = 1;          // 颜色：0-蓝色，2-红色，1-未知
+    int track_id = -1;      // 追踪ID
 };
+
+// SORT追踪器 - 简化版本（无卡尔曼滤波）
+struct SortTrack {
+    int id;                          // 追踪ID
+    yolo::Box box;                   // 当前框
+    int age = 0;                     // 追踪年龄（帧数）
+    int hits = 0;                    // 连续命中次数
+    int miss = 0;                    // 连续丢失次数
+    bool active = false;             // 是否活跃
+    int color = 1;                   // 颜色
+};
+
 struct TrackedUav {
     yolo::Box box;          // 当前检测框
     int hit_count = 0;      // 连续命中的帧数
     int miss_count = 0;     // 连续丢失的帧数
     bool confirmed = false; // 是否已激活（通过闪烁过滤）
+    int color = 1;          // 颜色：0-蓝色，2-红色，1-未知
+    int track_id = -1;      // 追踪ID
 };
 
 class Detect final : public rclcpp::Node {
@@ -59,6 +75,10 @@ private:
     std::vector<TrackedUav> tracked_uavs;
     const int HIT_THRESHOLD = 3;   // 连续3帧出现才认为有效
     const int MAX_MISS_COUNT = 5;  // 连续丢失5帧才删除
+    
+    // 光流相关成员变量
+    std::shared_ptr<class OpticalFlowGenerator> flow_generator_;  // 光流生成器
+    cv::Mat prev_frame_;  // 前一帧图像，用于计算光流
 };
 class Car {
 public:

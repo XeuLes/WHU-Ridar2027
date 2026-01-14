@@ -42,6 +42,7 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr
         pub_radar;
+    double uav_height_ = 1.0;  // UAV高度（与地面机器人区分）
 };
 
 class map_car {

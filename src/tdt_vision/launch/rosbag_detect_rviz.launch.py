@@ -16,7 +16,7 @@ def generate_launch_description():
             plugin="RosbagPlayer",
             name="rosbag_player_node",
             parameters=[{
-                "rosbag_file": "/home/z/code/DataForTest/rosbag.db3"  # 保持与现有路径一致
+                "rosbag_file": "/home/user/DATA/rosbag.db3"  # 保持与现有路径一致
             }],
             extra_arguments=[{"use_intra_process_comms": True}]
         )

@@ -19,6 +19,11 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     // 加载地图图片（RM2025比赛地图）
     minimap = cv::imread("config/RM2025.png");
 
+    // UAV高度单独配置（与机器人高度区分，默认1.0m）
+    this->declare_parameter<double>("uav_height", 1.0);
+    uav_height_ = this->get_parameter("uav_height").as_double();
+    RCLCPP_INFO(this->get_logger(), "UAV高度覆盖值：%.2f m", uav_height_);
+
     // 创建订阅者，订阅"camera_point2D"话题（2D点数据），回调函数为callback
     point_sub = this->create_subscription<geometry_msgs::msg::Vector3>(
         "camera_point2D", rclcpp::SensorDataQoS(),  // 使用传感器数据QoS配置
@@ -114,6 +119,32 @@ void Resolve::callback(const geometry_msgs::msg::Vector3::SharedPtr msg)
 void Resolve::DetectCallback(
     const vision_interface::msg::DetectResult::SharedPtr msg)
 {
+    static int callback_count = 0;
+    callback_count++;
+    
+    // 【数据流追踪】记录接收到的数据
+    bool has_vehicle_data = false;
+    std::string recv_log = "[Resolve接收] detect_result (第" + std::to_string(callback_count) + "次): ";
+    
+    for (int i = 0; i < 7; i++) {
+        if (msg->blue_x[i] != 0 || msg->blue_y[i] != 0) {
+            recv_log += "B" + std::to_string(i+1) + "(";
+            recv_log += std::to_string((int)msg->blue_x[i]) + ",";
+            recv_log += std::to_string((int)msg->blue_y[i]) + ") ";
+            has_vehicle_data = true;
+        }
+        if (msg->red_x[i] != 0 || msg->red_y[i] != 0) {
+            recv_log += "R" + std::to_string(i+1) + "(";
+            recv_log += std::to_string((int)msg->red_x[i]) + ",";
+            recv_log += std::to_string((int)msg->red_y[i]) + ") ";
+            has_vehicle_data = true;
+        }
+    }
+    
+    if (has_vehicle_data) {
+        RCLCPP_WARN(this->get_logger(), "%s", recv_log.c_str());
+    }
+    
     // 克隆地图图片（避免修改原图），用于绘制机器人位置
     cv::Mat              Map_clone = minimap.clone();
     std::vector<map_car> cars;  // 存储地图上的车辆信息（未使用）
@@ -122,18 +153,32 @@ void Resolve::DetectCallback(
     pcl::PointCloud<pcl::PointXYZRGBA>::Ptr cloud(
         new pcl::PointCloud<pcl::PointXYZRGBA>);
 
-    // 处理红蓝双方各6个机器人的坐标
-    for (int i = 0; i < 6; i++) {
-        // 处理蓝方机器人
+    // 处理红蓝双方各7个目标的坐标（包括1-5号车、7号UAV，跳过6号）
+    for (int i = 0; i < 7; i++) {
+        // 处理蓝方目标
         cv::Point2f blue_point;
         blue_point.x = msg->blue_x[i];
         blue_point.y = msg->blue_y[i];
 
-        // 若坐标有效（x和y不同时为0）
-        if (blue_point.x * blue_point.y) {
-            // 2D转3D坐标
-            auto center_point = parser_->parse(blue_point);
+        // 若坐标有效（x或y不为0）
+        if (blue_point.x != 0 || blue_point.y != 0) {
+            float region_height = parser_->get_height(blue_point);
+            // UAV使用与车辆相同的区域高度推断，但在此基础上加一个高度差（uav_height_）
+            float applied_height = region_height + ((i == 6) ? static_cast<float>(uav_height_) : 0.0f);
+            if (i == 6 && region_height == 0.0f) {
+                RCLCPP_WARN(this->get_logger(),
+                    "[UAV高度诊断-蓝] pixel(%d,%d) 未命中区域高度，使用增量%.2f → 使用高=%.2f",
+                    (int)blue_point.x, (int)blue_point.y,
+                    (float)uav_height_, applied_height);
+            }
+
+            // 2D转3D坐标（UAV使用独立高度）
+            auto center_point = parser_->parse_with_height(blue_point, applied_height);
             center_point.y = 15 + center_point.y;  // 蓝方y坐标调整
+
+            // 坐标裁剪，确保在场地范围内
+            center_point.x = std::clamp(center_point.x, 0.0f, 28.0f);
+            center_point.y = std::clamp(center_point.y, 0.0f, 15.0f);
 
             // 存储解析后的3D坐标到发布消息
             send_data.blue_x[i] = center_point.x;
@@ -158,21 +203,46 @@ void Resolve::DetectCallback(
                           Map_clone.rows * (15 - center_point.y) / 15),
                 20, cv::Scalar(200, 0, 0), -1);  // 蓝色圆形，半径20，填充
             cv::putText(
-                Map_clone, std::to_string(i + 1),  // 机器人编号（1-6）
+                Map_clone, std::to_string(i + 1),  // 目标编号（1-7，其中7为UAV）
                 cv::Point((Map_clone.cols * center_point.x) / 28 - 10,
                           Map_clone.rows * (15 - center_point.y) / 15 + 10),
                 cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255, 255, 255),
                 2);  // 白色文字
         }
 
-        // 处理红方机器人（逻辑同蓝方，颜色不同）
+        // 处理红方目标（逻辑同蓝方，颜色不同）
         cv::Point2f red_point;
         red_point.x = msg->red_x[i];
         red_point.y = msg->red_y[i];
 
-        if (red_point.x * red_point.y) {
-            auto center_point = parser_->parse(red_point);
+        if (red_point.x != 0 || red_point.y != 0) {
+            float region_height = parser_->get_height(red_point);
+            // UAV使用与车辆相同的区域高度推断，但在此基础上加一个高度差（uav_height_）
+            float applied_height = region_height + ((i == 6) ? static_cast<float>(uav_height_) : 0.0f);
+            if (i == 6 && region_height == 0.0f) {
+                RCLCPP_WARN(this->get_logger(),
+                    "[UAV高度诊断-红] pixel(%d,%d) 未命中区域高度，使用增量%.2f → 使用高=%.2f",
+                    (int)red_point.x, (int)red_point.y,
+                    (float)uav_height_, applied_height);
+            }
+
+            auto center_point = parser_->parse_with_height(red_point, applied_height);
+
+            // 对UAV单独打印一次原始解析结果，排查y=0原因
+            if (i == 6) {
+                RCLCPP_WARN(this->get_logger(),
+                    "[UAV解析] pixel(%d,%d) 区域高=%.2f 增量=%.2f 使用高=%.2f parse(%.2f,%.2f) → +15后y=%.2f",
+                    (int)red_point.x, (int)red_point.y,
+                    region_height, (float)uav_height_, applied_height,
+                    center_point.x, center_point.y,
+                    15.0f + center_point.y);
+            }
+
             center_point.y = 15 + center_point.y;  // 红方y坐标调整
+
+            // 坐标裁剪，确保在场地范围内
+            center_point.x = std::clamp(center_point.x, 0.0f, 28.0f);
+            center_point.y = std::clamp(center_point.y, 0.0f, 15.0f);
 
             send_data.red_x[i] = center_point.x;
             send_data.red_y[i] = center_point.y;
@@ -201,9 +271,29 @@ void Resolve::DetectCallback(
                 cv::FONT_HERSHEY_SIMPLEX, 1, cv::Scalar(255, 255, 255), 2);
         }
     }
+    
+    // 【调试】对比所有目标的坐标转换（车辆vs UAV）
+    static int resolve_debug_count = 0;
+    if (++resolve_debug_count % 30 == 0) {
+        std::string coord_log = "[Resolve坐标对比] ";
+        for (int i = 0; i < 7; i++) {
+            if (send_data.blue_x[i] != 0 || send_data.blue_y[i] != 0) {
+                coord_log += "B" + std::to_string(i+1) + "(";
+                coord_log += std::to_string((int)msg->blue_x[i]) + "," + std::to_string((int)msg->blue_y[i]);
+                coord_log += "→" + std::to_string((int)send_data.blue_x[i]) + "," + std::to_string((int)send_data.blue_y[i]) + ") ";
+            }
+            if (send_data.red_x[i] != 0 || send_data.red_y[i] != 0) {
+                coord_log += "R" + std::to_string(i+1) + "(";
+                coord_log += std::to_string((int)msg->red_x[i]) + "," + std::to_string((int)msg->red_y[i]);
+                coord_log += "→" + std::to_string((int)send_data.red_x[i]) + "," + std::to_string((int)send_data.red_y[i]) + ") ";
+            }
+        }
+        RCLCPP_WARN(this->get_logger(), "%s", coord_log.c_str());
+    }
 
     // 设置发布消息的时间戳（与输入消息一致）
     send_data.header.stamp = msg->header.stamp;
+    
     // 发布解析后的检测结果
     pub_radar->publish(send_data);
 

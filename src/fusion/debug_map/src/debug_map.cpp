@@ -79,7 +79,8 @@ public:
                sizeof(blue_update));  // 蓝方更新时间初始化为0
         memset(red_update, 0, sizeof(red_update));  // 红方更新时间初始化为0
         // 坐标点初始化为(0,0)（循环赋值，避免随机坐标）
-        for (int i = 0; i < 6; i++) {
+        // 【修复】循环7次以初始化索引0-6（支持7号车/UAV）
+        for (int i = 0; i < 7; i++) {
             blue_point[i] = cv::Point2f(0, 0);
             red_point[i] = cv::Point2f(0, 0);
         }
@@ -156,14 +157,12 @@ public:
                       1000.0;
         auto clone_map = map.clone();
 
-        // 绘制蓝/红方目标（原逻辑不变）
-        for (int i = 0; i < 6; i++) {
-            int number = i + 1;
-            if (number == 6)
-                number++;  // 跳过6号（原逻辑保留）
+        // 绘制蓝/红方车辆（1-6号车，索引0-5，UAV索引6单独处理）
+        for (int i = 0; i < 6; i++) {  // 循环0-5，对应1-6号车
+            int number = i + 1;  // 直接映射：0→1, 1→2, ..., 5→6
 
-            // 绘制蓝方目标
-            if (blue_point[i].x * blue_point[i].y != 0 &&
+            // 绘制蓝方车辆（改用OR条件，允许单坐标为0）
+            if ((blue_point[i].x != 0 || blue_point[i].y != 0) &&
                 time - blue_update[i] < 0.5) {
                 cv::Point2f point(clone_map.cols * blue_point[i].x / 28,
                                   clone_map.rows * (15 - blue_point[i].y) /
@@ -175,8 +174,8 @@ public:
                             cv::Scalar(255, 255, 255));
             }
 
-            // 绘制红方目标
-            if (red_point[i].x * red_point[i].y != 0 &&
+            // 绘制红方车辆（改用OR条件，允许单坐标为0）
+            if ((red_point[i].x != 0 || red_point[i].y != 0) &&
                 time - red_update[i] < 0.5) {
                 cv::Point2f point(clone_map.cols * red_point[i].x / 28,
                                   clone_map.rows * (15 - red_point[i].y) /
@@ -189,32 +188,99 @@ public:
             }
         }
 
-        // 绘制2架飞机
+        // 绘制UAV（雷达+视觉融合显示）
         auto plane_now_time = std::chrono::system_clock::now();
         double plane_time = std::chrono::duration_cast<std::chrono::milliseconds>(
                                 plane_now_time.time_since_epoch())
                                 .count() / 1000.0;
+        
+        // 收集所有UAV数据源（雷达plane + 视觉索引6）
+        std::vector<cv::Point2f> uav_positions;
+        std::vector<std::string> uav_labels;
+        std::vector<cv::Scalar> uav_colors;
+        
+        // 1. 雷达UAV数据（plane_point[0], plane_point[1]）
+        for (int i = 0; i < 2; ++i) {
+            bool has_radar = (plane_time - plane_update[i] < 0.5) && 
+                            (plane_point[i].x > 0.1 || plane_point[i].y > 0.1);  // 避免(0,0)
+            
+            // 【调试】输出P1、P2的坐标值和过期状态
+            if (i == 0) {  // P1
+                RCLCPP_INFO(this->get_logger(),
+                    "[show_map] P1坐标(%.2f, %.2f) 时间差%.2fs 有效:%d",
+                    plane_point[i].x, plane_point[i].y, 
+                    plane_time - plane_update[i], has_radar);
+            }
+            
+            if (has_radar) {
+                uav_positions.push_back(plane_point[i]);
+                uav_labels.push_back("P" + std::to_string(i+1));
+                uav_colors.push_back(cv::Scalar(128, 128, 128));  // 雷达UAV灰色
+            }
+        }
+        
+        // 2. 视觉UAV数据（索引6，红方），同时对比雷达P1
+        if ((red_point[6].x > 0.1 || red_point[6].y > 0.1) && 
+            (time - red_update[6] < 0.5)) {
+            uav_positions.push_back(red_point[6]);
+            uav_labels.push_back("UAV-R");
+            uav_colors.push_back(cv::Scalar(0, 0, 200));  // 红色
 
-        for (int i = 0; i < 2; ++i) {  // 循环2次，绘制2架飞机
-            // 检查第i架飞机坐标是否有效（500ms内更新过）
-            if (plane_time - plane_update[i] < 0.5) {
-                // 转换为图像坐标
-                cv::Point2f point(
-                    clone_map.cols * plane_point[i].x / 28,
-                    clone_map.rows * (15 - plane_point[i].y) / 15
-                );
-
-                // 越界检查
-                if (point.x >= 0 && point.x < clone_map.cols &&
-                    point.y >= 0 && point.y < clone_map.rows) {
-                    // 绘制黄色实心圆（两架飞机用相同颜色，通过文字区分）
-                    cv::circle(clone_map, point, 12, cv::Scalar(0, 255, 255), -1);
-                    // 绘制带ID的文字（如"P1"、"P2"）
-                    std::string label = "P" + std::to_string(i+1);  // P1=第1架，P2=第2架
-                    cv::putText(clone_map, label, 
-                                cv::Point(point.x - 8, point.y + 5),
-                                cv::FONT_HERSHEY_SIMPLEX, 0.5, cv::Scalar(0, 0, 0));  // 黑色文字
-                }
+            // 【详细对比】视觉UAV-R与雷达P1的坐标转换检查
+            bool p1_valid = (plane_time - plane_update[0] < 0.5) && 
+                           (plane_point[0].x > 0.1 || plane_point[0].y > 0.1);
+            
+            float dx = red_point[6].x - plane_point[0].x;
+            float dy = red_point[6].y - plane_point[0].y;
+            float distance = std::sqrt(dx * dx + dy * dy);
+            
+            RCLCPP_WARN(this->get_logger(),
+                "[UAV坐标转换分析] 视觉R7(%.2f, %.2f) 雷达P1(%.2f, %.2f) | "
+                "差值Δx=%.2f Δy=%.2f 距离=%.2f | P1有效:%d self_color:%d",
+                red_point[6].x, red_point[6].y,
+                plane_point[0].x, plane_point[0].y,
+                dx, dy, distance,
+                p1_valid, match_info.self_color);
+        }
+        
+        // 3. 视觉UAV数据（索引6，蓝方）
+        if ((blue_point[6].x > 0.1 || blue_point[6].y > 0.1) && 
+            (time - blue_update[6] < 0.5)) {
+            uav_positions.push_back(blue_point[6]);
+            uav_labels.push_back("UAV-B");
+            uav_colors.push_back(cv::Scalar(200, 0, 0));  // 蓝色
+            
+            // 【详细对比】视觉UAV-B与雷达P2的坐标转换检查
+            bool p2_valid = (plane_time - plane_update[1] < 0.5) && 
+                           (plane_point[1].x > 0.1 || plane_point[1].y > 0.1);
+            
+            float dx = blue_point[6].x - plane_point[1].x;
+            float dy = blue_point[6].y - plane_point[1].y;
+            float distance = std::sqrt(dx * dx + dy * dy);
+            
+            RCLCPP_WARN(this->get_logger(),
+                "[UAV坐标转换分析] 视觉B7(%.2f, %.2f) 雷达P2(%.2f, %.2f) | "
+                "差值Δx=%.2f Δy=%.2f 距离=%.2f | P2有效:%d self_color:%d",
+                blue_point[6].x, blue_point[6].y,
+                plane_point[1].x, plane_point[1].y,
+                dx, dy, distance,
+                p2_valid, match_info.self_color);
+        }
+        
+        // 绘制所有UAV
+        for (size_t i = 0; i < uav_positions.size(); i++) {
+            cv::Point2f point(
+                clone_map.cols * uav_positions[i].x / 28,
+                clone_map.rows * (15 - uav_positions[i].y) / 15
+            );
+            
+            // 越界检查
+            if (point.x >= 0 && point.x < clone_map.cols &&
+                point.y >= 0 && point.y < clone_map.rows) {
+                cv::circle(clone_map, point, 12, uav_colors[i], -1);
+                cv::putText(clone_map, uav_labels[i], 
+                            cv::Point(point.x - 20, point.y + 5),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255));
             }
         }
 
@@ -248,17 +314,30 @@ public:
                           .count() /
                       1000.0;
 
-        for (int i = 0; i < 6; i++) {
-            // 更新蓝方目标（5秒间隔）
-            if (msg->blue_x[i] * msg->blue_y[i] != 0) {
+        // 【修复】循环7次以支持索引6（7号车/UAV）
+        for (int i = 0; i < 7; i++) {
+            // 更新蓝方目标（5秒间隔，改用OR条件避免0值问题）
+            if (msg->blue_x[i] != 0 || msg->blue_y[i] != 0) {
                 if (time - blue_time[i] > 5) {
-                    blue_point[i] =
-                        cv::Point2f(msg->blue_x[i], msg->blue_y[i]);
+                    cv::Point2f blue_raw(msg->blue_x[i], msg->blue_y[i]);
+                    blue_point[i] = blue_raw;
+                    
                     if (!match_info.self_color) {  // 自身颜色为0时翻转坐标
                         blue_point[i] = cv::Point2f(28 - msg->blue_x[i],
                                                     15 - msg->blue_y[i]);
                     }
                     blue_update[i] = time;
+                    
+                    // 【调试UAV】如果是7号车(UAV)，输出坐标转换过程
+                    if (i == 6) {
+                        RCLCPP_WARN(this->get_logger(),
+                            "[相机回调-蓝UAV] 原始B7(%.2f, %.2f) → "
+                            "转换后(%.2f, %.2f) [self_color:%d 翻转:%d]",
+                            blue_raw.x, blue_raw.y,
+                            blue_point[i].x, blue_point[i].y,
+                            match_info.self_color, !match_info.self_color);
+                    }
+                    
                     RCLCPP_DEBUG(
                         this->get_logger(),
                         "相机回调：更新蓝方%d号目标坐标(%.1f, %.1f)", i + 1,
@@ -266,16 +345,28 @@ public:
                 }
             }
 
-            // 更新红方目标（5秒间隔）
-            if (msg->red_x[i] * msg->red_y[i] != 0) {
+            // 更新红方目标（5秒间隔，改用OR条件避免0值问题）
+            if (msg->red_x[i] != 0 || msg->red_y[i] != 0) {
                 if (time - red_time[i] > 5) {
-                    red_point[i] =
-                        cv::Point2f(msg->red_x[i], msg->red_y[i]);
+                    cv::Point2f red_raw(msg->red_x[i], msg->red_y[i]);
+                    red_point[i] = red_raw;
+                    
                     if (!match_info.self_color) {  // 自身颜色为0时翻转坐标
                         red_point[i] = cv::Point2f(28 - msg->red_x[i],
                                                    15 - msg->red_y[i]);
                     }
                     red_update[i] = time;
+                    
+                    // 【调试UAV】如果是7号车(UAV)，输出坐标转换过程
+                    if (i == 6) {
+                        RCLCPP_WARN(this->get_logger(),
+                            "[相机回调-红UAV] 原始R7(%.2f, %.2f) → "
+                            "转换后(%.2f, %.2f) [self_color:%d 翻转:%d]",
+                            red_raw.x, red_raw.y,
+                            red_point[i].x, red_point[i].y,
+                            match_info.self_color, !match_info.self_color);
+                    }
+                    
                     RCLCPP_DEBUG(
                         this->get_logger(),
                         "相机回调：更新红方%d号目标坐标(%.1f, %.1f)", i + 1,
@@ -291,20 +382,49 @@ public:
     void
     callback(const std::shared_ptr<vision_interface::msg::DetectResult> msg)
     {
+        static int kalman_callback_count = 0;
+        kalman_callback_count++;
+        
         auto   now = std::chrono::system_clock::now();
         double time = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now.time_since_epoch())
                           .count() /
                       1000.0;
 
+        // 【数据流追踪】记录接收到的卡尔曼融合数据
+        bool has_vehicle_data = false;
+        std::string kalman_recv_log = "[DebugMap接收] /kalman_detect (第" + std::to_string(kalman_callback_count) + "次): ";
+        
+        for (int i = 0; i < 7; i++) {
+            if (msg->blue_x[i] != 0 || msg->blue_y[i] != 0) {
+                kalman_recv_log += "B" + std::to_string(i+1) + "(";
+                kalman_recv_log += std::to_string((int)msg->blue_x[i]) + ",";
+                kalman_recv_log += std::to_string((int)msg->blue_y[i]) + ") ";
+                has_vehicle_data = true;
+            }
+            if (msg->red_x[i] != 0 || msg->red_y[i] != 0) {
+                kalman_recv_log += "R" + std::to_string(i+1) + "(";
+                kalman_recv_log += std::to_string((int)msg->red_x[i]) + ",";
+                kalman_recv_log += std::to_string((int)msg->red_y[i]) + ") ";
+                has_vehicle_data = true;
+            }
+        }
+        
+        // 【调试日志已注释】避免卡顿
+        // if (has_vehicle_data) {
+        //     RCLCPP_WARN(this->get_logger(), "%s", kalman_recv_log.c_str());
+        // }
+
         // 更新目标坐标（无时间间隔限制，卡尔曼数据更可靠）
-        for (int i = 0; i < 6; i++) {
-            if (msg->blue_x[i] * msg->blue_y[i] != 0) {
+        // 【修复】循环7次以支持索引6（7号车/UAV）
+        for (int i = 0; i < 7; i++) {
+            // 【修复】改用OR条件，允许坐标为0或负值的情况
+            if (msg->blue_x[i] != 0 || msg->blue_y[i] != 0) {
                 blue_point[i] = cv::Point2f(msg->blue_x[i], msg->blue_y[i]);
                 blue_time[i] = time;
                 blue_update[i] = time;
             }
-            if (msg->red_x[i] * msg->red_y[i] != 0) {
+            if (msg->red_x[i] != 0 || msg->red_y[i] != 0) {
                 red_point[i] = cv::Point2f(msg->red_x[i], msg->red_y[i]);
                 red_time[i] = time;
                 red_update[i] = time;
@@ -462,6 +582,11 @@ public:
             plane_point[i] = plane_map;
             plane_update[i] = time;
 
+            // 打印当前帧雷达飞机坐标，用于和视觉UAV对比
+            RCLCPP_WARN(this->get_logger(),
+                "[雷达飞机] P%d 原始(%.2f, %.2f) 处理后(%.2f, %.2f)",
+                i+1, plane_pcl.x, plane_pcl.y, plane_map.x, plane_map.y);
+
             // RCLCPP_INFO(this->get_logger(), "收到第%d架飞机坐标：(%.2f, %.2f)",
             //             i+1, plane_map.x, plane_map.y);
         }
@@ -489,24 +614,25 @@ private:
         radar2sentry_pub;
 
     // 目标时间戳（已初始化）
-    double blue_time[6];
-    double red_time[6];
+    // 【修复】扩展到[7]以支持7号车/UAV（索引0-6）
+    double blue_time[7];
+    double red_time[7];
 
     // 放松状态（已初始化）
-    bool   relax[6];
-    double relax_time[6];
+    bool   relax[7];
+    double relax_time[7];
 
     // 目标更新时间（已初始化）
-    double blue_update[6];
-    double red_update[6];
+    double blue_update[7];
+    double red_update[7];
 
     // 英雄状态计数（已初始化）
     int hero_count1;
     int hero_count2;
 
     // 目标坐标（已初始化）
-    cv::Point2f blue_point[6];
-    cv::Point2f red_point[6];
+    cv::Point2f blue_point[7];
+    cv::Point2f red_point[7];
 
     // 飞机数据（假设最多2架飞机，可根据实际需求调整数量）
     cv::Point2f plane_point[2];  // 飞机坐标（地图坐标系，x:0-28, y:0-15）

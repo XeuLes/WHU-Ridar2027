@@ -21,7 +21,7 @@ def generate_launch_description():
 
     # 获取各个功能包的路径
     localization_share_dir = get_package_share_directory('localization')
-    livox_share_dir = get_package_share_directory('livox_ros_driver2')
+    livox_share_dir = get_package_share_directory('livox_ros2_driver')
     dynamic_cloud_share_dir = get_package_share_directory('dynamic_cloud')
     tdt_vision_share_dir = get_package_share_directory('tdt_vision')
     debug_map_share_dir = get_package_share_directory('debug_map')

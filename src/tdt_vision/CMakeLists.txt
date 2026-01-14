@@ -93,10 +93,19 @@ rclcpp_components_register_node(${RADAR_DETECT}
   EXECUTABLE ${RADAR_DETECT}_node
 )
 
-# 其他模块（resolve/calibrate）保留原逻辑
+# 其他模块（resolve/calibrate）- 修复链接问题
 set(RADAR_RESOLVE "radar_resolve")
 file(GLOB_RECURSE RADAR_RESOLVE_SRCS "resolve/src/*.cpp")
 ament_auto_add_library(${RADAR_RESOLVE} SHARED ${RADAR_RESOLVE_SRCS})
+
+# 【修复】Resolve 需要链接 yaml-cpp, PCL, OpenCV（否则 undefined symbol 错误）
+target_link_libraries(${RADAR_RESOLVE}
+  utils
+  yaml-cpp
+  ${PCL_LIBRARIES}
+  ${OpenCV_LIBRARIES}
+)
+
 rclcpp_components_register_node(${RADAR_RESOLVE}
   PLUGIN "tdt_radar::Resolve"
   EXECUTABLE ${RADAR_RESOLVE}_node
