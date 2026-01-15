@@ -1,0 +1,7 @@
+auto_aim_node:
+  ros__parameters:
+    camera.fx: 1.0
+    camera.fy: 1.0
+    camera.cx: 0.0
+    camera.cy: 0.0
+    camera.dist: [0.0, 0.0, 0.0, 0.0, 0.0]

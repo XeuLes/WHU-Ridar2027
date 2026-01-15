@@ -1,0 +1,21 @@
+auto_aim_node:
+  ros__parameters:
+    qos.use_sensor_data_qos: true
+    qos.depth: 1
+    qos.history_keep_all: false
+    qos.reliability: "best_effort"
+
+    publish_hz: 100
+    output.angle_unit: "rad"
+
+    prediction.enable: true
+    prediction.rate_smoothing: 0.8
+    prediction.max_rate_deg_s: 720.0
+    prediction.extra_latency_ns: 0
+
+    debug.publish_debug_image: true
+    debug.publish_binary_image: true
+    debug.debug_topic: "/auto_aim/debug_image"
+    debug.binary_topic: "/auto_aim/binary_image"
+
+

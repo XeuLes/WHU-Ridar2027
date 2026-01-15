@@ -1,0 +1,19 @@
+auto_aim_node:
+  ros__parameters:
+    detector.binary_thresh: 150
+    detector.min_area: 10.0
+    detector.max_area: 10000.0
+    detector.min_ratio: 0.1
+    detector.max_ratio: 0.4
+    detector.max_angle: 90.0
+
+    detector.target_color: 0          # 0 red, 1 blue
+    detector.color_threshold: 30
+
+    detector.min_light_ratio: 0.6
+    detector.min_center_dist: 1.0
+    detector.max_center_dist: 5.0
+    detector.max_pair_angle: 10.0
+
+    detector.show_contours: false
+    detector.show_pairs: true
