@@ -53,7 +53,8 @@ def generate_launch_description():
             name='localization_node',
             parameters=[{
                 'use_map': True,
-                'map_frame': 'rm_frame'
+                'map_frame': 'rm_frame',
+                'target_pcd_path': map_pcd_path
             }],
             extra_arguments=[
                 {'use_intra_process_comms': True},
@@ -66,7 +67,11 @@ def generate_launch_description():
             package='dynamic_cloud',
             plugin='tdt_radar::DynamicCloud',
             name='dynamic_cloud_node',
-            # 移除qos_profile参数
+
+            parameters=[{
+                'map_pcd_path': map_pcd_path
+            }],
+
             extra_arguments=[
                 {'use_intra_process_comms': True},
                 {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
@@ -142,7 +147,7 @@ def generate_launch_description():
             plugin='RosbagPlayer',
             name='rosbag_player_node',
             parameters=[{
-                'rosbag_file': "/home/user/DATA/rosbag.db3"
+                'rosbag_file': "/home/z/code/DataForTest/rosbag.db3"
                 # 移除qos_profile参数
             }],
             extra_arguments=[

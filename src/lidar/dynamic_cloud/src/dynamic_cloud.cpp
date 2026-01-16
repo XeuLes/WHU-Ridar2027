@@ -15,12 +15,23 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     RCLCPP_INFO(this->get_logger(),
                 "Dynamic_cloud Node start");  // 打印节点启动日志
 
-    // 加载地图点云（PCD文件）
-    auto temp_cloud = pcl::PointCloud<pcl::PointXYZ>::Ptr(
+    // === 参数声明 ===
+    this->declare_parameter<std::string>(
+        "map_pcd_path", "/home/z/code/T-DT_Radar-main/src/lidar/"
+                        "dynamic_cloud/config/RM2025.pcd");
+
+    std::string map_pcd_path;
+    this->get_parameter("map_pcd_path", map_pcd_path);
+
+    // === 加载地图点云 ===
+    pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(
         new pcl::PointCloud<pcl::PointXYZ>);
-    if (pcl::io::loadPCDFile<pcl::PointXYZ>("/home/user/code/T-DT_Radar-main/src/lidar/dynamic_cloud/config/RM2025.pcd",
-                                            *temp_cloud) == -1) {
-        PCL_ERROR("Couldn't read file map.pcd \n");  // 加载失败时打印错误
+
+    if (pcl::io::loadPCDFile<pcl::PointXYZ>(map_pcd_path, *temp_cloud) ==
+        -1) {
+        RCLCPP_ERROR(this->get_logger(), "Failed to load map pcd: %s",
+                     map_pcd_path.c_str());
+        return;
     }
 
     // 对地图点云进行体素下采样（减少点数量，提高后续处理效率）
@@ -226,13 +237,16 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
     for (auto& p : receive_cloud.points) {
         // 计算方位角（单位：弧度）：atan2(y, x) → 范围[-π, π]（-180°~180°）
         float azimuth = std::atan2(p.y, p.x);
-        // 转换为角度：-90°~90° 对应前方180度（可微调范围，如±85°避免边缘噪声）
-        if (azimuth >= -M_PI/2 && azimuth <= M_PI/2) {  // -90°= -π/2，90°=π/2
+        // 转换为角度：-90°~90°
+        // 对应前方180度（可微调范围，如±85°避免边缘噪声）
+        if (azimuth >= -M_PI / 2 &&
+            azimuth <= M_PI / 2) {  // -90°= -π/2，90°=π/2
             front_cloud.push_back(p);
         }
     }
     // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-    //                     "【阶段2】前方点数（过滤后方后）：%zu", front_cloud.size());
+    //                     "【阶段2】前方点数（过滤后方后）：%zu",
+    //                     front_cloud.size());
 
     std::chrono::steady_clock::time_point t1 =
         std::chrono::steady_clock::now();  // 记录处理开始时间
@@ -267,7 +281,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
     // 3. 坐标变换后，打印变换后的点数（理论上和前方点数一致）
     pcl::transformPointCloud(front_cloud, transformed_cloud, transform);
     // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-    //                     "【阶段3】变换后点数（rm_frame）：%zu", transformed_cloud.size());
+    //                     "【阶段3】变换后点数（rm_frame）：%zu",
+    //                     transformed_cloud.size());
 
     // 4. 过滤感兴趣区域（ROI）：保留有效场景内的点，去除噪声和无关区域
     pcl::PointCloud<pcl::PointXYZ> filtered_cloud;  // 主场景点云
@@ -283,10 +298,11 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
              (point.x + point.y) < (21.5 + 2.9 / sqrt(2)) &&
              (-6.5 - 0.9 / sqrt(2)) < (point.y - point.x) &&
              (point.y - point.x) < (-6.5 + 0.9 / sqrt(2)))) {
-            
-        // if (point.x < 26 || point.x > 49 ||  // 缩小x范围，只保留核心场景
-        //     point.y < 35 || point.y > 52 ||  // 缩小y范围
-        //     point.z < 0 || point.z > 10) {  // 缩小z范围，过滤地面和高空噪声
+            // if (point.x < 26 || point.x > 49 ||  //
+            // 缩小x范围，只保留核心场景
+            //     point.y < 35 || point.y > 52 ||  // 缩小y范围
+            //     point.z < 0 || point.z > 10) {  //
+            //     缩小z范围，过滤地面和高空噪声
             //若点在飞镖或飞机检测区域，则保存到other_filtered_cloud
             if ((point.x > 28 - 0.5889 - 0.1885 && point.x < 28 - 0.5889) &&
                     (point.y > 3.925 && point.y < 4.525) &&
@@ -301,13 +317,15 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
         filtered_cloud.push_back(point);  // 保留有效点
     }
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "【阶段4】ROI过滤后有效点数：%zu", filtered_cloud.size());
+                         "【阶段4】ROI过滤后有效点数：%zu",
+                         filtered_cloud.size());
 
     // 5. 提取动态点云（调用GetDynamicCloud，阈值0.09m，12线程）
     pcl::PointCloud<pcl::PointXYZ> dynamic_pointcloud;
     GetDynamicCloud(filtered_cloud, dynamic_pointcloud, 0.09, 12);
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "【阶段5】动态检测后点数：%zu（阈值=0.09m）", dynamic_pointcloud.size());
+                         "【阶段5】动态检测后点数：%zu（阈值=0.09m）",
+                         dynamic_pointcloud.size());
 
     // 6. 累积多帧动态点云（平滑结果，减少噪声）
     if (accumulate_count < accumulate_time) {  // 累积帧数不足时（默认3帧）
@@ -335,8 +353,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
         other_accumulated_cloud += **it;
     }
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "【阶段6】累积后最终点数：%zu（累积帧数=%d）",
-                        accumulated_cloud.size(), accumulate_count);
+                         "【阶段6】累积后最终点数：%zu（累积帧数=%d）",
+                         accumulated_cloud.size(), accumulate_count);
 
     // 7. 发布处理后的点云
     sensor_msgs::msg::PointCloud2 output;
@@ -420,7 +438,7 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr
         std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1)
                 .count() /
             1000.0);
-    }
+}
 }  // namespace tdt_radar
 
 RCLCPP_COMPONENTS_REGISTER_NODE(tdt_radar::DynamicCloud)

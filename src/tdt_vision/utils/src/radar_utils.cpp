@@ -5,12 +5,13 @@
 #include <stdexcept>
 
 // -----------------------------------------------------------------------------
-// Fixed config paths (same idea as out_matrix): keep them local and explicit.
+// Fixed config paths (same idea as out_matrix): keep them local and
+// explicit.
 // -----------------------------------------------------------------------------
 namespace {
-static const std::string kOutMatrixPath     = "./config/out_matrix.yaml";
-static const std::string kCameraParamsPath  = "./config/camera_params.yaml";
-static const std::string kRegionPointsPath  = "./config/RM2025_Points.yaml";
+static const std::string kOutMatrixPath = "./config/out_matrix.yaml";
+static const std::string kCameraParamsPath = "./config/camera_params.yaml";
+static const std::string kRegionPointsPath = "./config/RM2025_Points.yaml";
 }  // namespace
 
 // 定义装甲板高度常量（单位：米）
@@ -63,17 +64,22 @@ parser::parser()
     // 规则：
     //   - 区域名 = RM2025_Points.yaml 的一级 key
     //   - 区域高度 = 该区域点集里第一个点的 z（若没有点则为 0）
-    //     这样你在编辑/保存点集时，只需要把正确的 z 写进 YAML，即可自动生效。
+    //     这样你在编辑/保存点集时，只需要把正确的 z 写进
+    //     YAML，即可自动生效。
     // ---------------------------------------------------------------------
     YAML::Node root;
     try {
         root = YAML::LoadFile(kRegionPointsPath);
-    } catch (const std::exception& e) {
-        throw std::runtime_error(std::string("Failed to load region points yaml: ") + e.what());
+    }
+    catch (const std::exception& e) {
+        throw std::runtime_error(
+            std::string("Failed to load region points yaml: ") + e.what());
     }
 
     if (!root || !root.IsMap()) {
-        throw std::runtime_error("Region points yaml is empty or not a map: " + kRegionPointsPath);
+        throw std::runtime_error(
+            "Region points yaml is empty or not a map: " +
+            kRegionPointsPath);
     }
 
     for (auto it = root.begin(); it != root.end(); ++it) {
@@ -89,6 +95,13 @@ parser::parser()
         }
         points_map[region_name]->Height = inferred_height;
     }
+}
+
+cv::Point2f parser::parse_with_height(cv::Point2f& input_point,
+                                      float        height)
+{
+    // 核心：绕过 get_height()，直接用外部给定高度
+    return get_2d(input_point, height);
 }
 
 /**
@@ -208,8 +221,7 @@ std::vector<cv::Point3f>
 Parser_Points::ReadPoints(const std::string& points_name)
 {
     // 打开存储点集的YAML文件
-    cv::FileStorage fs(kRegionPointsPath,
-                       cv::FileStorage::READ);
+    cv::FileStorage fs(kRegionPointsPath, cv::FileStorage::READ);
 
     if (!fs.isOpened()) {  // 检查文件是否打开成功
         std::cout << "无法打开文件" << std::endl;

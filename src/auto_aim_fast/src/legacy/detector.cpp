@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric> // For std::accumulate if needed
+#include <iostream> // For std::cout debug logging
 
 
 // 静态成员初始化
@@ -374,19 +375,57 @@ std::vector<SimpleLightDetector::PairResult> SimpleLightDetector::pairLights(
 
                 // 计算配对中心点
                 pair_result.center = (l1.center + l2.center) * 0.5f;
-                pair_result.light1_center = l1.center;
-                pair_result.light2_center = l2.center;
+                
+                // 根据配对模式设置灯条顺序
+                if (params_.pair_mode == 1) {
+                    // 上下配对：按y坐标排序，y小的在上
+                    if (l1.center.y < l2.center.y) {
+                        pair_result.light1_center = l1.center;  // 上侧
+                        pair_result.light2_center = l2.center;  // 下侧
+                    } else {
+                        pair_result.light1_center = l2.center;  // 上侧
+                        pair_result.light2_center = l1.center;  // 下侧
+                    }
+                } else {
+                    // 左右配对：按x坐标排序，x小的在左
+                    if (l1.center.x < l2.center.x) {
+                        pair_result.light1_center = l1.center;  // 左侧
+                        pair_result.light2_center = l2.center;  // 右侧
+                    } else {
+                        pair_result.light1_center = l2.center;  // 左侧
+                        pair_result.light2_center = l1.center;  // 右侧
+                    }
+                }
 
                 // 计算配对尺寸
-                pair_result.width = distance(l1.center, l2.center) + (l1.width + l2.width) * 0.5f;
-                pair_result.height = std::max(l1.length, l2.length) * 1.2f;  // 留出余量
+                if (params_.pair_mode == 1) {
+                    // 上下配对：宽度=灯条长度，高度=垂直距离+灯条宽度
+                    pair_result.width = std::max(l1.length, l2.length);
+                    pair_result.height = std::abs(l2.center.y - l1.center.y) + (l1.width + l2.width) * 0.5f;
+                } else {
+                    // 左右配对：宽度=水平距离+灯条宽度，高度=灯条长度
+                    pair_result.width = std::abs(l2.center.x - l1.center.x) + (l1.width + l2.width) * 0.5f;
+                    pair_result.height = std::max(l1.length, l2.length) * 1.2f;
+                }
 
                 // 计算配对角度
                 pair_result.angle = std::atan2(l2.center.y - l1.center.y,
                                               l2.center.x - l1.center.x) * 180.0f / CV_PI;
 
+                // 设置配对类型
+                pair_result.pair_type = params_.pair_mode;
+
                 // 计算置信度
                 pair_result.confidence = calculatePairConfidence(l1, l2, center_dist, angle_diff);
+
+                // 输出成功配对的数据
+                std::cout << "\n✅ 配对成功!" << std::endl;
+                std::cout << "灯条1中心: (" << l1.center.x << ", " << l1.center.y << ")" << std::endl;
+                std::cout << "灯条2中心: (" << l2.center.x << ", " << l2.center.y << ")" << std::endl;
+                std::cout << "配对中心: (" << pair_result.center.x << ", " << pair_result.center.y << ")" << std::endl;
+                std::cout << "配对宽度: " << pair_result.width << " 配对高度: " << pair_result.height << std::endl;
+                std::cout << "配对置信度: " << pair_result.confidence << std::endl;
+                std::cout << "================================" << std::endl;
 
                 pairs.push_back(pair_result);
             }
@@ -400,29 +439,71 @@ std::vector<SimpleLightDetector::PairResult> SimpleLightDetector::pairLights(
 bool SimpleLightDetector::canPair(const Light& l1, const Light& l2,
                                  float& center_dist, float& angle_diff) const {
 
-    // 1. 长度比例检查
+    // 1. 长度比例检查 - 两个灯条长度应该相似
     float length_ratio = std::min(l1.length, l2.length) / std::max(l1.length, l2.length);
     if (length_ratio < params_.min_light_ratio) {
         return false;
     }
 
-    // 2. 中心距离检查
-    float avg_length = (l1.length + l2.length) * 0.5f;
-    center_dist = distance(l1.center, l2.center) / avg_length;
-
-    if (center_dist < params_.min_center_dist || center_dist > params_.max_center_dist) {
-        return false;
-    }
-
-    // 3. 角度差检查
+    // 2. 角度差检查 - 两个灯条应该平行
     angle_diff = angleDifference(l1.angle, l2.angle);
     if (angle_diff > params_.max_pair_angle) {
         return false;
     }
 
-    // 4. 方向一致性检查 (可选，但原逻辑较复杂且可能不必要，简化判断)
-    // 这里简化为只要角度差和中心距满足条件即可配对。
-    // 如果需要更严格的几何约束，可以在此处添加。
+    float avg_length = (l1.length + l2.length) * 0.5f;
+    float dx = std::abs(l2.center.x - l1.center.x);
+    float dy = std::abs(l2.center.y - l1.center.y);
+    
+    // 根据配对模式选择不同的约束
+    if (params_.pair_mode == 1) {
+        // ========== 上下配对模式(立方体上边/下边在图像中上下分布) ==========
+        
+        // 3. X坐标差异检查 - 两个灯条应该在同一垂直线上（图像中）
+        float x_diff_ratio = dx / avg_length;
+        if (x_diff_ratio > params_.max_x_diff_ratio) {
+            return false;
+        }
+        
+        // 4. 垂直距离检查 - 上下距离应该在合理范围内
+        float vertical_dist = dy / avg_length;
+        if (vertical_dist < params_.min_vertical_dist || vertical_dist > params_.max_vertical_dist) {
+            return false;
+        }
+        
+        // 5. 中心连线垂直度检查 - 两灯条中心连线应该接近垂直
+        float connect_angle = std::atan2(dy, dx) * 180.0f / CV_PI;
+        float vertical_deviation = std::abs(connect_angle - 90.0f);
+        if (vertical_deviation > params_.max_connect_angle) {
+            return false;
+        }
+        
+        center_dist = vertical_dist;  // 返回垂直距离作为中心距
+        
+    } else {
+        // ========== 左右配对模式(装甲板左右灯条在图像中上下分布) ==========
+        
+        // 3. X坐标差异检查 - 两个灯条应该在同一垂直线上
+        float x_diff_ratio = dx / avg_length;
+        if (x_diff_ratio > params_.max_x_diff_ratio) {
+            return false;
+        }
+        
+        // 4. 垂直距离检查 - 上下距离应该在合理范围内
+        float vertical_dist = dy / avg_length;
+        if (vertical_dist < params_.min_vertical_dist || vertical_dist > params_.max_vertical_dist) {
+            return false;
+        }
+        
+        // 5. 中心连线垂直度检查 - 两灯条中心连线应该接近垂直
+        float connect_angle = std::atan2(dy, dx) * 180.0f / CV_PI;
+        float vertical_deviation = std::abs(connect_angle - 90.0f);
+        if (vertical_deviation > params_.max_connect_angle) {
+            return false;
+        }
+        
+        center_dist = vertical_dist;  // 返回垂直距离作为中心距
+    }
 
     return true;
 }

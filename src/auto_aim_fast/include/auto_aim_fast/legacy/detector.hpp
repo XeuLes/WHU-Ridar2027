@@ -26,6 +26,14 @@ public:
         float max_center_dist = 5.0f;    // 归一化中心距离上限
         float max_pair_angle = 10.0f;    // 配对灯条角度差上限
         
+        // 配对模式参数 (0: 左右配对装甲板, 1: 上下配对立方体)
+        int pair_mode = 1;               // 配对模式：0=左右，1=上下
+        float max_x_diff_ratio = 0.5f;   // x坐标差与平均长度比值上限（上下配对用）
+        float max_y_diff_ratio = 0.5f;   // y坐标差与平均长度比值上限（左右配对用）
+        float min_vertical_dist = 0.8f;  // 上下最小垂直距离（归一化）
+        float max_vertical_dist = 4.0f;  // 上下最大垂直距离（归一化）
+        float max_connect_angle = 20.0f; // 中心连线与理想方向的最大夹角
+        
         // 显示参数
         bool show_contours = false;
         bool show_pairs = true;
@@ -48,12 +56,13 @@ public:
 
     struct PairResult {
         cv::Point2f center;          // 配对中心点
-        cv::Point2f light1_center;   // 左侧灯条中心
-        cv::Point2f light2_center;   // 右侧灯条中心
+        cv::Point2f light1_center;   // 上侧/左侧灯条中心
+        cv::Point2f light2_center;   // 下侧/右侧灯条中心
         float width;                 // 配对宽度
         float height;                // 配对高度
         float angle;                 // 配对角度
         float confidence;            // 配对置信度
+        int pair_type;               // 配对类型：0=左右，1=上下
     };
 
     // 静态颜色常量
