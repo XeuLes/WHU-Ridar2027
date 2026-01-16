@@ -32,7 +32,8 @@ public:
         float max_y_diff_ratio = 0.5f;   // y坐标差与平均长度比值上限（左右配对用）
         float min_vertical_dist = 0.8f;  // 上下最小垂直距离（归一化）
         float max_vertical_dist = 4.0f;  // 上下最大垂直距离（归一化）
-        float max_connect_angle = 20.0f; // 中心连线与理想方向的最大夹角
+        float min_connect_angle = 60.0f; // 中心连线角度下限（避免接近水平的配对）
+        float max_connect_angle = 120.0f; // 中心连线角度上限（允许一定倾斜）
         
         // 显示参数
         bool show_contours = false;

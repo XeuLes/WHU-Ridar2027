@@ -132,7 +132,8 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<double>("detector.max_y_diff_ratio", 0.5);
   this->declare_parameter<double>("detector.min_vertical_dist", 0.8);
   this->declare_parameter<double>("detector.max_vertical_dist", 4.0);
-  this->declare_parameter<double>("detector.max_connect_angle", 20.0);
+  this->declare_parameter<double>("detector.min_connect_angle", 60.0);
+  this->declare_parameter<double>("detector.max_connect_angle", 120.0);
 
   this->declare_parameter<bool>("detector.show_contours", false);
   this->declare_parameter<bool>("detector.show_pairs", true);
@@ -172,6 +173,7 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   dp.max_y_diff_ratio = static_cast<float>(this->get_parameter("detector.max_y_diff_ratio").as_double());
   dp.min_vertical_dist = static_cast<float>(this->get_parameter("detector.min_vertical_dist").as_double());
   dp.max_vertical_dist = static_cast<float>(this->get_parameter("detector.max_vertical_dist").as_double());
+  dp.min_connect_angle = static_cast<float>(this->get_parameter("detector.min_connect_angle").as_double());
   dp.max_connect_angle = static_cast<float>(this->get_parameter("detector.max_connect_angle").as_double());
   
   dp.show_contours = this->get_parameter("detector.show_contours").as_bool();

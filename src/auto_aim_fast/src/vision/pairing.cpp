@@ -47,9 +47,21 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
   std::vector<Armor2D> out;
   out.reserve(pairs.size());
 
+  // 计算 ROI 偏移量（如果使用了 ROI）
+  float offset_x = 0.0f;
+  float offset_y = 0.0f;
+  if (pre.roi_used) {
+    offset_x = static_cast<float>(pre.roi_rect.x);
+    offset_y = static_cast<float>(pre.roi_rect.y);
+  }
+
   for (const auto & pr : pairs) {
     Armor2D a;
-    a.center = pr.center;
+    
+    // 将 ROI 局部坐标转换为全局坐标
+    a.center.x = pr.center.x + offset_x;
+    a.center.y = pr.center.y + offset_y;
+    
     a.score = pr.confidence;
     a.valid = true;
 
@@ -57,6 +69,7 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
     a.has_legacy_pair = true;
 
     a.type = ArmorType::SMALL;
+    
     out.push_back(a);
   }
 
