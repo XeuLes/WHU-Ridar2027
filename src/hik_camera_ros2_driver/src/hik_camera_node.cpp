@@ -21,7 +21,7 @@ namespace hik_camera_ros2_driver {
 // -----------------------------
 // Helper: safe C-string to std::string
 // -----------------------------
-static std::string cstr_to_string(const char* s)
+[[maybe_unused]] static std::string cstr_to_string(const char* s)
 {
     return (s == nullptr) ? std::string() : std::string(s);
 }
@@ -142,7 +142,7 @@ private:
         // Example:
         //   camera_serials: ["DA1234567", "DA7654321"]
         camera_serials_ = this->declare_parameter<std::vector<std::string>>(
-            "camera_serials", {});
+            "camera_serials", std::vector<std::string>{});
     }
 
     // -----------------------------
