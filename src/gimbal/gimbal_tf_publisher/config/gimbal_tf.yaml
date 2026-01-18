@@ -1,0 +1,61 @@
+gimbal_tf_publisher:
+  ros__parameters:
+    root_frame: "rm_frame"
+    cam_install_frame: "cam_install_frame"
+    gimbal_base_frame: "gimbal_base_frame"
+
+    # 新增：转轴轴心坐标系（静态承载平移）
+    axis1_joint_frame: "gimbal_axis1_joint_frame"
+    axis2_joint_frame: "gimbal_axis2_joint_frame"
+
+    # 旋转后坐标系（动态，仅旋转）
+    axis1_frame: "gimbal_axis1_frame"
+    axis2_frame: "gimbal_axis2_frame"
+
+    gimbal_cam_frame: "gimbal_cam_frame"
+    laser_frame: "laser_emitter_frame"
+
+    # 下位机上传：Float64MultiArray，只包含两个数 [yaw, pitch]
+    angle_topic: "/gimbal/angles"
+    yaw_index: 0
+    pitch_index: 1
+    angle_unit: "rad"
+    publish_rate_hz: 200.0
+
+    offline_publish_policy: "none"  # none / zero / hold_last
+    warn_when_offline: false
+    angle_timeout_sec: 0.5
+
+    publish_rm_to_cam_install_from_yaml: true
+    extrinsic_yaml: ""
+    extrinsic_node_paths: ["rm_to_cam_install", "extrinsic"]
+    extrinsic_xyz_key: "xyz"
+    extrinsic_rpy_key: "rpy"
+
+    # cam_install -> gimbal_base（固定）
+    T_cam_install_to_gimbal_base_xyz: [0.0, 0.0, 0.0]
+    T_cam_install_to_gimbal_base_rpy: [0.0, 0.0, 0.0]
+
+    # gimbal_base -> axis1_joint（固定：一轴电机轴心偏置平移/旋转）
+    T_gimbal_base_to_axis1_joint_xyz: [0.0, 0.0, 0.0]
+    T_gimbal_base_to_axis1_joint_rpy: [0.0, 0.0, 0.0]
+
+    # axis1_frame -> axis2_joint（固定：二轴电机轴心偏置平移/旋转）
+    T_axis1_to_axis2_joint_xyz: [0.0, 0.0, 0.0]
+    T_axis1_to_axis2_joint_rpy: [0.0, 0.0, 0.0]
+
+    # axis2_frame -> gimbal_cam（固定）
+    T_axis2_to_gimbal_cam_xyz: [0.0, 0.0, 0.0]
+    T_axis2_to_gimbal_cam_rpy: [0.0, 0.0, 0.0]
+
+    # gimbal_cam -> laser（固定）
+    T_gimbal_cam_to_laser_xyz: [0.0, 0.0, 0.0]
+    T_gimbal_cam_to_laser_rpy: [0.0, 0.0, 0.0]
+
+    # 旋转约定
+    yaw_offset: 0.0
+    pitch_offset: 0.0
+    yaw_axis: "Z"
+    pitch_axis: "Y"
+    yaw_sign: 1
+    pitch_sign: 1

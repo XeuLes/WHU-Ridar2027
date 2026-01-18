@@ -1,0 +1,17 @@
+gimbal_serial_bridge:
+  ros__parameters:
+    # 如果你不确定设备名，填 candidates 列表，程序会依次尝试
+    serial_ports: ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"]
+    serial_port: "/dev/ttyUSB0"   # 作为 fallback（serial_ports 为空才用）
+    baud: 115200
+
+    angles_topic: "/gimbal/angles"
+    mode_up_topic: "/gimbal/mode_up"
+    cmd_topic: "/gimbal/command_angles"
+    enable_topic: "/gimbal/enable"
+
+    angle_unit: "rad"
+    yaw_index: 0
+    pitch_index: 1
+
+    default_enable: false

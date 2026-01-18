@@ -1,0 +1,28 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>gimbal_aim_solver</name>
+  <version>0.0.1</version>
+  <description>
+    Solve target position in gimbal_base_frame and compute yaw/pitch setpoints so that laser z-axis passes through target.
+  </description>
+
+  <maintainer email="user@todo.todo">user</maintainer>
+  <license>MIT</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <depend>rclcpp</depend>
+  <depend>tf2</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+
+  <!-- 订阅 auto_aim_fast 的 AimTarget -->
+  <depend>auto_aim_fast</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
