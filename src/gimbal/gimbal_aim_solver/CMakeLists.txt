@@ -8,6 +8,8 @@ endif()
 find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(tf2 REQUIRED)
+find_package(tf2_ros REQUIRED)
+find_package(tf2_geometry_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(auto_aim_fast REQUIRED)
@@ -19,6 +21,8 @@ add_executable(gimbal_aim_solver_node
 ament_target_dependencies(gimbal_aim_solver_node
   rclcpp
   tf2
+  tf2_ros
+  tf2_geometry_msgs
   geometry_msgs
   std_msgs
   auto_aim_fast
