@@ -1,7 +1,10 @@
 #ifndef RADAR_DETECT_H
 #define RADAR_DETECT_H
 
+#include <atomic>
+#include <future>
 #include <memory>
+#include <mutex>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -78,7 +81,17 @@ private:
     
     // 光流相关成员变量
     std::shared_ptr<class OpticalFlowGenerator> flow_generator_;  // 光流生成器
-    cv::Mat prev_frame_;  // 前一帧图像，用于计算光流
+    cv::Mat prev_frame_;  // 前一帧图像,用于计算光流
+    
+    // 异步光流检测相关
+    std::atomic<bool> flow_task_running_{false};  // 光流任务是否正在运行
+    cv::Mat cached_flow_img_;                     // 缓存的光流图像
+    std::mutex flow_cache_mutex_;                 // 光流缓存锁
+    std::future<cv::Mat> flow_future_;            // 异步光流任务句柄
+    std::atomic<int> frame_counter_{0};           // 帧计数器（用于控制光流计算频率）
+    
+    // 灯条检测器成员变量
+    std::shared_ptr<class LightBarDetector> light_bar_detector_;  // 灯条检测器
 };
 class Car {
 public:
