@@ -19,6 +19,8 @@
 #include "yolos.hpp"
 #include "BaseInfer.hpp"
 #include "uav.hpp"
+#include "uav_tracker.h"
+#include "uav_light_detector.h"
 #include <fstream>
 namespace tdt_radar {
 
@@ -79,19 +81,11 @@ private:
     const int HIT_THRESHOLD = 3;   // 连续3帧出现才认为有效
     const int MAX_MISS_COUNT = 5;  // 连续丢失5帧才删除
     
-    // 光流相关成员变量
-    std::shared_ptr<class OpticalFlowGenerator> flow_generator_;  // 光流生成器
-    cv::Mat prev_frame_;  // 前一帧图像,用于计算光流
+    // UAV DeepSORT跟踪器（结合卡尔曼滤波）
+    std::shared_ptr<UAVDeepSORTTracker> uav_tracker_;
     
-    // 异步光流检测相关
-    std::atomic<bool> flow_task_running_{false};  // 光流任务是否正在运行
-    cv::Mat cached_flow_img_;                     // 缓存的光流图像
-    std::mutex flow_cache_mutex_;                 // 光流缓存锁
-    std::future<cv::Mat> flow_future_;            // 异步光流任务句柄
-    std::atomic<int> frame_counter_{0};           // 帧计数器（用于控制光流计算频率）
-    
-    // 灯条检测器成员变量
-    std::shared_ptr<class LightBarDetector> light_bar_detector_;  // 灯条检测器
+    // 灯条检测器
+    std::shared_ptr<class LightBarDetector> light_bar_detector_;
 };
 class Car {
 public:
