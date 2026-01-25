@@ -101,22 +101,6 @@ public:
         const cv::Point2f& fine_roi_center_global
     );
 
-    /**
-     * @brief 绘制卡尔曼预测框（虚线）
-     * @param img 输出图像
-     * @param uav_rect 预测框
-     * @param refined_center 中心点
-     * @param uav_id UAV ID
-     * @param can_send 是否可发送
-     */
-    void drawKalmanPrediction(
-        cv::Mat& img,
-        const cv::Rect& uav_rect,
-        const cv::Point2f& refined_center,
-        int uav_id,
-        bool can_send
-    );
-
 private:
     // 灯条检测参数 (与auto_aim_fast一致)
     float min_area_;

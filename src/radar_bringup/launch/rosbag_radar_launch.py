@@ -147,7 +147,7 @@ def generate_launch_description():
             plugin='RosbagPlayer',
             name='rosbag_player_node',
             parameters=[{
-                'rosbag_file': "/home/z/code/DataForTest/rosbag.db3"
+                'rosbag_file': "/home/user/DATA/rosbag.db3"
                 # 移除qos_profile参数
             }],
             extra_arguments=[

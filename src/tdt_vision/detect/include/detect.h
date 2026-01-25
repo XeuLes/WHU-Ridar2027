@@ -84,6 +84,9 @@ private:
     // UAV DeepSORT跟踪器（结合卡尔曼滤波）
     std::shared_ptr<UAVDeepSORTTracker> uav_tracker_;
     
+    // UAV跟踪参数
+    const int UAV_MAX_TRACKING_AGE = 20;  // UAV卡尔曼预测框最大保持帧数
+    
     // 灯条检测器
     std::shared_ptr<class LightBarDetector> light_bar_detector_;
 };

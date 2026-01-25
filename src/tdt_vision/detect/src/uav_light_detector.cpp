@@ -202,6 +202,21 @@ cv::Point2f LightBarDetector::performFineDetection(
     // 1. 计算精细ROI
     fine_roi_local = calculateFineROI(uav_rect);
     
+    // 确保 fine_roi_local 在 uav_roi 的有效范围内
+    fine_roi_local.x = std::max(0, std::min(fine_roi_local.x, uav_roi.cols - 1));
+    fine_roi_local.y = std::max(0, std::min(fine_roi_local.y, uav_roi.rows - 1));
+    fine_roi_local.width = std::min(fine_roi_local.width, uav_roi.cols - fine_roi_local.x);
+    fine_roi_local.height = std::min(fine_roi_local.height, uav_roi.rows - fine_roi_local.y);
+    
+    // 检查ROI是否有效
+    if (fine_roi_local.width <= 0 || fine_roi_local.height <= 0) {
+        // ROI无效，返回UAV矩形中心
+        return cv::Point2f(
+            uav_rect.x + uav_rect.width / 2.0f,
+            uav_rect.y + uav_rect.height / 2.0f
+        );
+    }
+    
     // 提取精细ROI图像
     cv::Mat fine_roi = uav_roi(fine_roi_local);
     
@@ -318,70 +333,6 @@ void LightBarDetector::drawLightDetection(
         cv::line(img, refined_center - cv::Point2f(0, 10), 
                 refined_center + cv::Point2f(0, 10), cv::Scalar(0, 255, 0), 2);
     }
-}
-
-void LightBarDetector::drawKalmanPrediction(
-    cv::Mat& img,
-    const cv::Rect& uav_rect,
-    const cv::Point2f& refined_center,
-    int uav_id,
-    bool can_send) {
-    
-    // 使用虚线绘制预测框
-    cv::Scalar kalman_color = cv::Scalar(128, 128, 255);  // 浅紫色表示预测
-    
-    // 绘制虚线矩形（4条边分段绘制）
-    int dash_length = 10;
-    int gap_length = 5;
-    
-    // 顶边虚线
-    for (int x = uav_rect.x; x < uav_rect.x + uav_rect.width; x += dash_length + gap_length) {
-        int x_end = std::min(x + dash_length, uav_rect.x + uav_rect.width);
-        cv::line(img, cv::Point(x, uav_rect.y), cv::Point(x_end, uav_rect.y), kalman_color, 2);
-    }
-    
-    // 底边虚线
-    for (int x = uav_rect.x; x < uav_rect.x + uav_rect.width; x += dash_length + gap_length) {
-        int x_end = std::min(x + dash_length, uav_rect.x + uav_rect.width);
-        cv::line(img, cv::Point(x, uav_rect.y + uav_rect.height), 
-                cv::Point(x_end, uav_rect.y + uav_rect.height), kalman_color, 2);
-    }
-    
-    // 左边虚线
-    for (int y = uav_rect.y; y < uav_rect.y + uav_rect.height; y += dash_length + gap_length) {
-        int y_end = std::min(y + dash_length, uav_rect.y + uav_rect.height);
-        cv::line(img, cv::Point(uav_rect.x, y), cv::Point(uav_rect.x, y_end), kalman_color, 2);
-    }
-    
-    // 右边虚线
-    for (int y = uav_rect.y; y < uav_rect.y + uav_rect.height; y += dash_length + gap_length) {
-        int y_end = std::min(y + dash_length, uav_rect.y + uav_rect.height);
-        cv::line(img, cv::Point(uav_rect.x + uav_rect.width, y), 
-                cv::Point(uav_rect.x + uav_rect.width, y_end), kalman_color, 2);
-    }
-    
-    // 绘制预测中心点（大十字标记）
-    cv::circle(img, refined_center, 6, kalman_color, 2);
-    cv::line(img, refined_center - cv::Point2f(15, 0), 
-            refined_center + cv::Point2f(15, 0), kalman_color, 2);
-    cv::line(img, refined_center - cv::Point2f(0, 15), 
-            refined_center + cv::Point2f(0, 15), kalman_color, 2);
-    
-    // 绘制标签
-    std::string label = "UAV(ID" + std::to_string(uav_id) + ") [KALMAN]";
-    if (!can_send) {
-        label += " MSG-FULL";
-    }
-    
-    int baseline = 0;
-    cv::Size txt_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.8, 2, &baseline);
-    cv::rectangle(img,
-                cv::Point(uav_rect.x, std::max(uav_rect.y - txt_size.height - 4, 0)),
-                cv::Point(uav_rect.x + txt_size.width, uav_rect.y + 2),
-                cv::Scalar(0, 0, 0), -1);
-    
-    cv::putText(img, label, cv::Point(uav_rect.x, std::max(uav_rect.y - 6, 0)),
-                cv::FONT_HERSHEY_SIMPLEX, 0.8, cv::Scalar(200, 200, 255), 2);
 }
 
 }  // namespace tdt_radar

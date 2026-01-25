@@ -34,6 +34,8 @@ public:
     void        draw_ui(cv::Mat& img);
     float       get_height(cv::Point2f& input_point);
     cv::Point2f get_2d(cv::Point2f& input_point, float height);
+    // 新增：支持指定标定点集名称的重载
+    cv::Point2f get_2d(cv::Point2f& input_point, float height, const std::string& region_name);
     cv::Mat     world_rvec;
     cv::Mat     world_tvec;
     cv::Mat     camera_matrix;

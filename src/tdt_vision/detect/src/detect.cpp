@@ -117,34 +117,45 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     if (!file3.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/classify.onnx --saveEngine=model/TensorRT/classify.engine --minBatch 1 --optBatch 10 --maxBatch 20 --Shape=224x224 --input_name=input");
 
     // 5. 加载深度学习模型
+    RCLCPP_INFO(this->get_logger(), "[INIT] Loading classifier model...");
     this->classifier = classify::load(classify_path, classify::Type::densenet121);
-    this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.55f);  // conf=0.4, nms=0.55
-    this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);       // conf=0.65, nms=0.45
+    RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Classifier loaded");
+    
+    RCLCPP_INFO(this->get_logger(), "[INIT] Loading armor_yolo model...");
+    this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.55f);
+    RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Armor YOLO loaded");
+    
+    RCLCPP_INFO(this->get_logger(), "[INIT] Loading main yolo model...");
+    this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);
+    RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Main YOLO loaded");
 
-    // 6. 加载UAV检测器（conf=0.15，低阈值提高召回率）
+    // 6. 加载UAV检测器
     std::ifstream file_uav(uav_path.c_str());
     if (!file_uav.good()) {
         RCLCPP_WARN(this->get_logger(), "[INIT] ⚠ UAV TRT engine file NOT found at: %s", uav_path.c_str());
         RCLCPP_INFO(this->get_logger(), "[INIT] Attempting ONNX to TensorRT conversion...");
-        system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/best.onnx --saveEngine=model/TensorRT/uav.engine --minBatch 1 --optBatch 5 --maxBatch 12 --Shape=1280x1280 --input_name=images");
+        system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/best.onnx --saveEngine=model/TensorRT/uav_test.engine --minBatch 1 --optBatch 5 --maxBatch 12 --Shape=1280x1280 --input_name=images");
     } else {
         RCLCPP_INFO(this->get_logger(), "[INIT] ✓ UAV TRT engine file found: %s", uav_path.c_str());
         file_uav.close();
     }
 
-    auto tmp_uav = uav::load(uav_path, 0.15f, 0.3f);  // conf=0.15（低阈值）, nms=0.3
+    RCLCPP_INFO(this->get_logger(), "[INIT] Loading UAV detector from: %s", uav_path.c_str());
+    auto tmp_uav = uav::load(uav_path, 0.3f, 0.45f);
     if (tmp_uav != nullptr) {
         this->uav_detector = tmp_uav;
-        RCLCPP_INFO(this->get_logger(), "[INIT] ✓ UAV detector loaded successfully! conf=0.15, nms=0.3");
+        RCLCPP_INFO(this->get_logger(), "[INIT] ✓ UAV detector loaded successfully! conf=0.5, nms=0.45");
     } else {
         RCLCPP_ERROR(this->get_logger(), "[INIT] ❌ FAILED to load UAV detector from: %s", uav_path.c_str());
         RCLCPP_ERROR(this->get_logger(), "[INIT] Check if file exists, has correct format, or is corrupted");
     }
 
     // 7. 初始化UAV检测辅助模块
+    RCLCPP_INFO(this->get_logger(), "[INIT] Initializing light bar detector...");
     this->light_bar_detector_ = std::make_shared<LightBarDetector>();  // 灯条精细检测器
     
     // 8. 初始化UAV DeepSORT跟踪器（结合卡尔曼滤波）
+    RCLCPP_INFO(this->get_logger(), "[INIT] Initializing UAV DeepSORT tracker...");
     // 参数说明：
     //   max_iou_distance = 0.7   - IOU距离阈值（1-IOU < 0.7认为是同一目标）
     //   max_feature_distance = 0.3 - 特征距离阈值（暂未使用外观特征）
@@ -186,9 +197,9 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     auto img = cv_bridge::toCvShare(msg, "bgr8")->image;
     tdt_radar::Image image(img.data, img.cols, img.rows);
     
-    // 1.1 准备UAV检测输入（零光流模式：直接resize到1280x1280）
-    cv::Mat merged_flow_img;
-    cv::resize(img, merged_flow_img, cv::Size(1280, 1280));
+    // 1.1 准备UAV检测输入（RGB检测模式：直接resize到1280x1280）
+    cv::Mat uav_input_img;
+    cv::resize(img, uav_input_img, cv::Size(1280, 1280));
     
     // 1.2 启动车辆检测异步任务
     auto future_car = std::async(std::launch::async, [&]() {
@@ -196,14 +207,14 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     });
 
     // 1.3 克隆图像防止异步任务中数据失效
-    cv::Mat flow_img_copy = merged_flow_img.clone();
+    cv::Mat uav_input_copy = uav_input_img.clone();
     
-    // 1.4 调试：每30帧保存一次光流图像
+    // 1.4 调试：每30帧保存一次UAV检测输入图像
     static int frame_count = 0;
     if (frame_count++ % 30 == 0) {
-        cv::imwrite("/tmp/flow_debug_" + std::to_string(frame_count) + ".jpg", flow_img_copy);
-        RCLCPP_DEBUG(this->get_logger(), "[FLOW] Saved flow image: %dx%d, channels=%d", 
-                    flow_img_copy.cols, flow_img_copy.rows, flow_img_copy.channels());
+        cv::imwrite("/tmp/uav_input_debug_" + std::to_string(frame_count) + ".jpg", uav_input_copy);
+        RCLCPP_DEBUG(this->get_logger(), "[UAV-INPUT] Saved UAV input image: %dx%d, channels=%d", 
+                    uav_input_copy.cols, uav_input_copy.rows, uav_input_copy.channels());
     }
     
     // 1.5 启动UAV检测异步任务（可通过宏开关关闭）
@@ -217,14 +228,14 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             RCLCPP_ERROR(this->get_logger(), "❌ [UAV] uav_detector is nullptr!");
             return std::vector<yolo::Box>();
         }
-        if (flow_img_copy.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "❌ [UAV] flow image is empty!");
+        if (uav_input_copy.empty()) {
+            RCLCPP_ERROR(this->get_logger(), "❌ [UAV] UAV input image is empty!");
             return std::vector<yolo::Box>();
         }
         RCLCPP_DEBUG(this->get_logger(), "✓ [UAV] Calling uav_detector->forward with image %dx%d, channels=%d", 
-                    flow_img_copy.cols, flow_img_copy.rows, flow_img_copy.channels());
-        tdt_radar::Image flow_image(flow_img_copy.data, flow_img_copy.cols, flow_img_copy.rows);
-        auto res = uav_detector->forward(flow_image);
+                    uav_input_copy.cols, uav_input_copy.rows, uav_input_copy.channels());
+        tdt_radar::Image uav_input_image(uav_input_copy.data, uav_input_copy.cols, uav_input_copy.rows);
+        auto res = uav_detector->forward(uav_input_image);
         RCLCPP_DEBUG(this->get_logger(), "✓ [UAV] forward returned %zu boxes", res.size());
         return res;
     });
@@ -387,7 +398,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                     std::string label = (car.color == 2 ? "R" : "B") + std::to_string(car.number);
                     cv::rectangle(img, car.car_rect, draw_color, 3);
                     cv::putText(img, label, cv::Point(car.car_rect.x, car.car_rect.y), 
-                               cv::FONT_HERSHEY_SIMPLEX, 1, draw_color, 2);
+                                   cv::FONT_HERSHEY_SIMPLEX, 1, draw_color, 2);
                 }
             }
         }
@@ -451,19 +462,29 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                              "[UAV-Track] Tracker not initialized!");
     }
     
-    // 4.4 处理每个确认的跟踪目标
+    // 4.4 处理每个确认的跟踪目标（优先处理有检测的，跳过过旧的预测）
     int uav_passed = 0;
+    // 只处理最多两个track
+    std::vector<cv::Rect> kalman_rects; // 每帧局部变量
+    int track_count = 0;
     for (const auto& track : confirmed_tracks) {
+        if (track_count >= 2) break;
+        // 快速过滤：跳过丢失超过UAV_MAX_TRACKING_AGE帧的轨迹（减少无效计算）
+        if (track->getTimeSinceUpdate() > UAV_MAX_TRACKING_AGE) {
+            RCLCPP_DEBUG(this->get_logger(), "[UAV] Skipping Track ID=%d (lost %d frames)",
+                        track->getID(), track->getTimeSinceUpdate());
+            continue;
+        }
         // 4.4.1 判断当前帧是否有检测匹配
         //      time_since_update=0: 有YOLO检测匹配
         //      time_since_update>0: 仅卡尔曼预测
         bool has_detection = (track->getTimeSinceUpdate() == 0);
-        
+
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                             "[UAV] Track ID=%d, has_detection=%s, time_since_update=%d",
                             track->getID(), has_detection ? "YES" : "NO", 
                             track->getTimeSinceUpdate());
-        
+
         // 4.4.2 根据检测状态选择边界框
         cv::Rect uav_rect_raw;
         if (has_detection) {
@@ -474,20 +495,31 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         cv::Rect uav_rect = getSafeRect(img, uav_rect_raw);
 
         uav_passed++;
+        track_count++;
 
-        // 4.4.3 颜色判断
+        // 4.4.3 快速检查有效性（getSafeRect已确保边界安全，只需检查面积）
+        if (uav_rect.width <= 0 || uav_rect.height <= 0) {
+            continue;
+        }
+
+        // 收集kalman预测框用于重叠判断
+        if (!has_detection) {
+            kalman_rects.push_back(uav_rect);
+        }
+        
         cv::Mat uav_roi = img(uav_rect);
         int uav_color = getColor(uav_roi);
 
-        // 4.4.4 精细检测（仅在有YOLO检测时执行）
+        // 4.4.4 精细检测（对所有有效轨迹执行，包括YOLO检测和卡尔曼预测）
         cv::Rect fine_roi_local;
         cv::Point2f fine_roi_center_global;
         std::vector<LightBarDetector::LightBar> detected_lights;
         std::vector<LightBarDetector::UAVTarget> detected_uav_targets;
         cv::Point2f refined_center;
         
-        if (has_detection && light_bar_detector_ != nullptr) {
-            // 调用LightBarDetector执行精细检测流程
+        // 跳过time_since_update>UAV_MAX_TRACKING_AGE的轨迹（允许卡尔曼预测，提高跟踪鲁棒性）
+        if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
+            // 调用LightBarDetector执行精细检测流程（对检测框和预测框都执行）
             refined_center = light_bar_detector_->performFineDetection(
                 uav_roi, uav_rect, uav_color,
                 fine_roi_local, fine_roi_center_global,
@@ -495,7 +527,8 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             );
             
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "[UAV-Fine] Detected %zu lights, %zu targets, center=(%.1f,%.1f)",
+                                "[UAV-Fine] %s: Detected %zu lights, %zu targets, center=(%.1f,%.1f)",
+                                has_detection ? "YOLO" : "KALMAN",
                                 detected_lights.size(), detected_uav_targets.size(),
                                 refined_center.x, refined_center.y);
         } else {
@@ -506,7 +539,8 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             );
             
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "[UAV-Fine] No YOLO detection, using predicted center=(%.1f,%.1f)",
+                                "[UAV-Fine] No fine detection, using %s center=(%.1f,%.1f)",
+                                has_detection ? "YOLO" : "predicted",
                                 refined_center.x, refined_center.y);
         }
 
@@ -516,7 +550,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         int idx = uav_id - 1; // 6
         bool can_send = (idx < (int)array_limit);
         
-        // UAV框中心点（用于发送到kalman filter）
+        // UAV框中心点
         cv::Point2f uav_box_center(
             uav_rect.x + uav_rect.width / 2.0f,
             uav_rect.y + uav_rect.height / 2.0f
@@ -531,13 +565,17 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         if (uav_color == 0) { // Blue
             color_bgr = cv::Scalar(255, 0, 0);
             if (can_send) {
-                detect_result.blue_x[idx] = uav_box_center.x;
-                detect_result.blue_y[idx] = uav_box_center.y;
-                RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                    "[UAV] Blue team sent: box_center=(%.1f, %.1f)", 
-                                    uav_box_center.x, uav_box_center.y);
+                if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
+                    detect_result.blue_x[idx] = refined_center.x;
+                    detect_result.blue_y[idx] = refined_center.y;
+                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                        "[UAV] Blue team sent: refined_center=(%.1f, %.1f)", 
+                                        refined_center.x, refined_center.y);
+                } else {
+                    detect_result.blue_x[idx] = 0.0f;
+                    detect_result.blue_y[idx] = 0.0f;
+                }
             }
-            
             // 发送蓝方UAV所有灯条对的中心点（最多2个）
             size_t light_count = std::min(detected_uav_targets.size(), size_t(2));
             detect_result.blue_uav_light_count = static_cast<uint8_t>(light_count);
@@ -548,17 +586,20 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                 "[UAV-Light] Blue team: %u light pairs sent", 
                                 detect_result.blue_uav_light_count);
-            
         } else if (uav_color == 2) { // Red
             color_bgr = cv::Scalar(0, 0, 255);
             if (can_send) {
-                detect_result.red_x[idx] = uav_box_center.x;
-                detect_result.red_y[idx] = uav_box_center.y;
-                RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                    "[UAV] Red team sent: box_center=(%.1f, %.1f)", 
-                                    uav_box_center.x, uav_box_center.y);
+                if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
+                    detect_result.red_x[idx] = refined_center.x;
+                    detect_result.red_y[idx] = refined_center.y;
+                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                                        "[UAV] Red team sent: refined_center=(%.1f, %.1f)", 
+                                        refined_center.x, refined_center.y);
+                } else {
+                    detect_result.red_x[idx] = 0.0f;
+                    detect_result.red_y[idx] = 0.0f;
+                }
             }
-            
             // 发送红方UAV所有灯条对的中心点（最多2个）
             size_t light_count = std::min(detected_uav_targets.size(), size_t(2));
             detect_result.red_uav_light_count = static_cast<uint8_t>(light_count);
@@ -581,19 +622,32 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 
         // 4.4.6 绘制可视化结果（调试模式）
         if (debug) {
-            // 第一步:绘制UAV检测框或卡尔曼预测框
-            if (has_detection) {
-                // 有YOLO检测:绘制实线框
-                cv::rectangle(img, uav_rect, color_bgr, 2);
-            } else {
-                // 无YOLO检测:绘制卡尔曼预测虚线框
-                if (light_bar_detector_ != nullptr) {
-                    light_bar_detector_->drawKalmanPrediction(img, uav_rect, refined_center, uav_id, can_send);
+            // 只做多个kalman预测框重叠时只保留最后一个
+            bool draw_this = true;
+            if (!has_detection) {
+                // 只保留最后一个重叠的kalman预测框
+                for (size_t k = kalman_rects.size() - 1; k > 0; --k) {
+                    if (kalman_rects[k] == uav_rect) continue;
+                    cv::Rect inter = kalman_rects[k] & uav_rect;
+                    if (inter.area() > 0) {
+                        draw_this = false;
+                        break;
+                    }
                 }
             }
-            
-            // 第二步:如果执行了精细检测,绘制灯条检测结果
-            if (has_detection && light_bar_detector_ != nullptr) {
+            if (draw_this) {
+                cv::rectangle(img, uav_rect, color_bgr, 2);
+                if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
+                    light_bar_detector_->drawLightDetection(
+                        img, uav_rect, fine_roi_local,
+                        detected_lights, detected_uav_targets,
+                        refined_center, fine_roi_center_global
+                    );
+                }
+            }
+
+            // 第二步:如果执行了精细检测,绘制灯条检测结果（对检测框和预测框都绘制）
+            if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
                 light_bar_detector_->drawLightDetection(
                     img, uav_rect, fine_roi_local,
                     detected_lights, detected_uav_targets,
@@ -624,7 +678,14 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     }
 
     // ==================== 阶段5: 发布结果与性能统计 ====================
-    
+
+    RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] header.stamp: sec=%u, nsec=%u", detect_result.header.stamp.sec, detect_result.header.stamp.nanosec);
+    // 输出UAV相关坐标日志，便于调试
+    int uav_id = UAV_ID; // 7
+    int idx = uav_id - 1; // 6
+    RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] blue_x[%d]=%.2f, blue_y[%d]=%.2f, red_x[%d]=%.2f, red_y[%d]=%.2f", 
+        idx, detect_result.blue_x[idx], idx, detect_result.blue_y[idx], idx, detect_result.red_x[idx], idx, detect_result.red_y[idx]);
+
     // 5.1 发布检测结果到话题
     pub->publish(detect_result);
 

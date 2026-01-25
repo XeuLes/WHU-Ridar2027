@@ -67,6 +67,25 @@ static uint16_t crc16_modbus(const uint8_t* data, size_t len)
     return crc;
 }
 
+// CRC16: poly=0x1021 reflected -> 0x8408, init=0xFFFF, xorout=0x0000, refin=true
+// 与下位机 get_CRC16_check_sum(..., 0xFFFF) 对齐
+static uint16_t crc16_ccitt_reflect_ffff(const uint8_t* data, size_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (size_t i = 0; i < len; ++i) {
+        crc ^= static_cast<uint16_t>(data[i]);
+        for (int j = 0; j < 8; ++j) {
+            if (crc & 0x0001) {
+                crc = (crc >> 1) ^ 0x8408;
+            } else {
+                crc >>= 1;
+            }
+        }
+    }
+    return crc;  // xorout = 0x0000
+}
+
+
 static bool set_baudrate(termios& tty, int baud)
 {
     speed_t spd = B115200;
@@ -379,7 +398,7 @@ private:
             frame_bytes[1] = h[1];
             std::memcpy(frame_bytes + 2, payload.data(), payload.size());
 
-            const uint16_t crc_calc = crc16_modbus(
+            const uint16_t crc_calc = crc16_ccitt_reflect_ffff(
                 frame_bytes, sizeof(GimbalToVision) - sizeof(uint16_t));
             uint16_t crc_rx = 0;
             std::memcpy(&crc_rx,
@@ -433,7 +452,7 @@ private:
             tx.crc16 = 0;
             uint8_t tx_bytes[sizeof(VisionToGimbal)];
             std::memcpy(tx_bytes, &tx, sizeof(tx));
-            const uint16_t tx_crc = crc16_modbus(
+            const uint16_t tx_crc = crc16_ccitt_reflect_ffff(
                 tx_bytes, sizeof(VisionToGimbal) - sizeof(uint16_t));
             std::memcpy(tx_bytes + sizeof(VisionToGimbal) -
                             sizeof(uint16_t),

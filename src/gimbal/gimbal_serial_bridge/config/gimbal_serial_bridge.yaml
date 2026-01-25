@@ -1,8 +1,8 @@
 gimbal_serial_bridge:
   ros__parameters:
     # 如果你不确定设备名，填 candidates 列表，程序会依次尝试
-    serial_ports: ["/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyACM0", "/dev/ttyACM1"]
-    serial_port: "/dev/ttyUSB0"   # 作为 fallback（serial_ports 为空才用）
+    serial_ports: ["/dev/ttyACM0"]
+    serial_port: "/dev/ttyACM0"   # 作为 fallback（serial_ports 为空才用）
     baud: 115200
 
     angles_topic: "/gimbal/angles"

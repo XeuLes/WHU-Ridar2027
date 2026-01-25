@@ -209,6 +209,8 @@ cv::Point2f parser::get_2d(cv::Point2f& input_point, float height)
     cv::perspectiveTransform(srcPointMat, srcPointMat,
                              Perspective_matrix);  // 执行变换
 
+    std::cout << "[get_2d] output_point: (" << srcPointMat.at<cv::Point2f>(0, 0).x << ", " << srcPointMat.at<cv::Point2f>(0, 0).y << ")" << std::endl;
+
     return srcPointMat.at<cv::Point2f>(0, 0);  // 返回转换后的世界2D点
 }
 

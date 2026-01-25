@@ -18,7 +18,7 @@
 
     cam0.acquisition_frame_rate: 120.0
     cam0.exposure_time: 12000
-    cam0.gain: 15.005
+    cam0.gain: 16.9
 
     # ---------------- cam1（第二台相机） ----------------
     cam1.camera_info_url: "package://hik_camera_ros2_driver/config/camera_info.yaml"
@@ -31,4 +31,4 @@
 
     cam1.acquisition_frame_rate: 120.0
     cam1.exposure_time: 12000
-    cam1.gain: 15.005
+    cam1.gain: 16.9
