@@ -1,4 +1,5 @@
-cmake_minimum_required(VERSION 3.9)
+cmake_minimum_required(VERSION 3.10)
+
 
 project(livox_sdk_vendor)
 
@@ -22,6 +23,7 @@ macro(build_livox_sdk)
     CMAKE_ARGS
       -DCMAKE_INSTALL_PREFIX=${CMAKE_CURRENT_BINARY_DIR}/livox-sdk_install
       -DCMAKE_POSITION_INDEPENDENT_CODE=ON
+      -DCMAKE_POLICY_VERSION_MINIMUM=3.5
       ${extra_cmake_args}
   )
 

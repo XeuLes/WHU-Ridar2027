@@ -1,7 +1,5 @@
 #include "detect.h"
-#include <filesystem>
 #include <opencv2/imgproc.hpp>
-#include <opencv2/video/tracking.hpp>
 #include <rclcpp/logging.hpp>
 #include <rclcpp/utilities.hpp>
 #include <future>
@@ -49,14 +47,102 @@ int getColor(cv::Mat& img)
  * @return 裁剪后的安全矩形框
  * @details 确保rect在image范围内，防止访问越界导致崩溃
  */
-cv::Rect getSafeRect(cv::Mat& image, cv::Rect& rect)
+cv::Rect getSafeRect(const cv::Mat& image, const cv::Rect& rect)
 {
-    cv::Rect save_rect;
-    save_rect.x = std::max(0, rect.x);
-    save_rect.y = std::max(0, rect.y);
-    save_rect.width = std::min(image.cols - save_rect.x, rect.width);
-    save_rect.height = std::min(image.rows - save_rect.y, rect.height);
-    return save_rect;
+    // 边界矩形
+    const int img_right = image.cols;
+    const int img_bottom = image.rows;
+    
+    // 解包原始矩形
+    int rx = rect.x;
+    int ry = rect.y;
+    int rw = rect.width;
+    int rh = rect.height;
+    
+    // 如果宽度或高度为负，修正为正向矩形
+    if (rw < 0) { rx += rw; rw = -rw; }
+    if (rh < 0) { ry += rh; rh = -rh; }
+    
+    // 快速边界检查：完全在图像外
+    if (rx >= img_right || ry >= img_bottom || 
+        rx + rw <= 0 || ry + rh <= 0) {
+        return cv::Rect();
+    }
+    
+    // 计算交集边界（使用快速比较和选择）
+    int x1 = rx < 0 ? 0 : rx;
+    int y1 = ry < 0 ? 0 : ry;
+    int x2 = rx + rw;
+    int y2 = ry + rh;
+    x2 = x2 > img_right ? img_right : x2;
+    y2 = y2 > img_bottom ? img_bottom : y2;
+    
+    // 计算交集尺寸
+    int width = x2 - x1;
+    int height = y2 - y1;
+    
+    // 如果尺寸小于等于0，返回空矩形
+    if (width <= 0 || height <= 0) {
+        return cv::Rect();
+    }
+    
+    // 检查相交面积是否超过原矩形30%（使用整数乘法避免浮点运算）
+    int intersect_area = width * height;
+    int original_area = rw * rh;
+    
+    // 30%阈值检查：intersect_area * 10 > original_area * 3
+    if (intersect_area * 10 <= original_area * 3) {
+        return cv::Rect();
+    }
+    
+    return cv::Rect(x1, y1, width, height);
+}
+
+static cv::Mat resize_keep_ratio_blackpad(
+    const cv::Mat& src,
+    const cv::Size& target_size,
+    float& out_scale,
+    int& out_pad_x,
+    int& out_pad_y
+) {
+    if (src.empty()) {
+        out_scale = 1.0f;
+        out_pad_x = 0;
+        out_pad_y = 0;
+        return cv::Mat();
+    }
+
+    const int src_w = src.cols;
+    const int src_h = src.rows;
+    const int dst_w = target_size.width;
+    const int dst_h = target_size.height;
+
+    // 1) 计算等比例缩放系数（取更小的那个，保证完整放入目标尺寸）
+    float r = std::min(dst_w / (float)src_w, dst_h / (float)src_h);
+    out_scale = r;
+
+    // 2) 计算缩放后的新尺寸
+    int new_w = (int)std::round(src_w * r);
+    int new_h = (int)std::round(src_h * r);
+
+    // 3) resize 到新尺寸（不拉伸）
+    cv::Mat resized;
+    cv::resize(src, resized, cv::Size(new_w, new_h), 0, 0, cv::INTER_LINEAR);
+
+    // 4) 创建目标图并填充黑色
+    cv::Mat dst(dst_h, dst_w, src.type(), cv::Scalar(0, 0, 0));
+
+    // 5) 计算 padding（居中放置）
+    int pad_x = (dst_w - new_w) / 2;  // left pad
+    int pad_y = (dst_h - new_h) / 2;  // top pad
+    out_pad_x = pad_x;
+    out_pad_y = pad_y;
+
+    // 6) 拷贝到目标图
+    cv::Rect roi(pad_x, pad_y, new_w, new_h);
+    resized.copyTo(dst(roi));
+
+    return dst;  // 输出始终是 1280x1280
 }
 
 // ==================== 检测节点构造函数 ====================
@@ -199,7 +285,12 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     
     // 1.1 准备UAV检测输入（RGB检测模式：直接resize到1280x1280）
     cv::Mat uav_input_img;
-    cv::resize(img, uav_input_img, cv::Size(1280, 1280));
+    float uav_scale = 1.0f;
+    int uav_pad_x = 0, uav_pad_y = 0;
+
+    uav_input_img = resize_keep_ratio_blackpad(img, cv::Size(1280, 1280),
+                                            uav_scale, uav_pad_x, uav_pad_y);
+
     
     // 1.2 启动车辆检测异步任务
     auto future_car = std::async(std::launch::async, [&]() {
@@ -405,9 +496,13 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     }
 
     // ==================== 阶段4: 处理UAV检测（ID 7）====================
-    float scale_x = (float)img.cols / 1280.0f;
-    float scale_y = (float)img.rows / 1280.0f;
+    // letterbox 映射参数（来自 Stage1 的 resize_keep_ratio_blackpad 输出）
+    const float uav_scale_inv = 1.0f / uav_scale;   // 用倒数避免重复除法
+    const int pad_x = uav_pad_x;
+    const int pad_y = uav_pad_y;
+
     float img_area = (float)img.cols * img.rows;
+
 
     // 4.1 UAV检测结果预处理（按置信度排序，只保留top 2）
     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
@@ -433,19 +528,37 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     
     for (const auto& uav : uav_filtered) {
         // 坐标转换：1280x1280 → 原图尺寸
-        int x = int(uav.left * scale_x);
-        int y = int(uav.top * scale_y);
-        int w = int((uav.right - uav.left) * scale_x);
-        int h = int((uav.bottom - uav.top) * scale_y);
+        // 1280x1280（含黑边）坐标 -> 原图坐标
+        int x1 = (int)std::round((uav.left   - pad_x) * uav_scale_inv);
+        int y1 = (int)std::round((uav.top    - pad_y) * uav_scale_inv);
+        int x2 = (int)std::round((uav.right  - pad_x) * uav_scale_inv);
+        int y2 = (int)std::round((uav.bottom - pad_y) * uav_scale_inv);
+
+        // clamp 到图像范围（防止越界）
+        x1 = std::max(0, std::min(x1, img.cols - 1));
+        y1 = std::max(0, std::min(y1, img.rows - 1));
+        x2 = std::max(0, std::min(x2, img.cols - 1));
+        y2 = std::max(0, std::min(y2, img.rows - 1));
+
+        int w = x2 - x1;
+        int h = y2 - y1;
+        if (w <= 0 || h <= 0) {
+            continue;
+        }
+
+        // 长宽比过滤
+        if (w < h || w > 4 * h) {
+            continue;
+        }
         
         // 面积过滤（排除异常大小的检测）
         float uav_area = static_cast<float>(w * h);
         float ratio = uav_area / img_area;
-        if (ratio > 0.05f || ratio < 0.0002f) {
+        if (ratio > 0.08f || ratio < 0.0002f) {
             continue;
         }
         
-        cv::Rect bbox(x, y, w, h);
+        cv::Rect bbox(x1, y1, w, h);
         uav_bboxes.push_back(bbox);
         uav_confidences.push_back(uav.confidence);
     }
@@ -486,13 +599,31 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
                             track->getTimeSinceUpdate());
 
         // 4.4.2 根据检测状态选择边界框
-        cv::Rect uav_rect_raw;
-        if (has_detection) {
-            uav_rect_raw = track->getBox();          // 使用YOLO检测框
-        } else {
-            uav_rect_raw = track->getPredictedBox(); // 使用卡尔曼预测框
+        auto area_ratio_ok = [&](const cv::Rect& r) -> bool {
+            if (r.width <= 0 || r.height <= 0) return false;
+            if(r.width<r.height || r.width>4*r.height) return false;
+            float ratio = (float)r.area() / img_area;
+            return (ratio >= 0.0002f && ratio <= 0.05f);
+        };
+
+        // 选择 track 框（检测框或预测框）
+        cv::Rect uav_rect_raw = has_detection ? track->getBox(): track->getPredictedBox();
+
+        // ===== 在裁剪前对 track 框做面积过滤（关键）=====
+        if (!area_ratio_ok(uav_rect_raw)) {
+            // 这里两种策略二选一：
+            // A) 仅跳过本帧处理（推荐：不会破坏 tracker 内部状态）
+            // continue;
+
+            // B) 同时让 track “视为丢失”（更激进，会加速删除异常轨迹）
+            track->markMissed();
+            continue;
         }
+
+        // 再做安全裁剪（防越界）
         cv::Rect uav_rect = getSafeRect(img, uav_rect_raw);
+        if (uav_rect.width <= 0 || uav_rect.height <= 0) continue;
+
 
         uav_passed++;
         track_count++;
@@ -550,10 +681,10 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         int idx = uav_id - 1; // 6
         bool can_send = (idx < (int)array_limit);
         
-        // UAV框中心点
+        // UAV框偏中心点
         cv::Point2f uav_box_center(
-            uav_rect.x + uav_rect.width / 2.0f,
-            uav_rect.y + uav_rect.height / 2.0f
+            uav_rect.x + uav_rect.width *0.50f,
+            uav_rect.y + uav_rect.height *0.60f
         );
         
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
@@ -566,8 +697,8 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             color_bgr = cv::Scalar(255, 0, 0);
             if (can_send) {
                 if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
-                    detect_result.blue_x[idx] = refined_center.x;
-                    detect_result.blue_y[idx] = refined_center.y;
+                    detect_result.blue_x[idx] = uav_box_center.x;
+                    detect_result.blue_y[idx] = uav_box_center.y;
                     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                         "[UAV] Blue team sent: refined_center=(%.1f, %.1f)", 
                                         refined_center.x, refined_center.y);
@@ -590,8 +721,8 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
             color_bgr = cv::Scalar(0, 0, 255);
             if (can_send) {
                 if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
-                    detect_result.red_x[idx] = refined_center.x;
-                    detect_result.red_y[idx] = refined_center.y;
+                    detect_result.red_x[idx] = uav_box_center.x;
+                    detect_result.red_y[idx] = uav_box_center.y;
                     RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                                         "[UAV] Red team sent: refined_center=(%.1f, %.1f)", 
                                         refined_center.x, refined_center.y);

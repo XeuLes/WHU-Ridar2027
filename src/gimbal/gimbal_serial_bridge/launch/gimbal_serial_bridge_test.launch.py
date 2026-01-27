@@ -1,45 +1,106 @@
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
-from ament_index_python.packages import get_package_share_directory
-import os
+
 
 def generate_launch_description():
-    pkg = get_package_share_directory("gimbal_serial_bridge")
-    params = os.path.join(pkg, "config", "gimbal_serial_bridge.yaml")
+    # ---------- Launch Args ----------
+    serial_port = LaunchConfiguration("serial_port")
+    baud = LaunchConfiguration("baud")
 
-    bridge = Node(
-        package="gimbal_serial_bridge",
-        executable="gimbal_serial_bridge_node",
+    angles_topic = LaunchConfiguration("angles_topic")
+    mode_up_topic = LaunchConfiguration("mode_up_topic")
+    cmd_topic = LaunchConfiguration("cmd_topic")
+    enable_topic = LaunchConfiguration("enable_topic")
+
+    cmd_unit = LaunchConfiguration("cmd_unit")
+
+    publish_hz = LaunchConfiguration("publish_hz")
+    enable_hz = LaunchConfiguration("enable_hz")
+
+    yaw_min_deg = LaunchConfiguration("yaw_min_deg")
+    yaw_max_deg = LaunchConfiguration("yaw_max_deg")
+    yaw_speed_dps = LaunchConfiguration("yaw_speed_dps")
+    pitch_deg = LaunchConfiguration("pitch_deg")
+
+    debug_topic = LaunchConfiguration("debug_topic")
+
+    # 你需要替换成你工程实际的包名/可执行名
+    bridge_package = LaunchConfiguration("bridge_package")
+    bridge_exe = LaunchConfiguration("bridge_exe")
+
+    test_package = LaunchConfiguration("test_package")
+    test_exe = LaunchConfiguration("test_exe")
+
+    # ---------- Declare ----------
+    declare_args = [
+        DeclareLaunchArgument("serial_port", default_value="/dev/ttyACM0"),
+        DeclareLaunchArgument("baud", default_value="115200"),
+
+        DeclareLaunchArgument("angles_topic", default_value="/gimbal/angles"),
+        DeclareLaunchArgument("mode_up_topic", default_value="/gimbal/mode_up"),
+        DeclareLaunchArgument("cmd_topic", default_value="/gimbal/command_angles"),
+        DeclareLaunchArgument("enable_topic", default_value="/gimbal/enable"),
+
+        DeclareLaunchArgument("cmd_unit", default_value="deg"),  # 若下位机为 rad，这里改成 rad
+
+        DeclareLaunchArgument("publish_hz", default_value="100.0"),
+        DeclareLaunchArgument("enable_hz", default_value="10.0"),
+
+        DeclareLaunchArgument("yaw_min_deg", default_value="-90.0"),
+        DeclareLaunchArgument("yaw_max_deg", default_value="90.0"),
+        DeclareLaunchArgument("yaw_speed_dps", default_value="10.0"),
+        DeclareLaunchArgument("pitch_deg", default_value="0.0"),
+
+        DeclareLaunchArgument("debug_topic", default_value="/gimbal/test_rx_angles"),
+
+        # ⚠️ 按你工程实际修改
+        DeclareLaunchArgument("bridge_package", default_value="gimbal_serial_bridge"),
+        DeclareLaunchArgument("bridge_exe", default_value="gimbal_serial_bridge_node"),
+
+        DeclareLaunchArgument("test_package", default_value="gimbal_serial_bridge"),
+        DeclareLaunchArgument("test_exe", default_value="xxx_test_node"),
+    ]
+
+    # ---------- Nodes ----------
+    bridge_node = Node(
+        package=bridge_package,
+        executable=bridge_exe,
         name="gimbal_serial_bridge",
         output="screen",
-        parameters=[
-            params,
-            # 如果你的 yaml 里不是 /dev/ttyACM0，这里直接覆盖（更推荐）
-            {"serial_port": "/tmp/ttyACM0"},
+        parameters=[{
+            "serial_port": serial_port,
+            "baud": baud,
 
-        ],
+            "angles_topic": angles_topic,
+            "mode_up_topic": mode_up_topic,
+            "cmd_topic": cmd_topic,
+            "enable_topic": enable_topic,
+        }]
     )
 
-    tester = Node(
-        package="gimbal_serial_bridge",
-        executable="xxx_test_node",
+    test_node = Node(
+        package=test_package,
+        executable=test_exe,
         name="xxx_test_node",
         output="screen",
         parameters=[{
-            "angles_topic": "/gimbal/angles",
-            "cmd_topic": "/gimbal/command_angles",
-            "enable_topic": "/gimbal/enable",
-            "debug_topic": "/gimbal/test_rx_angles",
+            "angles_topic": angles_topic,
+            "cmd_topic": cmd_topic,
+            "enable_topic": enable_topic,
 
-            "cmd_unit": "deg",      # 若下位机实际用 rad，就改为 "rad"
-            "yaw_min_deg": -90.0,
-            "yaw_max_deg": 90.0,
-            "yaw_speed_dps": 5.0,
-            "pitch_deg": 0.0,
+            "debug_topic": debug_topic,
 
-            "publish_hz": 50.0,
-            "enable_hz": 5.0,
-        }],
+            "cmd_unit": cmd_unit,
+            "yaw_min_deg": yaw_min_deg,
+            "yaw_max_deg": yaw_max_deg,
+            "yaw_speed_dps": yaw_speed_dps,
+            "pitch_deg": pitch_deg,
+
+            "publish_hz": publish_hz,
+            "enable_hz": enable_hz,
+        }]
     )
 
-    return LaunchDescription([bridge, tester])
+    return LaunchDescription(declare_args + [bridge_node, test_node])
