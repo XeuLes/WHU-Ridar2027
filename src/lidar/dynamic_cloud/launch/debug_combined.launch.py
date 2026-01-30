@@ -1,131 +1,154 @@
 import os
-from launch_ros.descriptions import ComposableNode
-from launch_ros.actions import ComposableNodeContainer, Node  # 新增 Node 导入（关键）
 from launch import LaunchDescription
-from launch.actions import Shutdown, LogInfo, ExecuteProcess
+from launch.actions import (
+    DeclareLaunchArgument, ExecuteProcess, LogInfo, OpaqueFunction, Shutdown, TimerAction
+)
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
 from ament_index_python.packages import get_package_share_directory
 
 def generate_launch_description():
-    # -------------------------- 新增：获取 Livox 驱动包路径 --------------------------
-    livox_package = 'livox_ros_driver2'
-    try:
-        livox_share_dir = get_package_share_directory(livox_package)
-    except:
-        raise FileNotFoundError(f"未找到 livox_ros_driver2 包，请先安装！")
-    
-    # -------------------------- 原有配置保留 --------------------------
-    # 获取localization包的路径
+    # -------------------------- 1. 路径与包配置 --------------------------
     localization_share_dir = get_package_share_directory('localization')
-    # 地图点云文件路径
-    map_pcd_path = os.path.join(localization_share_dir, 'config', 'aligned.pcd')
+    livox_package = 'livox_ros2_driver' 
+    livox_share_dir = get_package_share_directory(livox_package)
 
-    # 定义各个节点（原有逻辑不变）
-    def get_localization_node():
+    # -------------------------- 2. 声明模式与驱动参数 --------------------------
+    declare_use_rosbag = DeclareLaunchArgument(
+        'use_rosbag', default_value='false',
+        description='是否使用rosbag（true=rosbag模式，false=实时雷达模式）'
+    )
+    declare_rosbag_file = DeclareLaunchArgument(
+        'rosbag_file', default_value='/home/user/DATA/rosbag.db3',
+        description='rosbag文件路径'
+    )
+    
+    # [新增] 地图路径参数
+    declare_map_path = DeclareLaunchArgument(
+        'target_pcd_path', 
+        default_value='/home/user/code/T-DT_Radar-main/src/lidar/localization/config/基础制造_rm_frame.pcd',
+        description='目标点云地图路径'
+    )
+    
+    # [新增] 手动配准参数文件
+    declare_manual_yaml = DeclareLaunchArgument(
+        'manual_yaml',
+        default_value='/home/user/code/T-DT_Radar-main/src/lidar/localization/config/livox_rm_manual.yaml',
+        description='手动配准生成的参数文件路径'
+    )
+
+    # 雷达驱动参数
+    declare_xfer_format = DeclareLaunchArgument('xfer_format', default_value='0') # PointCloud2
+    declare_multi_topic = DeclareLaunchArgument('multi_topic', default_value='0')
+    declare_publish_freq = DeclareLaunchArgument('publish_freq', default_value='10.0')
+    declare_frame_id = DeclareLaunchArgument('frame_id', default_value='livox_frame')
+
+    # -------------------------- 3. 节点定义逻辑 --------------------------
+    def get_localization_node(context, use_rosbag: bool):
+        # 从上下文解析路径
+        pcd_path = LaunchConfiguration('target_pcd_path').perform(context)
+        yaml_path = LaunchConfiguration('manual_yaml').perform(context)
+
         return ComposableNode(
             package='localization',
             plugin='tdt_radar::Localization',
             name='localization_node',
-            parameters=[{
-                'use_map': True,
-                'map_frame': 'livox_frame',
-            }],
+            parameters=[
+                # 1. 加载 YAML 参数文件 (初始位姿)
+                yaml_path,
+                # 2. 其他覆盖参数
+                {
+                    'target_pcd_path': pcd_path,
+                    'use_rosbag': use_rosbag,
+                    'rosbag_file_path': LaunchConfiguration('rosbag_file'),
+                }
+            ],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
         
-    def get_dynamic_cloud_node():
+    def get_dynamic_cloud_node(context):
+        # 也可以把地图路径传给 dynamic_cloud，保持一致
+        pcd_path = LaunchConfiguration('target_pcd_path').perform(context)
         return ComposableNode(
             package='dynamic_cloud',
             plugin='tdt_radar::DynamicCloud',
             name='dynamic_cloud_node',
+            parameters=[
+                {'map_pcd_path': pcd_path}
+            ],
             extra_arguments=[{'use_intra_process_comms': True}]
         )
 
-    def get_rosbag_player_node():
-        return ComposableNode(
-            package='rosbag_player',
-            plugin='RosbagPlayer',
-            name='rosbag_player_node',
-            parameters=[{
-                'rosbag_file': "/home/user/DATA/rosbag.db3"
-            }],
-            extra_arguments=[{'use_intra_process_comms': True}]
-        )
-
-    # （可选）地图点云发布节点（若之前报错，可注释掉，因为localization已加载地图）
-    def get_map_pcd_publisher():
-        return ComposableNode(
-            package='pcl_ros',
-            plugin='pcl_ros::PCDToPointCloud',
-            name='map_pcd_publisher',
-            parameters=[{
-                'pcd_file': map_pcd_path,
-                'frame_id': 'map',
-                'publish_rate': 0.1,
-                'repeat_delay': -1
-            }],
-            remappings=[('cloud', '/map_point_cloud')],
-            extra_arguments=[{'use_intra_process_comms': True}]
-        )
-
-    # -------------------------- 新增：Livox 驱动节点配置（核心） --------------------------
+    # 实时雷达驱动节点
     livox_driver_node = Node(
-        package=livox_package,  # 驱动包名（固定）
-        executable='livox_ros_driver2_node',  # 驱动可执行文件名（固定）
-        name='livox_lidar_driver',  # 自定义节点名
-        output='screen',  # 日志输出到终端
+        package=livox_package,
+        executable='livox_ros2_driver_node',
+        name='livox_lidar_publisher',
+        output='screen',
         parameters=[{
-            "xfer_format": 0,  # 数据格式：0=PointCloud2（与你的节点兼容）
-            "multi_topic": 0,  # 单话题发布所有点云
-            "data_src": 0,  # 数据来源：0=实时雷达（1=PCAP文件）
-            "publish_freq": 10.0,  # 发布频率（10Hz，匹配MID360硬件）
-            "output_data_type": 0,  # 输出类型：0=点云+强度
-            "frame_id": 'livox_frame',  # 点云坐标系（必须与localization一致！）
-            "user_config_path": os.path.join(livox_share_dir, 'config', 'MID360_config.json'),  # 雷达配置文件路径
-            "cmdline_input_bd_code": 'livox0000000001',  # 雷达绑定码（默认，多雷达需修改）
-            "enable_imu": True,  # 关闭IMU（无需则关闭）
-            "enable_gps": False   # 关闭GPS（无需则关闭）
+            'xfer_format': LaunchConfiguration('xfer_format'),
+            'multi_topic': LaunchConfiguration('multi_topic'),
+            'publish_freq': LaunchConfiguration('publish_freq'),
+            'frame_id': LaunchConfiguration('frame_id'),
+            'user_config_path': os.path.join(livox_share_dir, 'config', 'livox_lidar_config.json'),
         }]
     )
 
-    # 创建节点容器（原有逻辑不变）
-    container = ComposableNodeContainer(
-        name='combined_debug_container',
-        namespace='',
-        package='rclcpp_components',
-        executable='component_container',
-        composable_node_descriptions=[
-            get_localization_node(),
-            get_dynamic_cloud_node(),
-            get_rosbag_player_node(),  # 用实时雷达时，注释rosbag播放
-            # get_map_pcd_publisher()  # 若之前加载报错，直接注释
-        ],
-        output='both',
-        emulate_tty=True,
-        on_exit=Shutdown()
-    )
+    # -------------------------- 4. 动态组合逻辑 (OpaqueFunction) --------------------------
+    def create_nodes(context, *args, **kwargs):
+        use_rosbag = LaunchConfiguration('use_rosbag').perform(context).lower() == 'true'
+        manual_yaml = LaunchConfiguration('manual_yaml').perform(context)
+        rviz_config_path = os.path.join(localization_share_dir, 'rviz', 'map_visualization.rviz')
+        
+        nodes = []
+        nodes.append(LogInfo(msg=f"===== 联合调试模式 ====="))
+        nodes.append(LogInfo(msg=f"数据源: {'ROSBAG' if use_rosbag else '实时雷达'}"))
+        nodes.append(LogInfo(msg=f"加载初始位姿: {manual_yaml}"))
 
-    # RViz2配置（原有逻辑不变）
-    rviz_config_package = 'localization'
-    rviz_package_share_dir = get_package_share_directory(rviz_config_package)
-    rviz_config_path = os.path.join(rviz_package_share_dir, 'rviz', 'map_visualization.rviz')
+        # 核心节点容器
+        container = ComposableNodeContainer(
+            name='combined_debug_container',
+            namespace='',
+            package='rclcpp_components',
+            executable='component_container',
+            composable_node_descriptions=[
+                get_localization_node(context, use_rosbag),
+                get_dynamic_cloud_node(context),
+            ],
+            output='both',
+            on_exit=Shutdown()
+        )
+        
+        # 根据模式选择数据源
+        if use_rosbag:
+            nodes.append(ExecuteProcess(
+                cmd=['ros2', 'bag', 'play', LaunchConfiguration('rosbag_file'), '--loop'], # 建议加上 --loop
+                output='screen', on_exit=Shutdown()
+            ))
+        else:
+            nodes.append(livox_driver_node)
 
-    log_rviz_path = LogInfo(msg=f"RViz2 config path: {rviz_config_path}")
-    log_map_path = LogInfo(msg=f"Map PCD file path: {map_pcd_path}")
-    log_livox_config = LogInfo(msg=f"Livox config path: {os.path.join(livox_share_dir, 'config', 'MID360_config.json')}")  # 新增驱动配置日志
+        # 容器延迟启动，确保数据源先就绪
+        nodes.append(TimerAction(period=1.5, actions=[container]))
 
-    # 启动RViz2（原有逻辑不变）
-    rviz_node = ExecuteProcess(
-        cmd=['ros2', 'run', 'rviz2', 'rviz2', '-d', rviz_config_path],
-        output='screen',
-        on_exit=Shutdown()
-    )
+        # 启动 RViz
+        nodes.append(ExecuteProcess(
+            cmd=['ros2', 'run', 'rviz2', 'rviz2', '-d', rviz_config_path],
+            output='screen', on_exit=Shutdown()
+        ))
+        
+        return nodes
 
-    # -------------------------- 新增：将驱动节点加入启动列表 --------------------------
+    # -------------------------- 5. 返回启动描述 --------------------------
     return LaunchDescription([
-        log_rviz_path,
-        log_map_path,
-        log_livox_config,  # 新增日志
-        # livox_driver_node,  # 启动Livox驱动（先启动，确保点云先发布）
-        container,
-        rviz_node
+        declare_use_rosbag,
+        declare_rosbag_file,
+        declare_map_path,
+        declare_manual_yaml,
+        declare_xfer_format,
+        declare_multi_topic,
+        declare_publish_freq,
+        declare_frame_id,
+        OpaqueFunction(function=create_nodes),
     ])

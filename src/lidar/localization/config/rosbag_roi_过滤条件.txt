@@ -1,0 +1,28 @@
+    // for (size_t i = 0; i < transformed_cloud.size(); i++) {
+    //     auto& point = transformed_cloud.points[i];
+    //     // 过滤条件：去除超出场景范围、地面以下或特定干扰区域的点
+    //     if (point.x < 3 || point.x > 28 || point.y < 0 || point.y > 15 ||
+    //         point.z < 0 || point.z > 1.4 ||
+    //         (point.y > 0 && point.y < 5 && point.x > 25) ||
+    //         ((21.5 - 2.9 / sqrt(2)) < (point.x + point.y) &&
+    //          (point.x + point.y) < (21.5 + 2.9 / sqrt(2)) &&
+    //          (-6.5 - 0.9 / sqrt(2)) < (point.y - point.x) &&
+    //          (point.y - point.x) < (-6.5 + 0.9 / sqrt(2)))) {
+    //         // if (point.x < 26 || point.x > 49 ||  //
+    //         // 缩小x范围，只保留核心场景
+    //         //     point.y < 35 || point.y > 52 ||  // 缩小y范围
+    //         //     point.z < 0 || point.z > 10) {  //
+    //         //     缩小z范围，过滤地面和高空噪声
+    //         //若点在飞镖或飞机检测区域，则保存到other_filtered_cloud
+    //         if ((point.x > 28 - 0.5889 - 0.1885 && point.x < 28 - 0.5889) &&
+    //                 (point.y > 3.925 && point.y < 4.525) &&
+    //                 (point.z > 2.4722 - 0.859 + 0.1 && point.z < 2.4722) ||
+    //             (point.x > 13 && point.x < 27.5) &&
+    //                 (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
+    //                 (point.z > 1.7 && point.z < 3)) {
+    //             other_filtered_cloud.push_back(point);
+    //         }
+    //         continue;  // 跳过无效点
+    //     }
+    //     filtered_cloud.push_back(point);  // 保留有效点
+    // }

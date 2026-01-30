@@ -45,13 +45,13 @@ def generate_launch_description():
 
         DeclareLaunchArgument("cmd_unit", default_value="deg"),  # 若下位机为 rad，这里改成 rad
 
-        DeclareLaunchArgument("publish_hz", default_value="100.0"),
+        DeclareLaunchArgument("publish_hz", default_value="1000.0"),
         DeclareLaunchArgument("enable_hz", default_value="10.0"),
 
-        DeclareLaunchArgument("yaw_min_deg", default_value="-90.0"),
-        DeclareLaunchArgument("yaw_max_deg", default_value="90.0"),
-        DeclareLaunchArgument("yaw_speed_dps", default_value="10.0"),
-        DeclareLaunchArgument("pitch_deg", default_value="0.0"),
+        DeclareLaunchArgument("yaw_min_deg", default_value="-50.0"),
+        DeclareLaunchArgument("yaw_max_deg", default_value="50.0"),
+        DeclareLaunchArgument("yaw_speed_dps", default_value="120.0"),
+        DeclareLaunchArgument("pitch_deg", default_value="2.0"),
 
         DeclareLaunchArgument("debug_topic", default_value="/gimbal/test_rx_angles"),
 

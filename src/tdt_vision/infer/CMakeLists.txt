@@ -35,10 +35,21 @@ include_directories(
 )
 
 # 5. 源文件和目标编译（显式指定CUDA文件处理）
-file(GLOB_RECURSE SRCS 
-    ${PROJECT_SOURCE_DIR}/src/*.cpp 
-    ${PROJECT_SOURCE_DIR}/src/*.cu  # 包含CUDA源文件
+file(GLOB_RECURSE CPP_SRCS
+    ${PROJECT_SOURCE_DIR}/src/*.cpp
 )
+
+file(GLOB_RECURSE CU_SRCS
+    ${PROJECT_SOURCE_DIR}/src/*.cu
+)
+
+# ---- 关键：排除旧实现 yolo.cu（一定要命中你的实际文件名）----
+list(FILTER CU_SRCS EXCLUDE REGEX ".*/yolo\\.cu$")
+
+# ---- 关键：如果你新文件叫 yolov8.cu，就显式加入它 ----
+list(APPEND CU_SRCS ${PROJECT_SOURCE_DIR}/src/yolov8.cu)
+
+set(SRCS ${CPP_SRCS} ${CU_SRCS})
 add_library(infer SHARED ${SRCS})
 
 # 6. 确保CUDA目标使用正确的架构

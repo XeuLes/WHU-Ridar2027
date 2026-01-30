@@ -34,8 +34,8 @@ private:
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr sub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr    pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr other_pub_;
-    rclcpp::Publisher<vision_interface::msg::RadarWarn>::SharedPtr
-         detect_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr roi_pub_;
+    rclcpp::Publisher<vision_interface::msg::RadarWarn>::SharedPtr  detect_pub_;
     void callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void GetDynamicCloud(pcl::PointCloud<pcl::PointXYZ>& input_cloud,
                          pcl::PointCloud<pcl::PointXYZ>& output_cloud,

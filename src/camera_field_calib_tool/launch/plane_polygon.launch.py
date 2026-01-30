@@ -71,7 +71,7 @@ def generate_launch_description():
     # ============================================================
     declare_image_topic_cmd = DeclareLaunchArgument(
         "image_topic",
-        default_value="/camera/image",
+        default_value="/camera0/image",
         description="Input image topic for plane_polygon_node",
     )
 

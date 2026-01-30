@@ -194,8 +194,8 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
 
     // 4. 自动转换ONNX为TensorRT引擎（如不存在）
     std::ifstream file1(yolo_path.c_str());
-    if (!file1.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/RM2025.onnx --saveEngine=model/TensorRT/yolo.engine --minBatch 1 --optBatch 1 --maxBatch 2 --Shape=1280x1280 --input_name=images");
-    
+    // if (!file1.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/self_car.onnx --saveEngine=model/TensorRT/self_car.engine --minBatch 1 --optBatch 1 --maxBatch 2 --Shape=1280x1280 --input_name=images");
+    if (!file1.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/self_car.onnx --saveEngine=model/TensorRT/self_car.engine");
     std::ifstream file2(armor_path.c_str());
     if (!file2.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/armor_yolo.onnx --saveEngine=model/TensorRT/armor_yolo.engine --minBatch 1 --optBatch 5 --maxBatch 12 --Shape=192x192 --input_name=images");
 
@@ -218,11 +218,8 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     // 6. 加载UAV检测器
     std::ifstream file_uav(uav_path.c_str());
     if (!file_uav.good()) {
-        RCLCPP_WARN(this->get_logger(), "[INIT] ⚠ UAV TRT engine file NOT found at: %s", uav_path.c_str());
-        RCLCPP_INFO(this->get_logger(), "[INIT] Attempting ONNX to TensorRT conversion...");
-        system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/best.onnx --saveEngine=model/TensorRT/uav_test.engine --minBatch 1 --optBatch 5 --maxBatch 12 --Shape=1280x1280 --input_name=images");
+        system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/uav.onnx --saveEngine=model/TensorRT/uav.engine --minBatch 1 --optBatch 5 --maxBatch 12 --Shape=1280x1280 --input_name=images");
     } else {
-        RCLCPP_INFO(this->get_logger(), "[INIT] ✓ UAV TRT engine file found: %s", uav_path.c_str());
         file_uav.close();
     }
 
@@ -237,22 +234,18 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     }
 
     // 7. 初始化UAV检测辅助模块
-    RCLCPP_INFO(this->get_logger(), "[INIT] Initializing light bar detector...");
     this->light_bar_detector_ = std::make_shared<LightBarDetector>();  // 灯条精细检测器
     
     // 8. 初始化UAV DeepSORT跟踪器（结合卡尔曼滤波）
-    RCLCPP_INFO(this->get_logger(), "[INIT] Initializing UAV DeepSORT tracker...");
     // 参数说明：
     //   max_iou_distance = 0.7   - IOU距离阈值（1-IOU < 0.7认为是同一目标）
     //   max_feature_distance = 0.3 - 特征距离阈值（暂未使用外观特征）
     //   feature_weight = 0.0     - 特征权重（0=纯IOU匹配，1=纯特征匹配）
     this->uav_tracker_ = std::make_shared<UAVDeepSORTTracker>(0.7f, 0.3f, 0.0f);
-    RCLCPP_INFO(this->get_logger(), "[INIT] ✓ UAV DeepSORT tracker initialized (with Kalman Filter)");
-    RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Light bar detector initialized for UAV armor detection");
 
     // 9. 创建ROS2订阅者和发布者
     image_sub = this->create_subscription<sensor_msgs::msg::Image>(
-        "camera_image", rclcpp::SensorDataQoS(),
+        "/camera0/image", rclcpp::SensorDataQoS(),
         std::bind(&Detect::callback, this, std::placeholders::_1));
 
     pub = this->create_publisher<vision_interface::msg::DetectResult>(
@@ -367,18 +360,35 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
         std::vector<cv::Rect> car_rects;
         
         for (const auto& box : result) {
+            RCLCPP_INFO(this->get_logger(), "Detected object: ID=%d, Conf=%.3f, Rect=[%.1f,%.1f,%.1f,%.1f]", 
+                box.class_label, box.confidence, box.left, box.top, box.right, box.bottom);
             if (box.class_label == 0 || box.class_label == 1) {
-                cv::Rect temp_rect(box.left, box.top, box.right - box.left, box.bottom - box.top);
+                int l = (int)std::round(box.left);
+                int t = (int)std::round(box.top);
+                int r = (int)std::round(box.right);
+                int b = (int)std::round(box.bottom);
+
+                cv::Rect temp_rect(l, t, r - l, b - t);
                 cv::Rect temp_car_rect = getSafeRect(img, temp_rect);
                 
-                // 过滤过小的检测框（可能是误检）
+                // 过滤过小的检测框
                 if (temp_car_rect.area() < 50 * 50) continue;
-                
+
+                // 【关键点：提前绘制】
+                // 只要进了这个 if，说明 YOLO 已经检出了车，在这里直接画框
+                if (debug) {
+                    // 使用黄色 (0, 255, 255) 表示“原始检测车框”
+                    cv::rectangle(img, temp_car_rect, cv::Scalar(0, 255, 255), 2);
+                    cv::putText(img, "Car-Detected", cv::Point(temp_car_rect.x, temp_car_rect.y - 5),
+                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 1);
+                }
+
                 car_imgs.push_back(img(temp_car_rect).clone());
                 car_rects.push_back(temp_car_rect);
                 
                 Car car;
                 car.car = box;
+                car.car_rect = temp_car_rect; // 确保存入结构体供后续使用
                 cars.push_back(car);
             }
         }
@@ -817,7 +827,8 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] blue_x[%d]=%.2f, blue_y[%d]=%.2f, red_x[%d]=%.2f, red_y[%d]=%.2f", 
         idx, detect_result.blue_x[idx], idx, detect_result.blue_y[idx], idx, detect_result.red_x[idx], idx, detect_result.red_y[idx]);
 
-    // 5.1 发布检测结果到话题
+    // 5.1 设置header.stamp为当前时间并发布检测结果到话题
+    //detect_result.header.stamp = this->now();
     pub->publish(detect_result);
 
     // 5.2 计算检测耗时
@@ -827,7 +838,7 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 
     // 5.3 可视化调试输出
     cv::Mat final_img;
-    cv::resize(img, final_img, cv::Size(1536, 1125));
+    cv::resize(img, final_img, cv::Size(1080, 960));
     
     // 显示检测统计信息（显示过滤后的UAV数量）
     std::string status_text = "Cars: " + std::to_string(result.size()) + " | UAVs: " + std::to_string(uav_filtered.size());

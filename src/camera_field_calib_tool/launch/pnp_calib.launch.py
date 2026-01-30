@@ -54,7 +54,7 @@ def generate_launch_description():
     # -----------------------------
     declare_image_topic_cmd = DeclareLaunchArgument(
         "image_topic",
-        default_value="/camera/image",
+        default_value="/camera0/image",
         description="Input image topic for pnp_calib_node (sensor_msgs/Image). "
                     "Set this to hik driver output, e.g. /hik_camera/image_raw if needed.",
     )

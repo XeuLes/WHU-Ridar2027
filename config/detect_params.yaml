@@ -1,6 +1,6 @@
 %YAML:1.0
 ---
-yolo_path: "model/TensorRT/yolo.engine"
+yolo_path: "model/TensorRT/self_car.engine"
 armor_path: "model/TensorRT/armor_yolo.engine"
 classify_path: "model/TensorRT/classify.engine"
 uav_path: "model/TensorRT/uav.engine"
