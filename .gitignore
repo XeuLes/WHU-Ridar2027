@@ -1,13 +1,13 @@
 build/
 log/
 install/
-model/
+
 scripts
 .cache/
 .vscode/
 
 config/merged_bag/*
 
-*.engine
+
 
 ros2bags/
