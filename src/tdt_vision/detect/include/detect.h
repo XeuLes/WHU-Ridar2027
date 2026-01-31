@@ -67,6 +67,7 @@ private:
     std::shared_ptr<Infer<yolo::BoxArray>>     armor_yolo;
     std::shared_ptr<Infer<yolo::BoxArray>>     uav_detector;
     std::shared_ptr<Infer<int>> classifier;
+    std::string image_topic_;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr pub;
 
     bool        if_rosbag = false;

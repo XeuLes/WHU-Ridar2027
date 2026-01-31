@@ -62,7 +62,7 @@ void KalmanFilter::match_callback(
     const vision_interface::msg::MatchInfo::SharedPtr msg)
 {
     this->match_info = *msg;  // 保存匹配信息
-    RCLCPP_INFO(this->get_logger(), "Match_info_callback");  // 日志输出
+    // RCLCPP_INFO(this->get_logger(), "Match_info_callback");  // 日志输出
 }
 
 // 检测结果回调函数

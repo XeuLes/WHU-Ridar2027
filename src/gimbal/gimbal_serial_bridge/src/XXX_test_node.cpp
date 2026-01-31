@@ -3,6 +3,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/u_int8.hpp>
+#include <sensor_msgs/msg/image.hpp>
 
 #include <atomic>
 #include <cerrno>
@@ -14,14 +15,17 @@
 #include <thread>
 #include <vector>
 #include <condition_variable>
+#include <deque>
+#include <utility>
+#include <cmath>
+#include <algorithm>
+#include <sstream>
+#include <iomanip>
 
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
 #include <poll.h>
-#include <iomanip>
-#include <sstream>
-#include <cmath>
 
 using namespace std::chrono_literals;
 
@@ -29,8 +33,8 @@ namespace {
 #pragma pack(push, 1)
 struct GimbalToVision {
     uint8_t  head[2];  // 'S','P'
-    uint8_t  mode;     // {0,1} in laser project
-    float    q[4];     // wxyz (ignored)
+    uint8_t  mode;     // {0,1}
+    float    q[4];     // ignored
     float    yaw;
     float    yaw_vel;
     float    pitch;
@@ -42,7 +46,7 @@ struct GimbalToVision {
 
 struct VisionToGimbal {
     uint8_t  head[2];  // 'S','P'
-    uint8_t  mode;     // {0,1} in laser project
+    uint8_t  mode;     // {0,1}
     float    yaw;
     float    yaw_vel;
     float    yaw_acc;
@@ -52,9 +56,6 @@ struct VisionToGimbal {
     uint16_t crc16;
 };
 #pragma pack(pop)
-
-static_assert(sizeof(GimbalToVision) <= 64, "GimbalToVision too large");
-static_assert(sizeof(VisionToGimbal) <= 64, "VisionToGimbal too large");
 
 static std::string hex_dump(const uint8_t* data, size_t len)
 {
@@ -103,19 +104,15 @@ static bool set_baudrate(termios& tty, int baud)
 static int open_serial(const std::string& dev, int baud, std::string& err_out)
 {
     err_out.clear();
-
-    // 低延迟建议：不要 O_SYNC；使用 NONBLOCK + poll
     int fd = ::open(dev.c_str(), O_RDWR | O_NOCTTY | O_NONBLOCK);
     if (fd < 0) {
-        err_out = "open() failed: errno=" + std::to_string(errno) + " " +
-                  std::string(std::strerror(errno));
+        err_out = "open() failed: errno=" + std::to_string(errno) + " " + std::string(std::strerror(errno));
         return -1;
     }
 
     termios tty{};
     if (tcgetattr(fd, &tty) != 0) {
-        err_out = "tcgetattr() failed: errno=" + std::to_string(errno) + " " +
-                  std::string(std::strerror(errno));
+        err_out = "tcgetattr() failed: errno=" + std::to_string(errno) + " " + std::string(std::strerror(errno));
         ::close(fd);
         return -1;
     }
@@ -129,7 +126,6 @@ static int open_serial(const std::string& dev, int baud, std::string& err_out)
     tty.c_cflag &= ~CSIZE;
     tty.c_cflag |= CS8;
 
-    // 非阻塞读：交给 poll() 控制等待
     tty.c_cc[VMIN]  = 0;
     tty.c_cc[VTIME] = 0;
 
@@ -140,8 +136,7 @@ static int open_serial(const std::string& dev, int baud, std::string& err_out)
     }
 
     if (tcsetattr(fd, TCSANOW, &tty) != 0) {
-        err_out = "tcsetattr() failed: errno=" + std::to_string(errno) + " " +
-                  std::string(std::strerror(errno));
+        err_out = "tcsetattr() failed: errno=" + std::to_string(errno) + " " + std::string(std::strerror(errno));
         ::close(fd);
         return -1;
     }
@@ -155,12 +150,8 @@ static bool write_all_nonblock(int fd, const uint8_t* buf, size_t n)
     size_t sent = 0;
     while (sent < n) {
         ssize_t w = ::write(fd, buf + sent, n - sent);
-        if (w > 0) {
-            sent += static_cast<size_t>(w);
-            continue;
-        }
+        if (w > 0) { sent += static_cast<size_t>(w); continue; }
         if (w < 0 && (errno == EAGAIN || errno == EINTR)) {
-            // 让出一点点调度，但不 sleep 很久
             std::this_thread::yield();
             continue;
         }
@@ -169,7 +160,80 @@ static bool write_all_nonblock(int fd, const uint8_t* buf, size_t n)
     return true;
 }
 
-}  // namespace
+// triangle wave in [-1,1] (continuous)
+static double triangle_wave(double t, double period, double phase01)
+{
+    if (period <= 1e-9) return 0.0;
+    double p = std::fmod(t / period + phase01, 1.0);
+    if (p < 0) p += 1.0;
+    return 4.0 * std::abs(p - 0.5) - 1.0;
+}
+
+// sine wave in [-1,1] (continuous)
+static double sine_wave(double t, double period, double phase01)
+{
+    if (period <= 1e-9) return 0.0;
+    const double phase = 2.0 * M_PI * (t / period + phase01);
+    return std::sin(phase);
+}
+
+// step wave in [-1,1] (discrete, sample-hold by time interval)
+// - step_dt: time interval between level changes
+// - levels: number of discrete levels between [-1,1], >= 2
+// - phase01: phase shift in [0,1) applied as shift in "step index" within a cycle
+static double step_wave(double t, double step_dt, int levels, double phase01)
+{
+    if (step_dt <= 1e-9) return 0.0;
+    if (levels < 2) levels = 2;
+
+    // number of steps for one back-and-forth cycle
+    const int up_steps = levels - 1;                 // from -1 to +1 inclusive needs levels-1 increments
+    const int cycle_steps = 2 * up_steps;            // up then down
+
+    // step index by time
+    long long k = static_cast<long long>(std::floor(t / step_dt));
+    long long phase_shift = static_cast<long long>(std::llround(phase01 * static_cast<double>(cycle_steps)));
+    long long s = (k + phase_shift) % cycle_steps;
+    if (s < 0) s += cycle_steps;
+
+    // triangle in step domain: 0..up_steps..0
+    int idx = 0;
+    if (s <= up_steps) idx = static_cast<int>(s);
+    else idx = static_cast<int>(cycle_steps - s);
+
+    // map idx in [0, up_steps] to value in [-1, +1]
+    double v = -1.0 + 2.0 * (static_cast<double>(idx) / static_cast<double>(up_steps));
+    return std::max(-1.0, std::min(1.0, v));
+}
+
+static inline void set_pixel_rgb(std::vector<uint8_t>& img, int w, int h, int x, int y,
+                                 uint8_t r, uint8_t g, uint8_t b)
+{
+    if (x < 0 || x >= w || y < 0 || y >= h) return;
+    const size_t idx = static_cast<size_t>((y * w + x) * 3);
+    img[idx + 0] = r;
+    img[idx + 1] = g;
+    img[idx + 2] = b;
+}
+
+static void draw_line(std::vector<uint8_t>& img, int w, int h,
+                      int x0, int y0, int x1, int y1,
+                      uint8_t r, uint8_t g, uint8_t b)
+{
+    int dx = std::abs(x1 - x0), sx = x0 < x1 ? 1 : -1;
+    int dy = -std::abs(y1 - y0), sy = y0 < y1 ? 1 : -1;
+    int err = dx + dy;
+
+    while (true) {
+        set_pixel_rgb(img, w, h, x0, y0, r, g, b);
+        if (x0 == x1 && y0 == y1) break;
+        int e2 = 2 * err;
+        if (e2 >= dy) { err += dy; x0 += sx; }
+        if (e2 <= dx) { err += dx; y0 += sy; }
+    }
+}
+
+} // namespace
 
 class GimbalSerialBridge final : public rclcpp::Node {
 public:
@@ -181,22 +245,27 @@ public:
 
         start_tp_ = std::chrono::steady_clock::now();
 
-        pub_angles_ =
-            this->create_publisher<std_msgs::msg::Float64MultiArray>(
-                angles_topic_, rclcpp::SensorDataQoS());
+        pub_angles_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+            angles_topic_, rclcpp::SensorDataQoS());
         pub_mode_ = this->create_publisher<std_msgs::msg::UInt8>(
             mode_up_topic_, rclcpp::QoS(10));
 
-        sub_cmd_ =
-            this->create_subscription<std_msgs::msg::Float64MultiArray>(
-                cmd_topic_, rclcpp::QoS(10),
-                std::bind(&GimbalSerialBridge::onCmd, this,
-                          std::placeholders::_1));
+        sub_cmd_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
+            cmd_topic_, rclcpp::QoS(10),
+            std::bind(&GimbalSerialBridge::onCmd, this, std::placeholders::_1));
 
         sub_enable_ = this->create_subscription<std_msgs::msg::Bool>(
             enable_topic_, rclcpp::QoS(10),
-            std::bind(&GimbalSerialBridge::onEnable, this,
-                      std::placeholders::_1));
+            std::bind(&GimbalSerialBridge::onEnable, this, std::placeholders::_1));
+
+        if (lissajous_enable_) {
+            pub_lissajous_img_ = this->create_publisher<sensor_msgs::msg::Image>(
+                lissajous_topic_, rclcpp::QoS(1));
+            const double hz = std::max(1.0, lissajous_rate_hz_);
+            lissajous_timer_ = this->create_wall_timer(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(1.0 / hz)),
+                std::bind(&GimbalSerialBridge::publishLissajousImage, this));
+        }
 
         rx_thread_ = std::thread(&GimbalSerialBridge::rxLoop, this);
         tx_thread_ = std::thread(&GimbalSerialBridge::txLoop, this);
@@ -211,37 +280,19 @@ public:
     ~GimbalSerialBridge() override
     {
         quit_.store(true);
-
-        // 唤醒 TX 线程退出
-        {
-            std::lock_guard<std::mutex> lk(tx_cv_mtx_);
-            tx_req_seq_++;
-        }
+        { std::lock_guard<std::mutex> lk(tx_cv_mtx_); tx_req_seq_++; }
         tx_cv_.notify_all();
 
         if (rx_thread_.joinable()) rx_thread_.join();
         if (tx_thread_.joinable()) tx_thread_.join();
-
         closeFd();
     }
 
 private:
-    // 三角波：输出 [-1, +1]，用于“往复”
-    static double triangle_wave(double t, double period, double phase01 = 0.25)
-    {
-        // phase01: [0,1) 相位偏移。0.25 让 t=0 从“中位开始向上扫”更直观
-        if (period <= 1e-9) return 0.0;
-        double p = std::fmod(t / period + phase01, 1.0);
-        if (p < 0) p += 1.0;
-        // 经典三角波（V形），范围 [-1,1]
-        return 4.0 * std::abs(p - 0.5) - 1.0;
-    }
-
     void declareParams()
     {
         this->declare_parameter<std::string>("serial_port", "/dev/ttyUSB0");
-        this->declare_parameter<std::vector<std::string>>(
-            "serial_ports", std::vector<std::string>{});
+        this->declare_parameter<std::vector<std::string>>("serial_ports", std::vector<std::string>{});
         this->declare_parameter<int>("baud", 115200);
 
         this->declare_parameter<std::string>("angles_topic", "/gimbal/angles");
@@ -249,20 +300,46 @@ private:
         this->declare_parameter<std::string>("cmd_topic", "/gimbal/command_angles");
         this->declare_parameter<std::string>("enable_topic", "/gimbal/enable");
 
-        this->declare_parameter<std::string>("angle_unit", "rad"); // rad/deg
+        this->declare_parameter<std::string>("angle_unit", "rad"); // 仅标记
         this->declare_parameter<int>("yaw_index", 0);
         this->declare_parameter<int>("pitch_index", 1);
 
         this->declare_parameter<bool>("default_enable", false);
 
-        // ---- pitch 周期往复（扫动） ----
-        this->declare_parameter<bool>("pitch_sweep_enable", false);
-        this->declare_parameter<bool>("pitch_sweep_add_to_cmd", false); // true=叠加cmd_pitch，false=覆盖
-        this->declare_parameter<double>("pitch_sweep_center", 0.0);     // center（单位同发送）
-        this->declare_parameter<double>("pitch_sweep_amplitude", 0.3);  // amplitude（默认0.3rad）
-        this->declare_parameter<double>("pitch_sweep_period", 2.0);     // seconds
-        this->declare_parameter<double>("pitch_sweep_phase01", 0.25);   // 0~1，相位偏移
-        this->declare_parameter<double>("tx_period_ms", 0.0);           // >0 时 TX 定频发送（ms），扫动强烈建议 10~20ms
+        // ---- yaw sweep ----
+        this->declare_parameter<bool>("yaw_sweep_enable", true);
+        this->declare_parameter<bool>("yaw_sweep_add_to_cmd", false);
+        this->declare_parameter<double>("yaw_sweep_center", 0.0);
+        this->declare_parameter<double>("yaw_sweep_amplitude", 0.6);
+        this->declare_parameter<double>("yaw_sweep_period", 2.0);
+        this->declare_parameter<double>("yaw_sweep_phase01", 0.0);
+        this->declare_parameter<std::string>("yaw_sweep_wave", "sine"); // "sine" | "triangle" | "step"
+        this->declare_parameter<double>("yaw_step_dt", 0.05);           // step模式：每隔多少秒跳到下一个离散级
+        this->declare_parameter<int>("yaw_step_levels", 9);             // step模式：离散级数(>=2)
+
+        // ---- pitch sweep ----
+        this->declare_parameter<bool>("pitch_sweep_enable", true);
+        this->declare_parameter<bool>("pitch_sweep_add_to_cmd", false);
+        this->declare_parameter<double>("pitch_sweep_center", 0.0);
+        this->declare_parameter<double>("pitch_sweep_amplitude", 0.3);
+        this->declare_parameter<double>("pitch_sweep_period", 3.0);
+        this->declare_parameter<double>("pitch_sweep_phase01", 0.25);
+        this->declare_parameter<std::string>("pitch_sweep_wave", "sine"); // "sine" | "triangle" | "step"
+        this->declare_parameter<double>("pitch_step_dt", 0.05);
+        this->declare_parameter<int>("pitch_step_levels", 9);
+
+        this->declare_parameter<double>("tx_period_ms", 10.0);
+
+        // ---- Lissajous visualization ----
+        this->declare_parameter<bool>("lissajous_enable", true);
+        this->declare_parameter<std::string>("lissajous_topic", "/gimbal/lissajous_image");
+        this->declare_parameter<int>("lissajous_width", 640);
+        this->declare_parameter<int>("lissajous_height", 640);
+        this->declare_parameter<int>("lissajous_history", 2000);
+        this->declare_parameter<double>("lissajous_rate_hz", 30.0);
+        this->declare_parameter<double>("lissajous_yaw_range", 0.0);
+        this->declare_parameter<double>("lissajous_pitch_range", 0.0);
+        this->declare_parameter<bool>("lissajous_draw_axes", true);
     }
 
     void loadParams()
@@ -284,29 +361,73 @@ private:
 
         enable_.store(this->get_parameter("default_enable").as_bool());
 
-        // ---- pitch sweep ----
+        // yaw sweep
+        yaw_sweep_enable_ = this->get_parameter("yaw_sweep_enable").as_bool();
+        yaw_sweep_add_to_cmd_ = this->get_parameter("yaw_sweep_add_to_cmd").as_bool();
+        yaw_sweep_center_ = this->get_parameter("yaw_sweep_center").as_double();
+        yaw_sweep_amplitude_ = std::abs(this->get_parameter("yaw_sweep_amplitude").as_double());
+        yaw_sweep_period_ = this->get_parameter("yaw_sweep_period").as_double();
+        yaw_sweep_phase01_ = this->get_parameter("yaw_sweep_phase01").as_double();
+        yaw_sweep_wave_ = this->get_parameter("yaw_sweep_wave").as_string();
+        yaw_step_dt_ = this->get_parameter("yaw_step_dt").as_double();
+        yaw_step_levels_ = this->get_parameter("yaw_step_levels").as_int();
+
+        // pitch sweep
         pitch_sweep_enable_ = this->get_parameter("pitch_sweep_enable").as_bool();
         pitch_sweep_add_to_cmd_ = this->get_parameter("pitch_sweep_add_to_cmd").as_bool();
         pitch_sweep_center_ = this->get_parameter("pitch_sweep_center").as_double();
-        pitch_sweep_amplitude_ = this->get_parameter("pitch_sweep_amplitude").as_double();
+        pitch_sweep_amplitude_ = std::abs(this->get_parameter("pitch_sweep_amplitude").as_double());
         pitch_sweep_period_ = this->get_parameter("pitch_sweep_period").as_double();
         pitch_sweep_phase01_ = this->get_parameter("pitch_sweep_phase01").as_double();
-        tx_period_ms_ = this->get_parameter("tx_period_ms").as_double();
+        pitch_sweep_wave_ = this->get_parameter("pitch_sweep_wave").as_string();
+        pitch_step_dt_ = this->get_parameter("pitch_step_dt").as_double();
+        pitch_step_levels_ = this->get_parameter("pitch_step_levels").as_int();
 
-        if (pitch_sweep_period_ <= 1e-6) pitch_sweep_period_ = 1.0;
-        if (pitch_sweep_amplitude_ < 0.0) pitch_sweep_amplitude_ = -pitch_sweep_amplitude_;
-        if (pitch_sweep_phase01_ < 0.0) pitch_sweep_phase01_ = 0.0;
-        if (pitch_sweep_phase01_ >= 1.0) pitch_sweep_phase01_ = std::fmod(pitch_sweep_phase01_, 1.0);
+        tx_period_ms_ = this->get_parameter("tx_period_ms").as_double();
         if (tx_period_ms_ < 0.0) tx_period_ms_ = 0.0;
+
+        auto norm_phase = [](double& p) {
+            if (p < 0.0) p = 0.0;
+            if (p >= 1.0) p = std::fmod(p, 1.0);
+        };
+        if (yaw_sweep_period_ <= 1e-6) yaw_sweep_period_ = 1.0;
+        if (pitch_sweep_period_ <= 1e-6) pitch_sweep_period_ = 1.0;
+        norm_phase(yaw_sweep_phase01_);
+        norm_phase(pitch_sweep_phase01_);
+
+        if (yaw_step_dt_ <= 1e-6) yaw_step_dt_ = 0.05;
+        if (pitch_step_dt_ <= 1e-6) pitch_step_dt_ = 0.05;
+        if (yaw_step_levels_ < 2) yaw_step_levels_ = 2;
+        if (pitch_step_levels_ < 2) pitch_step_levels_ = 2;
+
+        // lissajous
+        lissajous_enable_ = this->get_parameter("lissajous_enable").as_bool();
+        lissajous_topic_ = this->get_parameter("lissajous_topic").as_string();
+        lissajous_width_ = this->get_parameter("lissajous_width").as_int();
+        lissajous_height_ = this->get_parameter("lissajous_height").as_int();
+        lissajous_history_ = this->get_parameter("lissajous_history").as_int();
+        lissajous_rate_hz_ = this->get_parameter("lissajous_rate_hz").as_double();
+        lissajous_yaw_range_ = this->get_parameter("lissajous_yaw_range").as_double();
+        lissajous_pitch_range_ = this->get_parameter("lissajous_pitch_range").as_double();
+        lissajous_draw_axes_ = this->get_parameter("lissajous_draw_axes").as_bool();
+
+        if (lissajous_width_ < 64) lissajous_width_ = 64;
+        if (lissajous_height_ < 64) lissajous_height_ = 64;
+        if (lissajous_history_ < 100) lissajous_history_ = 100;
+        if (lissajous_rate_hz_ < 1.0) lissajous_rate_hz_ = 1.0;
+
+        if (lissajous_yaw_range_ <= 1e-9) {
+            lissajous_yaw_range_ = std::max(1e-3, std::abs(yaw_sweep_center_) + yaw_sweep_amplitude_);
+        }
+        if (lissajous_pitch_range_ <= 1e-9) {
+            lissajous_pitch_range_ = std::max(1e-3, std::abs(pitch_sweep_center_) + pitch_sweep_amplitude_);
+        }
     }
 
     void closeFd()
     {
         std::lock_guard<std::mutex> lk(fd_mutex_);
-        if (fd_ >= 0) {
-            ::close(fd_);
-            fd_ = -1;
-        }
+        if (fd_ >= 0) { ::close(fd_); fd_ = -1; }
         opened_dev_.clear();
     }
 
@@ -325,9 +446,7 @@ private:
             if (fd >= 0) {
                 fd_ = fd;
                 opened_dev_ = dev;
-                RCLCPP_INFO(this->get_logger(),
-                            "Serial opened: %s (baud=%d)",
-                            opened_dev_.c_str(), baud_);
+                RCLCPP_INFO(this->get_logger(), "Serial opened: %s (baud=%d)", opened_dev_.c_str(), baud_);
                 return true;
             }
             last_err = dev + " -> " + err;
@@ -341,69 +460,65 @@ private:
 
     void requestTx()
     {
-        {
-            std::lock_guard<std::mutex> lk(tx_cv_mtx_);
-            tx_req_seq_++;
-        }
+        { std::lock_guard<std::mutex> lk(tx_cv_mtx_); tx_req_seq_++; }
         tx_cv_.notify_one();
     }
 
     void onEnable(const std_msgs::msg::Bool::SharedPtr msg)
     {
         enable_.store(msg->data);
-        requestTx();  // enable 变化，立即发一帧
+        requestTx();
     }
 
     void onCmd(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
     {
         if (msg->data.size() < 2) return;
         const int n = static_cast<int>(msg->data.size());
-        if (yaw_index_ < 0 || yaw_index_ >= n || pitch_index_ < 0 || pitch_index_ >= n)
-            return;
+        if (yaw_index_ < 0 || yaw_index_ >= n || pitch_index_ < 0 || pitch_index_ >= n) return;
 
         {
             std::lock_guard<std::mutex> lk(cmd_mutex_);
-            last_cmd_yaw_ = static_cast<float>(msg->data[static_cast<size_t>(yaw_index_)]);
+            last_cmd_yaw_   = static_cast<float>(msg->data[static_cast<size_t>(yaw_index_)]);
             last_cmd_pitch_ = static_cast<float>(msg->data[static_cast<size_t>(pitch_index_)]);
             has_cmd_ = true;
         }
-        requestTx();  // 新命令立刻触发 TX
+        requestTx();
     }
 
-    // -----------------------------
-    // RX：只读+解析+发布（不写串口）
-    // -----------------------------
+    // unified wave evaluator: returns value in [-1,1]
+    double eval_wave(double t,
+                     double period, double phase01, const std::string& kind,
+                     double step_dt, int step_levels) const
+    {
+        if (kind == "triangle") return triangle_wave(t, period, phase01);
+        if (kind == "step")     return step_wave(t, step_dt, step_levels, phase01);
+        return sine_wave(t, period, phase01); // default sine
+    }
+
     void rxLoop()
     {
         std::vector<uint8_t> rxbuf;
         rxbuf.reserve(2048);
-
         const size_t frame_len = sizeof(GimbalToVision);
 
         while (!quit_.load()) {
-            if (!ensureOpen()) {
-                std::this_thread::sleep_for(200ms);
-                continue;
-            }
+            if (!ensureOpen()) { std::this_thread::sleep_for(200ms); continue; }
 
             int fd_local = -1;
-            {
-                std::lock_guard<std::mutex> lk(fd_mutex_);
-                fd_local = fd_;
-            }
+            { std::lock_guard<std::mutex> lk(fd_mutex_); fd_local = fd_; }
             if (fd_local < 0) continue;
 
             pollfd pfd{};
             pfd.fd = fd_local;
             pfd.events = POLLIN;
 
-            int pr = ::poll(&pfd, 1, 50);  // 50ms 最大等待
+            int pr = ::poll(&pfd, 1, 50);
             if (pr < 0) {
                 if (errno == EINTR) continue;
                 closeFd();
                 continue;
             }
-            if (pr == 0) continue;  // timeout
+            if (pr == 0) continue;
             if (!(pfd.revents & POLLIN)) continue;
 
             uint8_t tmp[512];
@@ -417,109 +532,72 @@ private:
 
             rxbuf.insert(rxbuf.end(), tmp, tmp + r);
 
-            // 流解析：扫描头 "S P"
             while (rxbuf.size() >= 2) {
                 size_t pos = 0;
                 while (pos + 1 < rxbuf.size()) {
                     if (rxbuf[pos] == 'S' && rxbuf[pos + 1] == 'P') break;
                     pos++;
                 }
-                if (pos > 0) {
-                    rxbuf.erase(rxbuf.begin(), rxbuf.begin() + static_cast<long>(pos));
-                }
+                if (pos > 0) rxbuf.erase(rxbuf.begin(), rxbuf.begin() + static_cast<long>(pos));
                 if (rxbuf.size() < frame_len) break;
 
-                // 取一帧
                 uint8_t frame_bytes[sizeof(GimbalToVision)];
                 std::memcpy(frame_bytes, rxbuf.data(), frame_len);
 
-                // CRC 校验
-                uint16_t crc_calc = crc16_ccitt_reflect_ffff(
-                    frame_bytes, frame_len - sizeof(uint16_t));
-
+                uint16_t crc_calc = crc16_ccitt_reflect_ffff(frame_bytes, frame_len - sizeof(uint16_t));
                 uint16_t crc_rx = 0;
-                std::memcpy(&crc_rx,
-                            frame_bytes + frame_len - sizeof(uint16_t),
-                            sizeof(uint16_t));
+                std::memcpy(&crc_rx, frame_bytes + frame_len - sizeof(uint16_t), sizeof(uint16_t));
 
                 if (crc_calc != crc_rx) {
-                    // CRC 错：丢一个字节继续重同步（非常关键）
                     rxbuf.erase(rxbuf.begin(), rxbuf.begin() + 1);
                     continue;
                 }
 
-                RCLCPP_INFO_THROTTLE(
-                    this->get_logger(), *this->get_clock(), 500 /*ms*/,
-                    "[RX] %zu bytes: %s",
-                    frame_len,
-                    hex_dump(frame_bytes, frame_len).c_str());
+                RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                                     "[RX] %zu bytes: %s",
+                                     frame_len, hex_dump(frame_bytes, frame_len).c_str());
 
-                // CRC OK：解析并消费
                 GimbalToVision rx{};
                 std::memcpy(&rx, frame_bytes, sizeof(rx));
                 rxbuf.erase(rxbuf.begin(), rxbuf.begin() + static_cast<long>(frame_len));
 
-                // publish angles (yaw,pitch)
                 std_msgs::msg::Float64MultiArray angles;
                 angles.data.resize(2);
                 angles.data[0] = static_cast<double>(rx.yaw);
                 angles.data[1] = static_cast<double>(rx.pitch);
                 pub_angles_->publish(angles);
 
-                // publish mode_up
                 std_msgs::msg::UInt8 m;
                 m.data = rx.mode;
                 pub_mode_->publish(m);
 
-                // 收到有效帧，也触发 TX（保证链路连续）
                 requestTx();
             }
 
-            if (rxbuf.size() > 8192) {
-                rxbuf.clear();
-            }
+            if (rxbuf.size() > 8192) rxbuf.clear();
         }
     }
 
-    // -----------------------------
-    // TX：只组帧+发送（不读串口）
-    // -----------------------------
     void txLoop()
     {
         uint64_t last_seq = 0;
-
-        // 如果开了定频 TX（尤其是扫动），这里控制节拍
         auto next_tick = std::chrono::steady_clock::now();
 
         while (!quit_.load()) {
-            // 触发策略：
-            // - 默认：事件触发（cmd/enable/rx有效帧）或 10ms 超时
-            // - 若 tx_period_ms_>0：定频发送（仍会响应事件立即发送）
             {
                 std::unique_lock<std::mutex> lk(tx_cv_mtx_);
                 if (tx_period_ms_ > 0.0) {
                     auto now = std::chrono::steady_clock::now();
                     if (now < next_tick) {
-                        tx_cv_.wait_until(lk, next_tick, [&] {
-                            return quit_.load() || tx_req_seq_ != last_seq;
-                        });
-                    } else {
-                        // 已到点，不等待
+                        tx_cv_.wait_until(lk, next_tick, [&] { return quit_.load() || tx_req_seq_ != last_seq; });
                     }
                 } else {
-                    tx_cv_.wait_for(lk, 10ms, [&] {
-                        return quit_.load() || tx_req_seq_ != last_seq;
-                    });
+                    tx_cv_.wait_for(lk, 10ms, [&] { return quit_.load() || tx_req_seq_ != last_seq; });
                 }
                 if (quit_.load()) break;
-
-                // 若是事件触发，更新 seq；若是定频到点，seq 可不变也会发送
-                if (tx_req_seq_ != last_seq) {
-                    last_seq = tx_req_seq_;
-                }
+                if (tx_req_seq_ != last_seq) last_seq = tx_req_seq_;
             }
 
-            // 更新下一个 tick
             if (tx_period_ms_ > 0.0) {
                 auto now = std::chrono::steady_clock::now();
                 auto period = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
@@ -529,19 +607,12 @@ private:
                 next_tick += period;
             }
 
-            if (!ensureOpen()) {
-                std::this_thread::sleep_for(200ms);
-                continue;
-            }
+            if (!ensureOpen()) { std::this_thread::sleep_for(200ms); continue; }
 
             int fd_local = -1;
-            {
-                std::lock_guard<std::mutex> lk(fd_mutex_);
-                fd_local = fd_;
-            }
+            { std::lock_guard<std::mutex> lk(fd_mutex_); fd_local = fd_; }
             if (fd_local < 0) continue;
 
-            // 组帧：永远发“最新状态”，不等待 RX
             VisionToGimbal tx{};
             tx.head[0] = 'S';
             tx.head[1] = 'P';
@@ -556,62 +627,137 @@ private:
                 cmd_pitch = last_cmd_pitch_;
             }
 
-            // --- 生成 pitch 往复 ---
-            double sweep_pitch = 0.0;
-            if (pitch_sweep_enable_ && tx.mode == 1) {
-                auto now = std::chrono::steady_clock::now();
-                double t = std::chrono::duration<double>(now - start_tp_).count();
-                double tri = triangle_wave(t, pitch_sweep_period_, pitch_sweep_phase01_); // [-1,1]
-                sweep_pitch = pitch_sweep_center_ + pitch_sweep_amplitude_ * tri;
+            const double t = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - start_tp_).count();
+            const bool enabled = (tx.mode == 1);
+
+            double sweep_yaw = 0.0;
+            if (enabled && yaw_sweep_enable_) {
+                const double w = eval_wave(t, yaw_sweep_period_, yaw_sweep_phase01_, yaw_sweep_wave_,
+                                           yaw_step_dt_, yaw_step_levels_);
+                sweep_yaw = yaw_sweep_center_ + yaw_sweep_amplitude_ * w;
             }
 
-            if (has_cmd && tx.mode == 1) {
-                tx.yaw = cmd_yaw;
+            double sweep_pitch = 0.0;
+            if (enabled && pitch_sweep_enable_) {
+                const double w = eval_wave(t, pitch_sweep_period_, pitch_sweep_phase01_, pitch_sweep_wave_,
+                                           pitch_step_dt_, pitch_step_levels_);
+                sweep_pitch = pitch_sweep_center_ + pitch_sweep_amplitude_ * w;
+            }
 
-                if (pitch_sweep_enable_) {
-                    if (pitch_sweep_add_to_cmd_) {
-                        tx.pitch = static_cast<float>(static_cast<double>(cmd_pitch) + sweep_pitch);
-                    } else {
-                        tx.pitch = static_cast<float>(sweep_pitch); // 覆盖 pitch
-                    }
+            float out_yaw = 0.0f;
+            float out_pitch = 0.0f;
+
+            if (enabled) {
+                // yaw
+                if (yaw_sweep_enable_) {
+                    if (has_cmd && yaw_sweep_add_to_cmd_) out_yaw = static_cast<float>(static_cast<double>(cmd_yaw) + sweep_yaw);
+                    else                                 out_yaw = static_cast<float>(sweep_yaw);
                 } else {
-                    tx.pitch = cmd_pitch;
+                    out_yaw = has_cmd ? cmd_yaw : 0.0f;
+                }
+
+                // pitch
+                if (pitch_sweep_enable_) {
+                    if (has_cmd && pitch_sweep_add_to_cmd_) out_pitch = static_cast<float>(static_cast<double>(cmd_pitch) + sweep_pitch);
+                    else                                    out_pitch = static_cast<float>(sweep_pitch);
+                } else {
+                    out_pitch = has_cmd ? cmd_pitch : 0.0f;
                 }
             } else {
-                // 无 cmd 或未 enable：默认置零；若开启扫动且 enable，则仍扫
-                tx.yaw = 0.0f;
-                if (pitch_sweep_enable_ && tx.mode == 1) {
-                    tx.pitch = static_cast<float>(sweep_pitch);
-                } else {
-                    tx.pitch = 0.0f;
-                }
+                out_yaw = 0.0f;
+                out_pitch = 0.0f;
             }
 
+            tx.yaw = out_yaw;
+            tx.pitch = out_pitch;
             tx.yaw_vel = 0.0f;
             tx.yaw_acc = 0.0f;
             tx.pitch_vel = 0.0f;
             tx.pitch_acc = 0.0f;
 
-            // CRC
+            // record for lissajous (TX)
+            if (lissajous_enable_ && enabled) {
+                std::lock_guard<std::mutex> lk(lissajous_mtx_);
+                lissajous_pts_.emplace_back(static_cast<double>(out_yaw), static_cast<double>(out_pitch));
+                while (static_cast<int>(lissajous_pts_.size()) > lissajous_history_) lissajous_pts_.pop_front();
+            }
+
             tx.crc16 = 0;
             uint8_t tx_bytes[sizeof(VisionToGimbal)];
             std::memcpy(tx_bytes, &tx, sizeof(tx));
-            uint16_t tx_crc = crc16_ccitt_reflect_ffff(
-                tx_bytes, sizeof(VisionToGimbal) - sizeof(uint16_t));
-            std::memcpy(tx_bytes + sizeof(VisionToGimbal) - sizeof(uint16_t),
-                        &tx_crc, sizeof(uint16_t));
+            uint16_t tx_crc = crc16_ccitt_reflect_ffff(tx_bytes, sizeof(VisionToGimbal) - sizeof(uint16_t));
+            std::memcpy(tx_bytes + sizeof(VisionToGimbal) - sizeof(uint16_t), &tx_crc, sizeof(uint16_t));
 
-            RCLCPP_INFO_THROTTLE(
-                this->get_logger(), *this->get_clock(), 500 /*ms*/,
-                "[TX] %zu bytes: %s",
-                sizeof(tx_bytes),
-                hex_dump(tx_bytes, sizeof(tx_bytes)).c_str());
+            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 500,
+                                 "[TX] %zu bytes: %s",
+                                 sizeof(tx_bytes), hex_dump(tx_bytes, sizeof(tx_bytes)).c_str());
 
             if (!write_all_nonblock(fd_local, tx_bytes, sizeof(tx_bytes))) {
                 closeFd();
                 continue;
             }
         }
+    }
+
+    void publishLissajousImage()
+    {
+        if (!pub_lissajous_img_) return;
+
+        std::deque<std::pair<double,double>> pts;
+        {
+            std::lock_guard<std::mutex> lk(lissajous_mtx_);
+            pts = lissajous_pts_;
+        }
+        if (pts.size() < 2) return;
+
+        const int w = lissajous_width_;
+        const int h = lissajous_height_;
+        std::vector<uint8_t> rgb(static_cast<size_t>(w*h*3), 0);
+
+        const double xr = std::max(1e-6, lissajous_yaw_range_);
+        const double yr = std::max(1e-6, lissajous_pitch_range_);
+
+        auto to_px = [&](double yaw, double pitch) -> std::pair<int,int> {
+            double nx = yaw / xr;
+            double ny = pitch / yr;
+            nx = std::max(-1.0, std::min(1.0, nx));
+            ny = std::max(-1.0, std::min(1.0, ny));
+            int x = static_cast<int>(std::lround((nx * 0.5 + 0.5) * (w - 1)));
+            int y = static_cast<int>(std::lround(((-ny) * 0.5 + 0.5) * (h - 1)));
+            return {x,y};
+        };
+
+        if (lissajous_draw_axes_) {
+            const int cx = w / 2;
+            const int cy = h / 2;
+            draw_line(rgb, w, h, 0, cy, w-1, cy, 80, 80, 80);
+            draw_line(rgb, w, h, cx, 0, cx, h-1, 80, 80, 80);
+        }
+
+        auto [x0,y0] = to_px(pts.front().first, pts.front().second);
+        for (size_t i = 1; i < pts.size(); ++i) {
+            auto [x1,y1] = to_px(pts[i].first, pts[i].second);
+            draw_line(rgb, w, h, x0, y0, x1, y1, 0, 255, 0);
+            x0 = x1; y0 = y1;
+        }
+
+        auto [xl,yl] = to_px(pts.back().first, pts.back().second);
+        for (int dy = -2; dy <= 2; ++dy)
+            for (int dx = -2; dx <= 2; ++dx)
+                set_pixel_rgb(rgb, w, h, xl+dx, yl+dy, 255, 0, 0);
+
+        sensor_msgs::msg::Image msg;
+        msg.header.stamp = this->now();
+        msg.header.frame_id = "gimbal";
+        msg.height = static_cast<uint32_t>(h);
+        msg.width  = static_cast<uint32_t>(w);
+        msg.encoding = "rgb8";
+        msg.is_bigendian = false;
+        msg.step = static_cast<uint32_t>(w * 3);
+        msg.data = std::move(rgb);
+
+        pub_lissajous_img_->publish(std::move(msg));
     }
 
 private:
@@ -643,15 +789,29 @@ private:
     float             last_cmd_yaw_{0.0f};
     float             last_cmd_pitch_{0.0f};
 
+    // yaw sweep
+    bool   yaw_sweep_enable_{true};
+    bool   yaw_sweep_add_to_cmd_{false};
+    double yaw_sweep_center_{0.0};
+    double yaw_sweep_amplitude_{0.6};
+    double yaw_sweep_period_{2.0};
+    double yaw_sweep_phase01_{0.0};
+    std::string yaw_sweep_wave_{"sine"};
+    double yaw_step_dt_{0.05};
+    int    yaw_step_levels_{9};
+
     // pitch sweep
-    bool   pitch_sweep_enable_{false};
+    bool   pitch_sweep_enable_{true};
     bool   pitch_sweep_add_to_cmd_{false};
     double pitch_sweep_center_{0.0};
     double pitch_sweep_amplitude_{0.3};
-    double pitch_sweep_period_{2.0};
+    double pitch_sweep_period_{3.0};
     double pitch_sweep_phase01_{0.25};
-    double tx_period_ms_{0.0};
+    std::string pitch_sweep_wave_{"sine"};
+    double pitch_step_dt_{0.05};
+    int    pitch_step_levels_{9};
 
+    double tx_period_ms_{10.0};
     std::chrono::steady_clock::time_point start_tp_{std::chrono::steady_clock::now()};
 
     // TX wakeup
@@ -659,11 +819,28 @@ private:
     std::mutex              tx_cv_mtx_;
     uint64_t                tx_req_seq_{0};
 
-    // ROS
+    // ROS pubs/subs
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_angles_;
     rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr            pub_mode_;
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr sub_cmd_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr              sub_enable_;
+
+    // lissajous
+    bool lissajous_enable_{true};
+    std::string lissajous_topic_{"/gimbal/lissajous_image"};
+    int lissajous_width_{640};
+    int lissajous_height_{640};
+    int lissajous_history_{2000};
+    double lissajous_rate_hz_{30.0};
+    double lissajous_yaw_range_{0.0};
+    double lissajous_pitch_range_{0.0};
+    bool lissajous_draw_axes_{true};
+
+    std::mutex lissajous_mtx_;
+    std::deque<std::pair<double,double>> lissajous_pts_;
+
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr pub_lissajous_img_;
+    rclcpp::TimerBase::SharedPtr lissajous_timer_;
 };
 
 int main(int argc, char** argv)

@@ -114,13 +114,13 @@ void Cluster::process_cluster(
     pub->publish(output);
 
     // 计算并打印处理耗时
-    std::chrono::steady_clock::time_point t2 =
-        std::chrono::steady_clock::now();
-    RCLCPP_INFO(
-        this->get_logger(), "Cluster process time: %f ms",
-        std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1)
-                .count() /
-            1000.0);
+    // std::chrono::steady_clock::time_point t2 =
+    //     std::chrono::steady_clock::now();
+    // RCLCPP_INFO(
+    //     this->get_logger(), "Cluster process time: %f ms",
+    //     std::chrono::duration_cast<std::chrono::microseconds>(t2 - t1)
+    //             .count() /
+    //         1000.0);
 }
 
 }  // namespace tdt_radar

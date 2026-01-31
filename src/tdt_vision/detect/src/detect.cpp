@@ -195,7 +195,13 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     // 4. 自动转换ONNX为TensorRT引擎（如不存在）
     std::ifstream file1(yolo_path.c_str());
     // if (!file1.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/self_car.onnx --saveEngine=model/TensorRT/self_car.engine --minBatch 1 --optBatch 1 --maxBatch 2 --Shape=1280x1280 --input_name=images");
-    if (!file1.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/self_car.onnx --saveEngine=model/TensorRT/self_car.engine");
+    // if (!file1.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/self_car.onnx --saveEngine=model/TensorRT/self_car.engine");
+    if (!file1.good())
+    system("python3 src/utils/onnx2trt.py "
+           "--onnx=model/ONNX/car_merged_200.onnx "
+           "--saveEngine=model/TensorRT/car_merged_200_fp16.engine "
+           "--minBatch 1 --optBatch 1 --maxBatch 4 "
+           "--Shape=1280x1280 --input_name=images");
     std::ifstream file2(armor_path.c_str());
     if (!file2.good()) system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/armor_yolo.onnx --saveEngine=model/TensorRT/armor_yolo.engine --minBatch 1 --optBatch 5 --maxBatch 12 --Shape=192x192 --input_name=images");
 
@@ -243,9 +249,11 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     //   feature_weight = 0.0     - 特征权重（0=纯IOU匹配，1=纯特征匹配）
     this->uav_tracker_ = std::make_shared<UAVDeepSORTTracker>(0.7f, 0.3f, 0.0f);
 
+    image_topic_ = this->declare_parameter<std::string>("image_topic", "/camera_image");
+
     // 9. 创建ROS2订阅者和发布者
     image_sub = this->create_subscription<sensor_msgs::msg::Image>(
-        "/camera0/image", rclcpp::SensorDataQoS(),
+        image_topic_, rclcpp::SensorDataQoS(),
         std::bind(&Detect::callback, this, std::placeholders::_1));
 
     pub = this->create_publisher<vision_interface::msg::DetectResult>(
@@ -270,6 +278,30 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
  */
 void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 {
+    
+    try {
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        "[IMG] msg: %ux%u step=%u enc=%s data=%zu",
+        msg->width, msg->height, msg->step, msg->encoding.c_str(), msg->data.size());
+
+    auto cv_ptr = cv_bridge::toCvCopy(msg, msg->encoding);  // 先按原编码拿
+    cv::Mat raw = cv_ptr->image;
+
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        "[IMG] mat: empty=%d size=%dx%d type=%d ch=%d depth=%d",
+        raw.empty(), raw.cols, raw.rows, raw.type(), raw.channels(), raw.depth());
+
+    static int dump = 0;
+    if (dump++ % 60 == 0 && !raw.empty()) {
+        cv::imwrite("/tmp/cam_raw.jpg", raw);
+    }
+
+} catch (const std::exception& e) {
+    RCLCPP_ERROR(this->get_logger(), "[IMG] cv_bridge exception: %s", e.what());
+    return;
+}
+
+    
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
     
     // ==================== 阶段1: 图像预处理与异步推理 ====================

@@ -42,7 +42,7 @@ def generate_launch_description():
 
     
     # 地图点云文件路径
-    map_pcd_path = os.path.join(localization_share_dir, 'config', '基础制造.pcd')
+    map_pcd_path = os.path.join(localization_share_dir, 'config', 'RM2025.pcd')
 
     # Livox驱动配置
     cur_config_path = os.path.join(livox_share_dir, 'config')
@@ -108,6 +108,9 @@ def generate_launch_description():
             package='tdt_vision',
             plugin='tdt_radar::Detect',
             name='radar_detect_node',
+            parameters=[{
+                "image_topic": "/camera_image",          # 你要订阅的真实话题
+            }],
             # 移除qos_profile参数
             extra_arguments=[
                 {'use_intra_process_comms': True},
@@ -145,7 +148,7 @@ def generate_launch_description():
             plugin='debug_map::DebugMap',
             name='debug_map_node',
             parameters=[{
-                'map_path': os.path.join(debug_map_share_dir, 'config', 'jichuzhizao.png')
+                'map_path': os.path.join(debug_map_share_dir, 'config', 'RM2025.png')
                 
             }],
             extra_arguments=[
@@ -193,7 +196,7 @@ def generate_launch_description():
         package='rclcpp_components',
         executable='component_container',
         composable_node_descriptions=[
-            # get_rosbag_player_node(),
+            get_rosbag_player_node(),
             get_localization_node(),
             get_dynamic_cloud_node(),
             get_debug_map_node(),
@@ -228,7 +231,7 @@ def generate_launch_description():
         log_map_path,
         log_debug_map_path,
 
-        get_hik_camera_node(),  # 启动现实相机节点
+        # get_hik_camera_node(),  # 启动现实相机节点
         container,
         mappcd_node,
 

@@ -170,8 +170,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     pcl::PointCloud<pcl::PointXYZ> receive_cloud;
     pcl::fromROSMsg(*msg, receive_cloud);
     
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "【阶段1】原始点数：%zu", receive_cloud.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //                     "【阶段1】原始点数：%zu", receive_cloud.size());
 
     // 2. 获取坐标变换
     geometry_msgs::msg::TransformStamped transform_stamped;
@@ -198,9 +198,9 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     
     pcl::transformPointCloud(receive_cloud, transformed_cloud, transform);
 
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "【阶段3】变换后点数（rm_frame）：%zu",
-                        transformed_cloud.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //                     "【阶段3】变换后点数（rm_frame）：%zu",
+    //                     transformed_cloud.size());
 
     // 4. ROI 过滤
     pcl::PointCloud<pcl::PointXYZ> filtered_cloud;
@@ -233,9 +233,9 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         filtered_cloud.push_back(point); 
     }
     
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                         "【阶段4】ROI过滤后有效点数：%zu",
-                         filtered_cloud.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //                      "【阶段4】ROI过滤后有效点数：%zu",
+    //                      filtered_cloud.size());
 
     // =========================================================
     // 【新增】发布 ROI 过滤后的点云，方便 RViz 查看
@@ -252,9 +252,9 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     pcl::PointCloud<pcl::PointXYZ> dynamic_pointcloud;
     GetDynamicCloud(filtered_cloud, dynamic_pointcloud, 0.03, 12);
     
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                         "【阶段5】动态检测后点数：%zu",
-                         dynamic_pointcloud.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //                      "【阶段5】动态检测后点数：%zu",
+    //                      dynamic_pointcloud.size());
 
     // 6. 多帧累积
     if (accumulate_count < accumulate_time) {
