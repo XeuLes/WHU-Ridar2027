@@ -43,11 +43,6 @@ file(GLOB_RECURSE CU_SRCS
     ${PROJECT_SOURCE_DIR}/src/*.cu
 )
 
-# ---- 关键：排除旧实现 yolo.cu（一定要命中你的实际文件名）----
-list(FILTER CU_SRCS EXCLUDE REGEX ".*/yolo\\.cu$")
-
-# ---- 关键：如果你新文件叫 yolov8.cu，就显式加入它 ----
-list(APPEND CU_SRCS ${PROJECT_SOURCE_DIR}/src/yolov8.cu)
 
 set(SRCS ${CPP_SRCS} ${CU_SRCS})
 add_library(infer SHARED ${SRCS})

@@ -17,6 +17,8 @@ static tdt_yolov5_predictor::Logger gLogger;
 namespace yolo {
 
 enum class Type : int {
+    V26 = 26,  // YOLOv26 (end2end 300x6 or raw head)
+
     V5 = 0,
     X = 1,
     V3 = 2,

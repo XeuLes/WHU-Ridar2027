@@ -218,8 +218,13 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Armor YOLO loaded");
     
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading main yolo model...");
-    this->yolo = yolo::load(yolo_path, yolo::Type::V8, 0.65f, 0.45f);
+    this->yolo = yolo::load(yolo_path, yolo::Type::V26, 0.15f, 0.45f);
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Main YOLO loaded");
+
+
+    RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo_path = %s", yolo_path.c_str());
+RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
+
 
     // 6. 加载UAV检测器
     std::ifstream file_uav(uav_path.c_str());
@@ -360,6 +365,40 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     auto result = future_car.get();
     auto uav_raw_result = future_uav.get();
 
+
+    // ==================== DEBUG: print raw YOLO outputs ====================
+RCLCPP_INFO(this->get_logger(), "[CAR] raw result.size() = %zu", result.size());
+
+for (int i = 0; i < (int)std::min<size_t>(result.size(), 20); ++i) {
+    const auto& b = result[i];
+    RCLCPP_INFO(this->get_logger(),
+        "[CAR-RAW] i=%d cls=%d conf=%.4f box=[%.1f %.1f %.1f %.1f] wh=[%.1f %.1f]",
+        i, (int)b.class_label, (double)b.confidence,
+        (double)b.left, (double)b.top, (double)b.right, (double)b.bottom,
+        (double)(b.right - b.left), (double)(b.bottom - b.top));
+}
+
+// 统计分布：NaN/Inf、负宽高、低置信度
+int nan_cnt = 0, badwh_cnt = 0, low_cnt = 0;
+float min_conf = 1e9f, max_conf = -1e9f;
+for (const auto& b : result) {
+    if (!std::isfinite(b.confidence) || !std::isfinite(b.left) || !std::isfinite(b.top) ||
+        !std::isfinite(b.right) || !std::isfinite(b.bottom)) {
+        nan_cnt++;
+        continue;
+    }
+    float w = b.right - b.left;
+    float h = b.bottom - b.top;
+    if (w <= 0 || h <= 0) badwh_cnt++;
+    min_conf = std::min(min_conf, b.confidence);
+    max_conf = std::max(max_conf, b.confidence);
+    if (b.confidence < 0.01f) low_cnt++;
+}
+RCLCPP_INFO(this->get_logger(),
+    "[CAR-STATS] nan=%d bad_wh=%d low_conf(<0.01)=%d conf_range=[%.4f, %.4f]",
+    nan_cnt, badwh_cnt, low_cnt, (double)min_conf, (double)max_conf);
+
+
     // ==================== 阶段2: 初始化检测结果消息 ====================
     vision_interface::msg::DetectResult detect_result;
     
@@ -386,44 +425,78 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     // ==================== 阶段3: 处理地面车辆检测（ID 1-6）====================
     std::vector<Car> cars;
     
-    if (!result.empty() && result.size() <= MAX_CARS) {
-        // 3.1 过滤车辆并提取ROI（单循环完成）
-        std::vector<cv::Mat> car_imgs;
-        std::vector<cv::Rect> car_rects;
-        
-        for (const auto& box : result) {
-            RCLCPP_INFO(this->get_logger(), "Detected object: ID=%d, Conf=%.3f, Rect=[%.1f,%.1f,%.1f,%.1f]", 
-                box.class_label, box.confidence, box.left, box.top, box.right, box.bottom);
-            if (box.class_label == 0 || box.class_label == 1) {
-                int l = (int)std::round(box.left);
-                int t = (int)std::round(box.top);
-                int r = (int)std::round(box.right);
-                int b = (int)std::round(box.bottom);
+    if (!result.empty()) {
+        // 3.0 先过滤再截断（解决 “Cars=300” 与 “超过MAX_CARS就不处理”）
+    // 主车YOLO在 init 里 load 的阈值是 0.65f，这里保持一致做二次保险过滤
+    constexpr float CAR_CONF_THRES = 0.65f;
 
-                cv::Rect temp_rect(l, t, r - l, b - t);
-                cv::Rect temp_car_rect = getSafeRect(img, temp_rect);
-                
-                // 过滤过小的检测框
-                if (temp_car_rect.area() < 50 * 50) continue;
+    std::vector<yolo::Box> car_filtered;
+    car_filtered.reserve(result.size());
 
-                // 【关键点：提前绘制】
-                // 只要进了这个 if，说明 YOLO 已经检出了车，在这里直接画框
-                if (debug) {
-                    // 使用黄色 (0, 255, 255) 表示“原始检测车框”
-                    cv::rectangle(img, temp_car_rect, cv::Scalar(0, 255, 255), 2);
-                    cv::putText(img, "Car-Detected", cv::Point(temp_car_rect.x, temp_car_rect.y - 5),
-                            cv::FONT_HERSHEY_SIMPLEX, 0.6, cv::Scalar(0, 255, 255), 1);
-                }
-
-                car_imgs.push_back(img(temp_car_rect).clone());
-                car_rects.push_back(temp_car_rect);
-                
-                Car car;
-                car.car = box;
-                car.car_rect = temp_car_rect; // 确保存入结构体供后续使用
-                cars.push_back(car);
-            }
+    for (const auto& b : result) {
+        // 丢掉 NaN/Inf
+        if (!std::isfinite(b.confidence) ||
+            !std::isfinite(b.left) || !std::isfinite(b.top) ||
+            !std::isfinite(b.right) || !std::isfinite(b.bottom)) {
+            continue;
         }
+
+        // 只保留车类别（你原来就是 0/1）
+        if (!(b.class_label == 0 || b.class_label == 1)) continue;
+
+        // 置信度阈值过滤（避免 TopK 全进来）
+        if (b.confidence < CAR_CONF_THRES) continue;
+
+        // 合法框（宽高必须正）
+        if ((b.right - b.left) <= 2.0f || (b.bottom - b.top) <= 2.0f) continue;
+
+        car_filtered.push_back(b);
+    }
+
+    // 置信度从高到低排序，然后只取 MAX_CARS 个
+    std::sort(car_filtered.begin(), car_filtered.end(),
+              [](const yolo::Box& a, const yolo::Box& b) { return a.confidence > b.confidence; });
+
+    if ((int)car_filtered.size() > MAX_CARS) car_filtered.resize(MAX_CARS);
+
+    // 3.1 过滤车辆并提取ROI（单循环完成）
+    std::vector<cv::Mat> car_imgs;
+    std::vector<cv::Rect> car_rects;
+
+    for (const auto& box : car_filtered) {
+
+        RCLCPP_INFO(this->get_logger(),
+            "Detected CAR: ID=%d, Conf=%.3f, Rect=[%.1f,%.1f,%.1f,%.1f]",
+            box.class_label, box.confidence, box.left, box.top, box.right, box.bottom);
+
+        int l = (int)std::round(box.left);
+        int t = (int)std::round(box.top);
+        int r = (int)std::round(box.right);
+        int b = (int)std::round(box.bottom);
+
+        cv::Rect temp_rect(l, t, r - l, b - t);
+        cv::Rect temp_car_rect = getSafeRect(img, temp_rect);
+
+        // 过滤过小的检测框
+        if (temp_car_rect.area() < 50 * 50) continue;
+
+        // 【关键点：提前绘制】
+        if (debug) {
+            cv::rectangle(img, temp_car_rect, cv::Scalar(0, 255, 255), 2);
+            cv::putText(img, "Car-Detected",
+                        cv::Point(temp_car_rect.x, temp_car_rect.y - 5),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                        cv::Scalar(0, 255, 255), 1);
+        }
+
+        car_imgs.push_back(img(temp_car_rect).clone());
+        car_rects.push_back(temp_car_rect);
+
+        Car car;
+        car.car = box;
+        car.car_rect = temp_car_rect;
+        cars.push_back(car);
+    }
         
         // 3.2 如果没有车辆则跳过后续处理
         if (!cars.empty()) {
@@ -873,7 +946,9 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
     cv::resize(img, final_img, cv::Size(1080, 960));
     
     // 显示检测统计信息（显示过滤后的UAV数量）
-    std::string status_text = "Cars: " + std::to_string(result.size()) + " | UAVs: " + std::to_string(uav_filtered.size());
+    std::string status_text = "Cars: " + std::to_string(cars.size()) +
+                          " | UAVs: " + std::to_string(uav_filtered.size());
+
     cv::putText(final_img, status_text, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.2, cv::Scalar(0, 255, 0), 2);
     
     if (uav_filtered.empty()) {
