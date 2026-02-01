@@ -18,24 +18,19 @@ static inline bool is_stamp_zero(const builtin_interfaces::msg::Time& t)
 Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     : Node("radar_resolve_node", node_options)
 {
-
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] Resolve构造函数开始");
     parser_ = nullptr;
     try {
         parser_ = new parser();
-        RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] parser_对象new成功, 地址: %p", (void*)parser_);
     } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser_构造异常: %s", e.what());
+        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造异常: %s", e.what());
     } catch (...) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser_构造未知异常");
+        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造未知异常");
     }
+    
     minimap = cv::imread("config/RM2025.png");
     if (minimap.empty()) {
-        RCLCPP_WARN(this->get_logger(), "[DEBUG-CRASH] minimap图片加载失败: config/RM2025.png");
-    } else {
-        RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] minimap图片加载成功, size=(%d,%d)", minimap.cols, minimap.rows);
+        RCLCPP_WARN(this->get_logger(), "minimap图片加载失败: config/RM2025.png");
     }
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] Resolve构造函数结束");
 
     point_sub = this->create_subscription<geometry_msgs::msg::Vector3>(
         "camera_point2D", rclcpp::SensorDataQoS(),
@@ -72,11 +67,11 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
 
     // params
     this->declare_parameter<int>("uav_other_timeout_ms", 500);
-    this->declare_parameter<double>("uav_default_z", 1.85);
+    this->declare_parameter<double>("uav_default_z", 2.30);
     this->declare_parameter<double>("uav_huber_delta_xy", 0.8);
-    this->declare_parameter<double>("uav_w_vision_xy", 1.0);
-    this->declare_parameter<double>("uav_w_lidar_xy", 0.7);
-    this->declare_parameter<double>("uav_assign_gate_m", 3.0);
+    this->declare_parameter<double>("uav_w_vision_xy", 0.5);  // 降低相机权重(透视变换外推不准)
+    this->declare_parameter<double>("uav_w_lidar_xy", 0.7);   // 提高雷达权重
+    this->declare_parameter<double>("uav_assign_gate_m", 4.0);
 
     this->declare_parameter<double>("uav_z_ema_alpha", 0.90);
     this->declare_parameter<double>("uav_z_jump_max", 0.80);
@@ -239,11 +234,9 @@ void Resolve::UavKalmanPredict(int idx, const rclcpp::Time& stamp)
         dt = 0.2;
     uav_kf_stamp_[idx] = stamp;
 
-    RCLCPP_INFO(this->get_logger(), "[UAV-KF] 预测前 idx=%d: x=%.3f y=%.3f z=%.3f vx=%.3f vy=%.3f vz=%.3f dt=%.3f", idx, uav_x_[idx], uav_y_[idx], uav_z_[idx], uav_vx_[idx], uav_vy_[idx], uav_vz_[idx], dt);
     uav_x_[idx] += uav_vx_[idx] * dt;
     uav_y_[idx] += uav_vy_[idx] * dt;
     uav_z_[idx] += uav_vz_[idx] * dt;
-    RCLCPP_INFO(this->get_logger(), "[UAV-KF] 预测后 idx=%d: x=%.3f y=%.3f z=%.3f vx=%.3f vy=%.3f vz=%.3f", idx, uav_x_[idx], uav_y_[idx], uav_z_[idx], uav_vx_[idx], uav_vy_[idx], uav_vz_[idx]);
 
     double F[6][6] = {0};
     for (int i = 0; i < 6; i++)
@@ -284,8 +277,6 @@ void Resolve::UavKalmanUpdate(int idx, double mx, double my, double mz)
     if (!uav_kf_inited_[idx])
         return;
 
-    RCLCPP_INFO(this->get_logger(), "[UAV-KF] 更新前 idx=%d: x=%.3f y=%.3f z=%.3f vx=%.3f vy=%.3f vz=%.3f, 观测: mx=%.3f my=%.3f mz=%.3f", idx, uav_x_[idx], uav_y_[idx], uav_z_[idx], uav_vx_[idx], uav_vy_[idx], uav_vz_[idx], mx, my, mz);
-
     const double y0 = mx - uav_x_[idx];
     const double y1 = my - uav_y_[idx];
     const double y2 = mz - uav_z_[idx];
@@ -323,9 +314,7 @@ void Resolve::UavKalmanUpdate(int idx, double mx, double my, double mz)
         y1 * (Sinv[1][0] * y0 + Sinv[1][1] * y1 + Sinv[1][2] * y2) +
         y2 * (Sinv[2][0] * y0 + Sinv[2][1] * y1 + Sinv[2][2] * y2);
 
-    RCLCPP_INFO(this->get_logger(), "[UAV-KF] idx=%d, maha=%.3f, gate=%.3f", idx, maha, uav_gate_maha_);
     if (maha > uav_gate_maha_) {
-        RCLCPP_WARN(this->get_logger(), "[UAV-KF] idx=%d, maha=%.3f 超过门限，观测被拒绝", idx, maha);
         return;
     }
 
@@ -339,15 +328,12 @@ void Resolve::UavKalmanUpdate(int idx, double mx, double my, double mz)
             for (int k = 0; k < 3; k++)
                 K[r][c2] += PHt[r][k] * Sinv[k][c2];
 
-    double old_x = uav_x_[idx], old_y = uav_y_[idx], old_z = uav_z_[idx];
-    double old_vx = uav_vx_[idx], old_vy = uav_vy_[idx], old_vz = uav_vz_[idx];
     uav_x_[idx] += K[0][0] * y0 + K[0][1] * y1 + K[0][2] * y2;
     uav_y_[idx] += K[1][0] * y0 + K[1][1] * y1 + K[1][2] * y2;
     uav_z_[idx] += K[2][0] * y0 + K[2][1] * y1 + K[2][2] * y2;
     uav_vx_[idx] += K[3][0] * y0 + K[3][1] * y1 + K[3][2] * y2;
     uav_vy_[idx] += K[4][0] * y0 + K[4][1] * y1 + K[4][2] * y2;
     uav_vz_[idx] += K[5][0] * y0 + K[5][1] * y1 + K[5][2] * y2;
-    RCLCPP_INFO(this->get_logger(), "[UAV-KF] 更新后 idx=%d: x=%.3f->%.3f y=%.3f->%.3f z=%.3f->%.3f vx=%.3f->%.3f vy=%.3f->%.3f vz=%.3f->%.3f", idx, old_x, uav_x_[idx], old_y, uav_y_[idx], old_z, uav_z_[idx], old_vx, uav_vx_[idx], old_vy, uav_vy_[idx], old_vz, uav_vz_[idx]);
 
     double I_KH[6][6] = {0};
     for (int r = 0; r < 6; r++)
@@ -371,28 +357,23 @@ void Resolve::UavKalmanUpdate(int idx, double mx, double my, double mz)
 void Resolve::DetectCallback(
     const vision_interface::msg::DetectResult::SharedPtr msg)
 {
-
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] DetectCallback 入口");
-    if (!msg) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] DetectCallback收到空msg指针！");
+    if (!msg || !parser_) {
         return;
     }
-    if (!parser_) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser_对象为空指针！");
-        return;
-    }
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] msg和parser_有效");
 
     vision_interface::msg::DetectResult send_data;
     send_data.header = msg->header;
+    if (is_stamp_zero(send_data.header.stamp)) {
+        send_data.header.stamp = this->now();
+    }
 
-    // Prepare uav output (always publish, NaN means invalid)
     geometry_msgs::msg::PoseArray uav_out;
     uav_out.header = msg->header;
     uav_out.header.frame_id = "rm_frame";
+    if (is_stamp_zero(uav_out.header.stamp)) {
+        uav_out.header.stamp = this->now();
+    }
     uav_out.poses.resize(2);
-
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] uav_out和send_data初始化完成");
 
     auto set_nan_pose = [](geometry_msgs::msg::Pose& p) {
         const double nan = std::numeric_limits<double>::quiet_NaN();
@@ -406,17 +387,26 @@ void Resolve::DetectCallback(
     };
     set_nan_pose(uav_out.poses[0]);
     set_nan_pose(uav_out.poses[1]);
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] set_nan_pose调用完成");
 
+    // ========== 阶段一：接收检测消息 ==========
+    const bool has_blue_uav = (msg->blue_x[6] != 0.0f && msg->blue_y[6] != 0.0f);
+    const bool has_red_uav = (msg->red_x[6] != 0.0f && msg->red_y[6] != 0.0f);
+    
+    if (has_blue_uav || has_red_uav) {
+        RCLCPP_INFO(this->get_logger(), "========== [阶段一：接收检测消息] ==========");
+        if (has_blue_uav) {
+            RCLCPP_INFO(this->get_logger(), "  蓝方UAV相机坐标: (%.2f, %.2f)", msg->blue_x[6], msg->blue_y[6]);
+        } else {
+            RCLCPP_INFO(this->get_logger(), "  蓝方UAV: 无检测");
+        }
+        if (has_red_uav) {
+            RCLCPP_INFO(this->get_logger(), "  红方UAV相机坐标: (%.2f, %.2f)", msg->red_x[6], msg->red_y[6]);
+        } else {
+            RCLCPP_INFO(this->get_logger(), "  红方UAV: 无检测");
+        }
+    }
 
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] 准备判断UAV像素有效性 blue_x[6]=%.2f blue_y[6]=%.2f red_x[6]=%.2f red_y[6]=%.2f", msg->blue_x[6], msg->blue_y[6], msg->red_x[6], msg->red_y[6]);
-    const bool has_blue_uav =
-        (msg->blue_x[6] != 0.0f && msg->blue_y[6] != 0.0f);
-    const bool has_red_uav =
-        (msg->red_x[6] != 0.0f && msg->red_y[6] != 0.0f);
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] has_blue_uav=%s has_red_uav=%s", has_blue_uav ? "true" : "false", has_red_uav ? "true" : "false");
-
-    // read other cache
+    // ========== 阶段二：读取雷达聚类数据 ==========
     double cX[2]{0.0, 0.0}, cY[2]{0.0, 0.0}, cZ[2]{0.0, 0.0};
     int    cN = 0;
     bool   other_fresh = false;
@@ -433,64 +423,50 @@ void Resolve::DetectCallback(
             cY[1] = uav_other_y_[1];
             cZ[1] = uav_other_z_[1];
         }
-        const rclcpp::Time t_cam(msg->header.stamp);
+        const rclcpp::Time t_cam = is_stamp_zero(msg->header.stamp) 
+                                   ? this->now() 
+                                   : rclcpp::Time(msg->header.stamp);
         const auto dt_ns = (t_cam - uav_other_stamp_).nanoseconds();
         const auto dt_ms = std::llabs(dt_ns) / 1000000LL;
         other_fresh = (dt_ms <= uav_other_timeout_ms_);
-        // 输出聚类中心可用性详细日志
-        RCLCPP_INFO(this->get_logger(), "[UAV聚类检查] 当前帧时间: %.3f, 聚类中心数量: %d, 聚类时间: %.3f, 时间差: %lld ms, 超时时间: %d ms, 是否新鲜: %s", \
-            t_cam.seconds(), cN, uav_other_stamp_.seconds(), (long long)dt_ms, uav_other_timeout_ms_, other_fresh ? "是" : "否");
-        if (cN == 0) {
-            RCLCPP_WARN(this->get_logger(), "[UAV聚类检查] 当前无可用聚类中心，assign将为-1");
-        } else if (!other_fresh) {
-            RCLCPP_WARN(this->get_logger(), "[UAV聚类检查] 聚类中心超时(时间差%lld ms)，assign将为-1", (long long)dt_ms);
+        
+        if (has_blue_uav || has_red_uav) {
+            RCLCPP_INFO(this->get_logger(), "========== [阶段二：读取雷达聚类数据] ==========");
+            RCLCPP_INFO(this->get_logger(), "  聚类中心数量: %d, 时间差: %lld ms, 数据新鲜: %s", 
+                cN, (long long)dt_ms, other_fresh ? "是" : "否");
+            if (other_fresh && cN > 0) {
+                RCLCPP_INFO(this->get_logger(), "  雷达聚类[0]: (%.3f, %.3f, %.3f)", cX[0], cY[0], cZ[0]);
+                if (cN > 1) {
+                    RCLCPP_INFO(this->get_logger(), "  雷达聚类[1]: (%.3f, %.3f, %.3f)", cX[1], cY[1], cZ[1]);
+                }
+            } else if (cN == 0) {
+                RCLCPP_WARN(this->get_logger(), "  ⚠️ 无可用聚类中心");
+            } else {
+                RCLCPP_WARN(this->get_logger(), "  ⚠️ 聚类数据超时");
+            }
         }
     }
 
-    // UAV原始输入日志（中文）
-    RCLCPP_INFO(this->get_logger(), "[UAV原始像素] 蓝方(%.2f, %.2f) 红方(%.2f, %.2f)", msg->blue_x[6], msg->blue_y[6], msg->red_x[6], msg->red_y[6]);
-
-
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] lambda solve_xy_on_z定义前");
+    // Lambda: 使用透视变换方法(对地面车辆已验证准确)
     auto solve_xy_on_z = [&](float px, float py, float z_plane) -> cv::Point2f {
-        RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] 进入solve_xy_on_z lambda px=%.2f py=%.2f z_plane=%.2f", px, py, z_plane);
-        cv::Point2f p_in(px, py);
-        // 输入像素和投影高度
-        RCLCPP_INFO(this->get_logger(), "[UAV坐标转换] 输入像素: (%.2f, %.2f), 投影高度: %.2f", px, py, z_plane);
-        auto p = parser_->parse_with_height(p_in, z_plane);
-        // 投影输出
-        RCLCPP_INFO(this->get_logger(), "[UAV坐标转换] 投影输出: (%.2f, %.2f)", p.x, p.y);
-        // y偏移
-        float y_offset = p.y + 15;
-        RCLCPP_INFO(this->get_logger(), "[UAV坐标转换] y偏移后: (%.2f, %.2f)", p.x, y_offset);
-        float before_clamp_x = p.x, before_clamp_y = y_offset;
-        // clamp
-        float clamp_x = std::clamp(p.x, 0.0f, 28.0f);
+        cv::Point2f pixel(px, py);
+        // 使用透视变换: height参数是地面高度,需要减去ARMOR_HEIGHT=0.15
+        // 对于UAV: z_plane是绝对高度,所以传入 z_plane - 0.15 作为地面高度
+        cv::Point2f world_xy = parser_->parse_with_height(pixel, z_plane - 0.15f);
+        // 坐标系转换: y轴偏移
+        float y_offset = world_xy.y + 15.0f;
+        float clamp_x = std::clamp(world_xy.x, 0.0f, 28.0f);
         float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-        RCLCPP_INFO(this->get_logger(), "[UAV坐标转换] clamp后: (%.2f, %.2f) (clamp前: %.2f, %.2f)", clamp_x, clamp_y, before_clamp_x, before_clamp_y);
         return cv::Point2f(clamp_x, clamp_y);
     };
-    RCLCPP_INFO(this->get_logger(), "[DEBUG-CRASH] lambda solve_xy_on_z定义后");
 
-    // assign
+    // ========== 阶段三：相机-雷达数据关联 ==========
     int    assign_blue = -1, assign_red = -1;
     double dist_blue = 1e9, dist_red = 1e9;
 
     if (other_fresh && cN > 0 && (has_blue_uav || has_red_uav)) {
-        RCLCPP_INFO(this->get_logger(), "[UAV分配] 雷达聚类中心数量: %d, 坐标: [0](%.3f, %.3f, %.3f)%s%s", cN, cX[0], cY[0], cZ[0], cN>1?", [1](%.3f, %.3f, %.3f)":"", cN>1?cX[1]:0.0, cN>1?cY[1]:0.0, cN>1?cZ[1]:0.0);
-        const float z0 = static_cast<float>(uav_default_z_);
-        bool        blue_ok = false, red_ok = false;
-        cv::Point2f blue0, red0;
-        if (has_blue_uav) {
-            blue0 = solve_xy_on_z(msg->blue_x[6], msg->blue_y[6], z0);
-            blue_ok = true;
-            RCLCPP_INFO(this->get_logger(), "[UAV分配] 蓝方像素(%.2f, %.2f)投影到默认高度%.2f后: (%.3f, %.3f)", msg->blue_x[6], msg->blue_y[6], z0, blue0.x, blue0.y);
-        }
-        if (has_red_uav) {
-            red0 = solve_xy_on_z(msg->red_x[6], msg->red_y[6], z0);
-            red_ok = true;
-            RCLCPP_INFO(this->get_logger(), "[UAV分配] 红方像素(%.2f, %.2f)投影到默认高度%.2f后: (%.3f, %.3f)", msg->red_x[6], msg->red_y[6], z0, red0.x, red0.y);
-        }
+        RCLCPP_INFO(this->get_logger(), "========== [阶段三：相机-雷达数据关联] ==========");
+        RCLCPP_INFO(this->get_logger(), "  [粗匹配] 使用默认z=%.2fm投影相机像素:", uav_default_z_);
 
         auto dist2 = [&](double x, double y,
                          const cv::Point2f& p) -> double {
@@ -498,172 +474,221 @@ void Resolve::DetectCallback(
             return dx * dx + dy * dy;
         };
 
-        if (cN == 1) {
-            if (blue_ok && !red_ok) {
-                assign_blue = 0;
-                dist_blue = std::sqrt(dist2(cX[0], cY[0], blue0));
-                RCLCPP_INFO(this->get_logger(), "[UAV分配] 仅蓝方有目标，分配聚类0，距离: %.3f", dist_blue);
-            } else if (!blue_ok && red_ok) {
-                assign_red = 0;
-                dist_red = std::sqrt(dist2(cX[0], cY[0], red0));
-                RCLCPP_INFO(this->get_logger(), "[UAV分配] 仅红方有目标，分配聚类0，距离: %.3f", dist_red);
-            } else if (blue_ok && red_ok) {
-                double db = dist2(cX[0], cY[0], blue0),
-                       dr = dist2(cX[0], cY[0], red0);
-                if (db <= dr) {
-                    assign_blue = 0;
-                    dist_blue = std::sqrt(db);
-                    RCLCPP_INFO(this->get_logger(), "[UAV分配] 蓝红都在，聚类0更近分配给蓝方，距离: %.3f", dist_blue);
-                } else {
-                    assign_red = 0;
-                    dist_red = std::sqrt(dr);
-                    RCLCPP_INFO(this->get_logger(), "[UAV分配] 蓝红都在，聚类0更近分配给红方，距离: %.3f", dist_red);
+        // 步骤1: 对蓝方UAV,使用默认z投影得到粗略XY
+        cv::Point2f blue_rough;
+        if (has_blue_uav) {
+            float z_default = static_cast<float>(uav_default_z_);
+            blue_rough = solve_xy_on_z(msg->blue_x[6], msg->blue_y[6], z_default);
+            RCLCPP_INFO(this->get_logger(), "    蓝方相机(%.1f,%.1f) z=%.2fm → 粗投影(%.2f,%.2f)", 
+                msg->blue_x[6], msg->blue_y[6], z_default, blue_rough.x, blue_rough.y);
+            
+            // 步骤2: 用粗略XY与所有聚类比较距离
+            for (int i = 0; i < cN; i++) {
+                double dist = std::sqrt(dist2(cX[i], cY[i], blue_rough));
+                RCLCPP_INFO(this->get_logger(), "      vs 聚类[%d](%.2f,%.2f,z=%.3f): 距离%.3fm", 
+                    i, cX[i], cY[i], cZ[i], dist);
+                if (dist < dist_blue) {
+                    dist_blue = dist;
+                    assign_blue = i;
                 }
             }
-        } else {  // >=2
-            if (blue_ok && !red_ok) {
-                double d0 = dist2(cX[0], cY[0], blue0),
-                       d1 = dist2(cX[1], cY[1], blue0);
-                if (d0 <= d1) {
-                    assign_blue = 0;
-                    dist_blue = std::sqrt(d0);
-                } else {
-                    assign_blue = 1;
-                    dist_blue = std::sqrt(d1);
-                }
-                RCLCPP_INFO(this->get_logger(), "[UAV分配] 仅蓝方有目标，分配聚类%d，距离: %.3f", assign_blue, dist_blue);
-            } else if (!blue_ok && red_ok) {
-                double d0 = dist2(cX[0], cY[0], red0),
-                       d1 = dist2(cX[1], cY[1], red0);
-                if (d0 <= d1) {
-                    assign_red = 0;
-                    dist_red = std::sqrt(d0);
-                } else {
-                    assign_red = 1;
-                    dist_red = std::sqrt(d1);
-                }
-                RCLCPP_INFO(this->get_logger(), "[UAV分配] 仅红方有目标，分配聚类%d，距离: %.3f", assign_red, dist_red);
-            } else if (blue_ok && red_ok) {
-                double db0 = dist2(cX[0], cY[0], blue0),
-                       db1 = dist2(cX[1], cY[1], blue0);
-                double dr0 = dist2(cX[0], cY[0], red0),
-                       dr1 = dist2(cX[1], cY[1], red0);
-                double sumA = db0 + dr1, sumB = db1 + dr0;
-                if (sumA <= sumB) {
-                    assign_blue = 0;
-                    assign_red = 1;
-                    dist_blue = std::sqrt(db0);
-                    dist_red = std::sqrt(dr1);
-                    RCLCPP_INFO(this->get_logger(), "[UAV分配] 蓝红都在，方案A: 蓝->0(%.3f) 红->1(%.3f)", dist_blue, dist_red);
-                } else {
-                    assign_blue = 1;
-                    assign_red = 0;
-                    dist_blue = std::sqrt(db1);
-                    dist_red = std::sqrt(dr0);
-                    RCLCPP_INFO(this->get_logger(), "[UAV分配] 蓝红都在，方案B: 蓝->1(%.3f) 红->0(%.3f)", dist_blue, dist_red);
+        }
+        
+        // 步骤1: 对红方UAV,使用默认z投影得到粗略XY
+        cv::Point2f red_rough;
+        if (has_red_uav) {
+            float z_default = static_cast<float>(uav_default_z_);
+            red_rough = solve_xy_on_z(msg->red_x[6], msg->red_y[6], z_default);
+            RCLCPP_INFO(this->get_logger(), "    红方相机(%.1f,%.1f) z=%.2fm → 粗投影(%.2f,%.2f)", 
+                msg->red_x[6], msg->red_y[6], z_default, red_rough.x, red_rough.y);
+            
+            // 步骤2: 用粗略XY与所有聚类比较距离
+            for (int i = 0; i < cN; i++) {
+                double dist = std::sqrt(dist2(cX[i], cY[i], red_rough));
+                RCLCPP_INFO(this->get_logger(), "      vs 聚类[%d](%.2f,%.2f,z=%.3f): 距离%.3fm", 
+                    i, cX[i], cY[i], cZ[i], dist);
+                if (dist < dist_red) {
+                    dist_red = dist;
+                    assign_red = i;
                 }
             }
         }
 
+        // 门限检查
         const double gate = std::max(0.1, uav_assign_gate_m_);
         if (assign_blue >= 0 && dist_blue > gate) {
-            RCLCPP_WARN(this->get_logger(), "[UAV分配] 蓝方分配距离%.3f超出门限%.3f，分配无效", dist_blue, gate);
+            RCLCPP_WARN(this->get_logger(), "  蓝方: 聚类[%d]距离%.3fm > 门限%.1fm, ❌拒绝", 
+                assign_blue, dist_blue, gate);
             assign_blue = -1;
         }
         if (assign_red >= 0 && dist_red > gate) {
-            RCLCPP_WARN(this->get_logger(), "[UAV分配] 红方分配距离%.3f超出门限%.3f，分配无效", dist_red, gate);
+            RCLCPP_WARN(this->get_logger(), "  红方: 聚类[%d]距离%.3fm > 门限%.1fm, ❌拒绝", 
+                assign_red, dist_red, gate);
             assign_red = -1;
         }
-        if (has_blue_uav && has_red_uav) {
-            if (assign_blue < 0 || assign_red < 0) {
-                RCLCPP_WARN(this->get_logger(), "[UAV分配] 蓝红都在但有一方分配无效，全部置为无效");
-                assign_blue = -1;
-                assign_red = -1;
+        
+        // 如果两个UAV都检测到,确保它们匹配到不同的聚类
+        if (has_blue_uav && has_red_uav && assign_blue >= 0 && assign_red >= 0) {
+            if (assign_blue == assign_red) {
+                // 两个UAV匹配到同一聚类,保留距离更近的
+                if (dist_blue <= dist_red) {
+                    RCLCPP_WARN(this->get_logger(), "  ⚠️ 冲突: 蓝红都选聚类[%d], 保留蓝方(%.3fm < %.3fm)", 
+                        assign_blue, dist_blue, dist_red);
+                    assign_red = -1;
+                } else {
+                    RCLCPP_WARN(this->get_logger(), "  ⚠️ 冲突: 蓝红都选聚类[%d], 保留红方(%.3fm < %.3fm)", 
+                        assign_red, dist_red, dist_blue);
+                    assign_blue = -1;
+                }
             }
         }
-        RCLCPP_INFO(this->get_logger(), "[UAV分配] 最终分配: 蓝方->%d, 红方->%d", assign_blue, assign_red);
+        
+        // 输出匹配结果
+        if (assign_blue >= 0) {
+            RCLCPP_INFO(this->get_logger(), "  ✓ 蓝方 -> 聚类[%d] 距离%.3fm", assign_blue, dist_blue);
+        } else if (has_blue_uav) {
+            RCLCPP_WARN(this->get_logger(), "  ❌ 蓝方: 无匹配聚类");
+        }
+        if (assign_red >= 0) {
+            RCLCPP_INFO(this->get_logger(), "  ✓ 红方 -> 聚类[%d] 距离%.3fm", assign_red, dist_red);
+        } else if (has_red_uav) {
+            RCLCPP_WARN(this->get_logger(), "  ❌ 红方: 无匹配聚类");
+        }
     }
 
-    // compute UAV measurement per side
+    // ========== 阶段四：相机-雷达融合测量 ==========
     bool   meas_ok[2]{false, false};
     double meas_x[2]{0, 0}, meas_y[2]{0, 0}, meas_z[2]{0, 0};
 
     auto compute_meas = [&](int idx, float px, float py, int assigned) {
-        try {
-            RCLCPP_INFO(this->get_logger(), "[DEBUG] compute_meas(idx=%d, px=%.2f, py=%.2f, assigned=%d, cN=%d, other_fresh=%s)", idx, px, py, assigned, cN, other_fresh ? "true" : "false");
-            bool has_cluster = (other_fresh && assigned >= 0 && assigned < cN);
-            RCLCPP_INFO(this->get_logger(), "[DEBUG] has_cluster=%s", has_cluster ? "true" : "false");
-            double xL = 0, yL = 0, zL = uav_default_z_;
-            float  z_plane = static_cast<float>(uav_default_z_);
-            if (has_cluster) {
-                RCLCPP_INFO(this->get_logger(), "[DEBUG] 聚类中心索引: assigned=%d, cX=%.3f, cY=%.3f, cZ=%.3f", assigned, cX[assigned], cY[assigned], cZ[assigned]);
-                xL = cX[assigned];
-                yL = cY[assigned];
-                zL = cZ[assigned];
-                z_plane = GetFilteredZPlane(idx, zL);  // 3.4 only here
-                RCLCPP_INFO(this->get_logger(), "[UAV融合] 雷达聚类观测 idx=%d: x=%.3f y=%.3f z=%.3f", idx, xL, yL, zL);
-            }
+        const char* side_name = (idx == 0) ? "蓝方" : "红方";
+        bool has_cluster = (other_fresh && assigned >= 0 && assigned < cN);
+        
+        if (!has_cluster) {
+            // 纯相机模式: 使用默认z值
+            float z_plane = static_cast<float>(uav_default_z_);
             cv::Point2f pv = solve_xy_on_z(px, py, z_plane);
-            double      xV = pv.x, yV = pv.y;
-            double      x_out = xV, y_out = yV;
-            double      z_out = has_cluster ? zL : uav_default_z_;
-
-            if (has_cluster) {
-                const double dx = xV - xL, dy = yV - yL;
-                const double r_xy = std::sqrt(dx * dx + dy * dy);
-                const double delta = std::max(1e-6, uav_huber_delta_xy_);
-                const double huber =
-                    (r_xy <= delta) ? 1.0 : (delta / std::max(1e-6, r_xy));
-                const double wV = std::max(1e-6, uav_w_vision_xy_);
-                const double wL = std::max(1e-6, uav_w_lidar_xy_) * huber;
-                x_out = (wV * xV + wL * xL) / (wV + wL);
-                y_out = (wV * yV + wL * yL) / (wV + wL);
-                RCLCPP_INFO(this->get_logger(), "[DEBUG] 融合: xV=%.3f, yV=%.3f, xL=%.3f, yL=%.3f, wV=%.3f, wL=%.3f, x_out=%.3f, y_out=%.3f", xV, yV, xL, yL, wV, wL, x_out, y_out);
-            }
-
             meas_ok[idx] = true;
-            meas_x[idx] = x_out;
-            meas_y[idx] = y_out;
-            meas_z[idx] = z_out;
-            RCLCPP_INFO(this->get_logger(), "[DEBUG] meas_ok[%d]=%s, meas_x=%.3f, meas_y=%.3f, meas_z=%.3f", idx, meas_ok[idx] ? "true" : "false", meas_x[idx], meas_y[idx], meas_z[idx]);
-        } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "[EXCEPTION] compute_meas idx=%d: %s", idx, e.what());
-        } catch (...) {
-            RCLCPP_ERROR(this->get_logger(), "[EXCEPTION] compute_meas idx=%d: unknown error", idx);
+            meas_x[idx] = pv.x;
+            meas_y[idx] = pv.y;
+            meas_z[idx] = uav_default_z_;
+            RCLCPP_INFO(this->get_logger(), "  %s: 纯相机模式 z=%.2f -> (%.3f, %.3f, %.3f)", 
+                side_name, z_plane, meas_x[idx], meas_y[idx], meas_z[idx]);
+            return;
         }
+        
+        // 融合模式: 智能选择z值
+        double xL = cX[assigned], yL = cY[assigned], zL = cZ[assigned];
+        
+        // 步骤3A: 先用默认z投影,计算距离
+        float z_default = static_cast<float>(uav_default_z_);
+        cv::Point2f pv_default = solve_xy_on_z(px, py, z_default);
+        double dx_def = pv_default.x - xL, dy_def = pv_default.y - yL;
+        double dist_default = std::sqrt(dx_def * dx_def + dy_def * dy_def);
+        
+        // 步骤3B: 用雷达真实z投影,计算距离
+        float z_lidar = GetFilteredZPlane(idx, zL);
+        cv::Point2f pv_lidar = solve_xy_on_z(px, py, z_lidar);
+        double dx_lid = pv_lidar.x - xL, dy_lid = pv_lidar.y - yL;
+        double dist_lidar = std::sqrt(dx_lid * dx_lid + dy_lid * dy_lid);
+        
+        // 步骤3C: 选择距离更小的z值
+        float z_best;
+        cv::Point2f pv_best;
+        double dist_best;
+        if (dist_lidar < dist_default) {
+            z_best = z_lidar;
+            pv_best = pv_lidar;
+            dist_best = dist_lidar;
+            RCLCPP_INFO(this->get_logger(), "  %s: [智能选z] 雷达z=%.3f距离%.3fm < 默认z=%.2f距离%.3fm, ✓选雷达z", 
+                side_name, z_lidar, dist_lidar, z_default, dist_default);
+        } else {
+            z_best = z_default;
+            pv_best = pv_default;
+            dist_best = dist_default;
+            RCLCPP_INFO(this->get_logger(), "  %s: [智能选z] 默认z=%.2f距离%.3fm < 雷达z=%.3f距离%.3fm, ✓选默认z", 
+                side_name, z_default, dist_default, z_lidar, dist_lidar);
+        }
+        
+        double xV = pv_best.x, yV = pv_best.y;
+        
+        RCLCPP_INFO(this->get_logger(), "  %s: [精确投影] 相机像素(%.1f,%.1f) 用z=%.3f → 精确XY(%.3f,%.3f)", 
+            side_name, px, py, z_best, xV, yV);
+        
+        // 步骤4: 相机XY与雷达XY加权融合
+        const double dx = xV - xL, dy = yV - yL;
+        const double r_xy = std::sqrt(dx * dx + dy * dy);
+        const double delta = std::max(1e-6, uav_huber_delta_xy_);
+        const double huber = (r_xy <= delta) ? 1.0 : (delta / std::max(1e-6, r_xy));
+        const double wV = std::max(1e-6, uav_w_vision_xy_);
+        const double wL = std::max(1e-6, uav_w_lidar_xy_) * huber;
+        
+        meas_ok[idx] = true;
+        meas_x[idx] = (wV * xV + wL * xL) / (wV + wL);
+        meas_y[idx] = (wV * yV + wL * yL) / (wV + wL);
+        meas_z[idx] = zL;
+        
+        // 计算归一化后的权重(用于日志显示)
+        const double w_sum = wV + wL;
+        const double wV_norm = wV / w_sum;
+        const double wL_norm = wL / w_sum;
+        
+        RCLCPP_INFO(this->get_logger(), "  %s: [融合] 相机(%.2f,%.2f)*%.3f + 雷达(%.2f,%.2f)*%.3f = 最终(%.3f,%.3f,%.3f)", 
+            side_name, xV, yV, wV_norm, xL, yL, wL_norm, meas_x[idx], meas_y[idx], meas_z[idx]);
     };
 
+    if (has_blue_uav || has_red_uav) {
+        RCLCPP_INFO(this->get_logger(), "========== [阶段四：相机-雷达融合测量] ==========");
+    }
     if (has_blue_uav) {
-        RCLCPP_INFO(this->get_logger(), "[UAV融合] 蓝方调用compute_meas, idx=0, assign=%d", assign_blue);
         compute_meas(0, msg->blue_x[6], msg->blue_y[6], assign_blue);
     }
     if (has_red_uav) {
-        RCLCPP_INFO(this->get_logger(), "[UAV融合] 红方调用compute_meas, idx=1, assign=%d", assign_red);
         compute_meas(1, msg->red_x[6], msg->red_y[6], assign_red);
     }
 
-    // KF update/predict + output pose
-    const rclcpp::Time t_now(msg->header.stamp);
+    // ========== 阶段五：卡尔曼滤波预测与更新 ==========
+    const rclcpp::Time t_now = is_stamp_zero(msg->header.stamp) 
+                               ? this->now() 
+                               : rclcpp::Time(msg->header.stamp);
+    
+    bool any_kf_activity = false;
     for (int idx = 0; idx < 2; ++idx) {
+        if (uav_kf_inited_[idx] || meas_ok[idx]) {
+            any_kf_activity = true;
+            break;
+        }
+    }
+    
+    if (any_kf_activity) {
+        RCLCPP_INFO(this->get_logger(), "========== [阶段五：卡尔曼滤波] ==========");
+    }
+    
+    for (int idx = 0; idx < 2; ++idx) {
+        const char* side_name = (idx == 0) ? "蓝方" : "红方";
+        
         if (uav_kf_inited_[idx]) {
             UavKalmanPredict(idx, t_now);
             if (meas_ok[idx]) {
                 UavKalmanUpdate(idx, meas_x[idx], meas_y[idx], meas_z[idx]);
                 uav_kf_last_update_[idx] = t_now;
+                RCLCPP_INFO(this->get_logger(), "  %s: KF更新 -> (%.3f, %.3f, %.3f)", 
+                    side_name, uav_x_[idx], uav_y_[idx], uav_z_[idx]);
             } else {
                 const double dt_ms =
-                    std::fabs(
-                        (t_now - uav_kf_last_update_[idx]).seconds()) *
-                    1000.0;
+                    std::fabs((t_now - uav_kf_last_update_[idx]).seconds()) * 1000.0;
                 if (uav_kf_last_update_[idx].nanoseconds() != 0 &&
                     dt_ms > (double)uav_lost_timeout_ms_) {
                     UavKalmanReset(idx);
+                    RCLCPP_WARN(this->get_logger(), "  %s: ⚠️ 超时%.1fms，重置KF", side_name, dt_ms);
                 }
             }
         } else {
-            if (meas_ok[idx])
-                UavKalmanInit(idx, meas_x[idx], meas_y[idx], meas_z[idx],
-                              t_now);
+            if (meas_ok[idx]) {
+                UavKalmanInit(idx, meas_x[idx], meas_y[idx], meas_z[idx], t_now);
+                RCLCPP_INFO(this->get_logger(), "  %s: ✓ KF初始化 at (%.3f, %.3f, %.3f)", 
+                    side_name, uav_x_[idx], uav_y_[idx], uav_z_[idx]);
+            }
         }
 
         if (uav_kf_inited_[idx]) {
@@ -677,51 +702,60 @@ void Resolve::DetectCallback(
         }
     }
 
-    // Now keep original car outputs (i=0..5) and fill UAV slot from
-    // KF/measurement
+    // ========== 阶段六：最终输出坐标 ==========
+    bool has_output = false;
+    for (int idx = 0; idx < 2; ++idx) {
+        if (uav_kf_inited_[idx] || meas_ok[idx]) {
+            has_output = true;
+            break;
+        }
+    }
+    
+    if (has_output) {
+        RCLCPP_INFO(this->get_logger(), "========== [阶段六：最终输出] ==========");
+        if (uav_kf_inited_[0] || meas_ok[0]) {
+            double out_x = uav_kf_inited_[0] ? uav_x_[0] : meas_x[0];
+            double out_y = uav_kf_inited_[0] ? uav_y_[0] : meas_y[0];
+            double out_z = uav_kf_inited_[0] ? uav_z_[0] : meas_z[0];
+            RCLCPP_INFO(this->get_logger(), "  蓝方UAV输出: (%.3f, %.3f, %.3f) [%s]", 
+                out_x, out_y, out_z, uav_kf_inited_[0] ? "KF" : "测量");
+        }
+        if (uav_kf_inited_[1] || meas_ok[1]) {
+            double out_x = uav_kf_inited_[1] ? uav_x_[1] : meas_x[1];
+            double out_y = uav_kf_inited_[1] ? uav_y_[1] : meas_y[1];
+            double out_z = uav_kf_inited_[1] ? uav_z_[1] : meas_z[1];
+            RCLCPP_INFO(this->get_logger(), "  红方UAV输出: (%.3f, %.3f, %.3f) [%s]", 
+                out_x, out_y, out_z, uav_kf_inited_[1] ? "KF" : "测量");
+        }
+    }
+
+    // Now keep original car outputs (i=0..5) and fill UAV slot from KF/measurement
     for (int i = 0; i < 7; i++) {
         // blue
         if (msg->blue_x[i] != 0 && msg->blue_y[i] != 0) {
             cv::Point2f p(msg->blue_x[i], msg->blue_y[i]);
-            float h = (i == 6) ? static_cast<float>(uav_default_z_) : parser_->get_height(p);
-            auto cp = parser_->parse_with_height(p, h);
-            // 添加详细日志（UAV和地面目标都输出）
             if (i == 6) {
-                RCLCPP_INFO(this->get_logger(), "[UAV蓝方] 输入像素: (%.2f, %.2f), 区域高度(固定): %.2f, 投影输出: (%.2f, %.2f)", msg->blue_x[i], msg->blue_y[i], h, cp.x, cp.y);
-            } else {
-                RCLCPP_INFO(this->get_logger(), "[蓝方] 目标%d 输入像素: (%.2f, %.2f), 区域高度: %.2f, 投影输出: (%.2f, %.2f)", i+1, msg->blue_x[i], msg->blue_y[i], h, cp.x, cp.y);
-            }
-            float y_offset = cp.y + 15;
-            if (i == 6) {
-                RCLCPP_INFO(this->get_logger(), "[UAV蓝方] y偏移后: (%.2f, %.2f)", cp.x, y_offset);
-            } else {
-                RCLCPP_INFO(this->get_logger(), "[蓝方] 目标%d y偏移后: (%.2f, %.2f)", i+1, cp.x, y_offset);
-            }
-            float before_clamp_x = cp.x, before_clamp_y = y_offset;
-            float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
-            float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-            if (i == 6) {
-                RCLCPP_INFO(this->get_logger(), "[UAV蓝方] clamp后: (%.2f, %.2f) (clamp前: %.2f, %.2f)", clamp_x, clamp_y, before_clamp_x, before_clamp_y);
-            } else {
-                RCLCPP_INFO(this->get_logger(), "[蓝方] 目标%d clamp后: (%.2f, %.2f) (clamp前: %.2f, %.2f)", i+1, clamp_x, clamp_y, before_clamp_x, before_clamp_y);
-            }
-            cp.x = clamp_x;
-            cp.y = clamp_y;
-            if (i == 6) {
+                // UAV: 直接使用KF或测量值,无需重新转换
                 if (uav_kf_inited_[0]) {
-                    RCLCPP_INFO(this->get_logger(), "[UAV蓝方] clamp后进入KF分支，clamp后坐标(%.2f, %.2f)被KF状态(%.2f, %.2f)覆盖，最终输出: (%.2f, %.2f)", clamp_x, clamp_y, uav_x_[0], uav_y_[0], (float)uav_x_[0], (float)uav_y_[0]);
-                    cp.x = (float)uav_x_[0];
-                    cp.y = (float)uav_y_[0];
+                    send_data.blue_x[i] = (float)uav_x_[0];
+                    send_data.blue_y[i] = (float)uav_y_[0];
                 } else if (meas_ok[0]) {
-                    RCLCPP_INFO(this->get_logger(), "[UAV蓝方] clamp后进入测量分支，输出用meas测量值: (%.2f, %.2f)", meas_x[0], meas_y[0]);
-                    cp.x = (float)meas_x[0];
-                    cp.y = (float)meas_y[0];
+                    send_data.blue_x[i] = (float)meas_x[0];
+                    send_data.blue_y[i] = (float)meas_y[0];
                 } else {
-                    RCLCPP_INFO(this->get_logger(), "[UAV蓝方] clamp后进入兜底分支，输出为clamp后新坐标: (%.2f, %.2f)", clamp_x, clamp_y);
+                    send_data.blue_x[i] = 0;
+                    send_data.blue_y[i] = 0;
                 }
+            } else {
+                // 地面车辆: 使用区域高度进行转换
+                float h = parser_->get_height(p);
+                auto cp = parser_->parse_with_height(p, h);
+                float y_offset = cp.y + 15;
+                float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
+                float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
+                send_data.blue_x[i] = clamp_x;
+                send_data.blue_y[i] = clamp_y;
             }
-            send_data.blue_x[i] = cp.x;
-            send_data.blue_y[i] = cp.y;
         } else {
             send_data.blue_x[i] = 0;
             send_data.blue_y[i] = 0;
@@ -730,41 +764,28 @@ void Resolve::DetectCallback(
         // red
         if (msg->red_x[i] != 0 && msg->red_y[i] != 0) {
             cv::Point2f p(msg->red_x[i], msg->red_y[i]);
-            float h = (i == 6) ? static_cast<float>(uav_default_z_) : parser_->get_height(p);
-            auto cp = parser_->parse_with_height(p, h);
             if (i == 6) {
-                RCLCPP_INFO(this->get_logger(), "[UAV红方] 输入像素: (%.2f, %.2f), 区域高度: %.2f, 投影输出: (%.2f, %.2f)", msg->red_x[i], msg->red_y[i], h, cp.x, cp.y);
-            } else {
-                RCLCPP_INFO(this->get_logger(), "[红方] 目标%d 输入像素: (%.2f, %.2f), 区域高度: %.2f, 投影输出: (%.2f, %.2f)", i+1, msg->red_x[i], msg->red_y[i], h, cp.x, cp.y);
-            }
-            float y_offset = cp.y + 15;
-            if (i == 6) {
-                RCLCPP_INFO(this->get_logger(), "[UAV红方] y偏移后: (%.2f, %.2f)", cp.x, y_offset);
-            } else {
-                RCLCPP_INFO(this->get_logger(), "[红方] 目标%d y偏移后: (%.2f, %.2f)", i+1, cp.x, y_offset);
-            }
-            float before_clamp_x = cp.x, before_clamp_y = y_offset;
-            float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
-            float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-            if (i == 6) {
-                RCLCPP_INFO(this->get_logger(), "[UAV红方] clamp后: (%.2f, %.2f) (clamp前: %.2f, %.2f)", clamp_x, clamp_y, before_clamp_x, before_clamp_y);
-            } else {
-                RCLCPP_INFO(this->get_logger(), "[红方] 目标%d clamp后: (%.2f, %.2f) (clamp前: %.2f, %.2f)", i+1, clamp_x, clamp_y, before_clamp_x, before_clamp_y);
-            }
-            cp.x = clamp_x;
-            cp.y = clamp_y;
-            if (i == 6) {
+                // UAV: 直接使用KF或测量值,无需重新转换
                 if (uav_kf_inited_[1]) {
-                    RCLCPP_INFO(this->get_logger(), "[UAV红方] clamp后进入KF分支，clamp后坐标(%.2f, %.2f)被KF状态(%.2f, %.2f)覆盖，最终输出: (%.2f, %.2f)", clamp_x, clamp_y, uav_x_[1], uav_y_[1], (float)uav_x_[1], (float)uav_y_[1]);
-                    cp.x = (float)uav_x_[1];
-                    cp.y = (float)uav_y_[1];
+                    send_data.red_x[i] = (float)uav_x_[1];
+                    send_data.red_y[i] = (float)uav_y_[1];
                 } else if (meas_ok[1]) {
-                    cp.x = (float)meas_x[1];
-                    cp.y = (float)meas_y[1];
+                    send_data.red_x[i] = (float)meas_x[1];
+                    send_data.red_y[i] = (float)meas_y[1];
+                } else {
+                    send_data.red_x[i] = 0;
+                    send_data.red_y[i] = 0;
                 }
+            } else {
+                // 地面车辆: 使用区域高度进行转换
+                float h = parser_->get_height(p);
+                auto cp = parser_->parse_with_height(p, h);
+                float y_offset = cp.y + 15;
+                float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
+                float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
+                send_data.red_x[i] = clamp_x;
+                send_data.red_y[i] = clamp_y;
             }
-            send_data.red_x[i] = cp.x;
-            send_data.red_y[i] = cp.y;
         } else {
             send_data.red_x[i] = 0;
             send_data.red_y[i] = 0;
