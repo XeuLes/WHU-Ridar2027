@@ -250,7 +250,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Armor YOLO loaded");
     
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading main yolo model...");
-    this->yolo = yolo::load(yolo_path, yolo::Type::V26, 0.15f, 0.45f);
+    this->yolo = yolo::load(yolo_path, yolo::Type::V26, 0.85f, 0.45f);
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Main YOLO loaded");
 
 
