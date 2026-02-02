@@ -8,6 +8,8 @@
 #include <string>
 #include <algorithm>
 
+#include <cuda_fp16.h>
+
 namespace yolo {
 
 using namespace std;
@@ -33,6 +35,19 @@ static __host__ __device__ void affine_project(
     *ox = matrix[0] * x + matrix[1] * y + matrix[2];
     *oy = matrix[3] * x + matrix[4] * y + matrix[5];
 }
+
+__global__ void fp32_to_fp16_kernel(const float* src, __half* dst, int n) {
+    int i = (int)(blockIdx.x * blockDim.x + threadIdx.x);
+    if (i < n) dst[i] = __float2half(src[i]);
+}
+
+static inline void fp32_to_fp16_async(const float* src, __half* dst, int n, cudaStream_t stream) {
+    dim3 block(256);
+    dim3 grid((n + block.x - 1) / block.x);
+    fp32_to_fp16_kernel<<<grid, block, 0, stream>>>(src, dst, n);
+    checkKernel(cudaPeekAtLastError());
+}
+
 
 // 通用解码核函数 (FP32)
 static __global__ void decode_kernel_common(
@@ -446,67 +461,50 @@ static dim3 block_dims(int numJobs)
     return numJobs < GPU_BLOCK_THREADS ? numJobs : GPU_BLOCK_THREADS;
 }
 
+// NOTE: TensorRT bindings are typeless (void*). V26 may output FP16.
+// Keep predict as void* and reinterpret with the decided dtype.
 static void decode_kernel_invoker(
-    float* predict, int num_bboxes, int num_classes, int output_cdim,
+    void* predict, int num_bboxes, int num_classes, int output_cdim,
     float confidence_threshold, float nms_threshold,
     float* invert_affine_matrix, float* parray, int MAX_IMAGE_BOXES,
     Type type, cudaStream_t stream,
     bool v26_use_fp16 = false,
     bool v26_layout_cxn = false
-)
-{
+){
     auto grid = grid_dims(num_bboxes);
     auto block = block_dims(num_bboxes);
 
     if (type == Type::V8 || type == Type::V8Seg) {
-        checkKernel(decode_kernel_v8<<<grid, block, 0, stream>>>(
-            predict, num_bboxes, num_classes, output_cdim,
-            confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES
-        ));
-    } 
-    else if (type == Type::V5Face) {
-        checkKernel(decode_kernel_v5_face<<<grid, block, 0, stream>>>(
-            predict, num_bboxes, num_classes, output_cdim,
-            confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES
-        ));
-    } 
-    else if (type == Type::V26) {
+        float* p = (float*)predict;
+        decode_kernel_v8<<<grid, block, 0, stream>>>(p, num_bboxes, num_classes, output_cdim,
+            confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES);
+    } else if (type == Type::V5Face) {
+        float* p = (float*)predict;
+        decode_kernel_v5_face<<<grid, block, 0, stream>>>(p, num_bboxes, num_classes, output_cdim,
+            confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES);
+    } else if (type == Type::V26) {
         if (v26_use_fp16) {
-        const __half* p = (const __half*)predict;
-        if (v26_layout_cxn) {
-            checkKernel(decode_kernel_v26_fp16_cxn<<<grid, block, 0, stream>>>(
-                p, num_bboxes, confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES
-            ));
+            const __half* p = (const __half*)predict;
+            if (v26_layout_cxn)
+                decode_kernel_v26_fp16_cxn<<<grid, block, 0, stream>>>(p, num_bboxes, confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES);
+            else
+                decode_kernel_v26_fp16_nxc<<<grid, block, 0, stream>>>(p, num_bboxes, confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES);
         } else {
-            checkKernel(decode_kernel_v26_fp16_nxc<<<grid, block, 0, stream>>>(
-                p, num_bboxes, confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES
-            ));
+            const float* p = (const float*)predict;
+            if (v26_layout_cxn)
+                decode_kernel_v26_fp32_cxn<<<grid, block, 0, stream>>>(p, num_bboxes, confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES);
+            else
+                decode_kernel_v26_fp32_nxc<<<grid, block, 0, stream>>>(p, num_bboxes, confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES);
         }
     } else {
-        const float* p = (const float*)predict;
-        if (v26_layout_cxn) {
-            checkKernel(decode_kernel_v26_fp32_cxn<<<grid, block, 0, stream>>>(
-                p, num_bboxes, confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES
-            ));
-        } else {
-            checkKernel(decode_kernel_v26_fp32_nxc<<<grid, block, 0, stream>>>(
-                p, num_bboxes, confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES
-            ));
-        }
-    }
-    }
-    else {
-        checkKernel(decode_kernel_common<<<grid, block, 0, stream>>>(
-            predict, num_bboxes, num_classes, output_cdim,
-            confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES
-        ));
+        float* p = (float*)predict;
+        decode_kernel_common<<<grid, block, 0, stream>>>(p, num_bboxes, num_classes, output_cdim,
+            confidence_threshold, invert_affine_matrix, parray, MAX_IMAGE_BOXES);
     }
 
-    grid = grid_dims(MAX_IMAGE_BOXES);
-    block = block_dims(MAX_IMAGE_BOXES);
-    checkKernel(fast_nms_kernel<<<grid, block, 0, stream>>>(
-        parray, MAX_IMAGE_BOXES, nms_threshold
-    ));
+    auto g2 = grid_dims(MAX_IMAGE_BOXES);
+    auto b2 = block_dims(MAX_IMAGE_BOXES);
+    fast_nms_kernel<<<g2, b2, 0, stream>>>(parray, MAX_IMAGE_BOXES, nms_threshold);
 }
 
 static __global__ void decode_single_mask_kernel(
@@ -624,7 +622,8 @@ public:
     float                                          confidence_threshold_;
     float                                          nms_threshold_;
     vector<shared_ptr<trt::Memory<unsigned char>>> preprocess_buffers_;
-    trt::Memory<float> input_buffer_, bbox_predict_, output_boxarray_;
+    trt::Memory<float>  input_buffer_, bbox_predict_, output_boxarray_; // input_buffer_ 继续作为 FP32 预处理结果
+    trt::Memory<__half> input_buffer_fp16_;                              // 新增：V26 输入 HALF
     trt::Memory<float> segment_predict_;
     int                network_input_width_, network_input_height_;
     Norm               normalize_;
@@ -651,6 +650,7 @@ public:
     {
         size_t input_numel = network_input_width_ * network_input_height_ * 3;
         input_buffer_.gpu(batch_size * input_numel);
+        input_buffer_fp16_.gpu(batch_size * input_numel);
         bbox_predict_.gpu(batch_size * bbox_head_dims_[1] * bbox_head_dims_[2]);
         output_boxarray_.gpu(batch_size * (32 + MAX_IMAGE_BOXES * NUM_BOX_ELEMENT));
         output_boxarray_.cpu(batch_size * (32 + MAX_IMAGE_BOXES * NUM_BOX_ELEMENT));
@@ -799,12 +799,17 @@ public:
             int C = d2, N = d1;
             bool layout_cxn = false;
             
+            // 你的 car_merged_200_fp16.engine: output0 is FLOAT (1,300,6)
+            v26_use_fp16_ = false;
+            v26_dtype_checked_ = true;   // 跳过 probe，避免误判
+            
             if (d2 == 6) { C = 6; N = d1; layout_cxn = false; }
             else if (d1 == 6) { C = 6; N = d2; layout_cxn = true; }
             else {
                 if (d1 > 6 && d1 < 512 && d2 > 512) { C = d1; N = d2; layout_cxn = true; }
                 else { C = d2; N = d1; layout_cxn = false; }
             }
+            
             this->v26_layout_cxn_ = layout_cxn;
             this->v26_C_ = C;
             this->v26_N_ = N;
@@ -870,13 +875,23 @@ public:
         }
 
         float* bbox_output_device = bbox_predict_.gpu();
+
+        // === V26: FP32 -> FP16 (engine input is HALF) ===
+        if (type_ == Type::V26) {
+            int numel = (int)(infer_batch_size * network_input_width_ * network_input_height_ * 3);
+            fp32_to_fp16_async(input_buffer_.gpu(), input_buffer_fp16_.gpu(), numel, stream_);
+        }
+
         vector<void*> bindings(2, nullptr);
-        bindings[input_binding_] = input_buffer_.gpu();
-        bindings[bbox_binding_]  = bbox_output_device;
+        bindings[input_binding_] = (type_ == Type::V26) ? (void*)input_buffer_fp16_.gpu() : (void*)input_buffer_.gpu();
+        bindings[bbox_binding_]  = (void*)bbox_output_device;
 
         if (has_segment_) {
-            bindings = {input_buffer_.gpu(), segment_predict_.gpu(), bbox_output_device};
+            // seg 的情况你先别动逻辑，但 input 也要一致
+            void* in_ptr = (type_ == Type::V26) ? (void*)input_buffer_fp16_.gpu() : (void*)input_buffer_.gpu();
+            bindings = {in_ptr, segment_predict_.gpu(), bbox_output_device};
         }
+
 
         checkRuntime(cudaMemsetAsync(bbox_output_device, 0, bbox_predict_.gpu_bytes(), stream_));
 
@@ -989,29 +1004,29 @@ public:
         for (int ib = 0; ib < num_image; ++ib) {
             float* boxarray_device = output_boxarray_.gpu() + ib * (32 + MAX_IMAGE_BOXES * NUM_BOX_ELEMENT);
             float* affine_matrix_device = (float*)preprocess_buffers_[ib]->gpu();
-            float* image_based_bbox_output = bbox_output_device + ib * (bbox_head_dims_[1] * bbox_head_dims_[2]);
+            size_t out_elems = (size_t)bbox_head_dims_[1] * (size_t)bbox_head_dims_[2];
+            size_t elem_size = sizeof(float);
+            if (type_ == Type::V26 && v26_use_fp16_) elem_size = sizeof(__half);
 
+            uint8_t* bbox_base = (uint8_t*)bbox_output_device;
+            void* image_based_bbox_output = (void*)(bbox_base + (size_t)ib * out_elems * elem_size);
             checkRuntime(cudaMemsetAsync(boxarray_device, 0, sizeof(int), stream_));
             int N_for_decode = bbox_head_dims_[1];
             int C_for_decode = bbox_head_dims_[2];
-            if (type_ == Type::V26) {
-                v26_use_fp16_ = true;          // 强制
-                v26_dtype_checked_ = true;
-            }
+            
 
             if (type_ == Type::V26) {
                 N_for_decode = v26_N_;
                 C_for_decode = v26_C_;
             }
             decode_kernel_invoker(
-            image_based_bbox_output,
-            N_for_decode, num_classes_,
-            C_for_decode,
-            confidence_threshold_, nms_threshold_,
-            affine_matrix_device, boxarray_device, MAX_IMAGE_BOXES,
-            type_, stream_,
-            v26_use_fp16_, v26_layout_cxn_
-        );
+                image_based_bbox_output,
+                N_for_decode, num_classes_, C_for_decode,
+                confidence_threshold_, nms_threshold_,
+                affine_matrix_device, boxarray_device, MAX_IMAGE_BOXES,
+                type_, stream_,
+                v26_use_fp16_, v26_layout_cxn_
+            );
         }
 
         checkRuntime(cudaMemcpyAsync(output_boxarray_.cpu(), output_boxarray_.gpu(), output_boxarray_.gpu_bytes(), cudaMemcpyDeviceToHost, stream_));

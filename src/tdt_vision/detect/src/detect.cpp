@@ -47,7 +47,39 @@ int getColor(cv::Mat& img)
  * @return 裁剪后的安全矩形框
  * @details 确保rect在image范围内，防止访问越界导致崩溃
  */
-cv::Rect getSafeRect(const cv::Mat& image, const cv::Rect& rect)
+static inline cv::Rect getSafeRect(const cv::Mat& image, const cv::Rect& rect)
+{
+    if (image.empty()) return cv::Rect();
+
+    int rx = rect.x, ry = rect.y, rw = rect.width, rh = rect.height;
+
+    // 归一化负宽高
+    if (rw < 0) { rx += rw; rw = -rw; }
+    if (rh < 0) { ry += rh; rh = -rh; }
+
+    if (rw <= 0 || rh <= 0) return cv::Rect();
+
+    // 完全在外
+    const int img_right = image.cols;
+    const int img_bottom = image.rows;
+    if (rx >= img_right || ry >= img_bottom || rx + rw <= 0 || ry + rh <= 0)
+        return cv::Rect();
+
+    // clamp 到图像内
+    int x1 = std::max(0, rx);
+    int y1 = std::max(0, ry);
+    int x2 = std::min(img_right,  rx + rw);
+    int y2 = std::min(img_bottom, ry + rh);
+
+    int w = x2 - x1;
+    int h = y2 - y1;
+    if (w <= 0 || h <= 0) return cv::Rect();
+
+    return cv::Rect(x1, y1, w, h);
+}
+
+
+cv::Rect getSafeRectUAV(const cv::Mat& image, const cv::Rect& rect)
 {
     // 边界矩形
     const int img_right = image.cols;
@@ -91,7 +123,7 @@ cv::Rect getSafeRect(const cv::Mat& image, const cv::Rect& rect)
     int original_area = rw * rh;
     
     // 30%阈值检查：intersect_area * 10 > original_area * 3
-    if (intersect_area * 10 <= original_area * 3) {
+    if (intersect_area * 10 <= original_area *3) {
         return cv::Rect();
     }
     
@@ -736,7 +768,7 @@ RCLCPP_INFO(this->get_logger(),
         }
 
         // 再做安全裁剪（防越界）
-        cv::Rect uav_rect = getSafeRect(img, uav_rect_raw);
+        cv::Rect uav_rect = getSafeRectUAV(img, uav_rect_raw);
         if (uav_rect.width <= 0 || uav_rect.height <= 0) continue;
 
 
