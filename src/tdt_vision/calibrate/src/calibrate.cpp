@@ -29,12 +29,14 @@ Calibrate::Calibrate(const rclcpp::NodeOptions& options)
     cv::setMouseCallback("calibrate", mousecallback, 0);
 
     // 读取相机内参和畸变系数（从yaml配置文件）
-    cv::FileStorage fs;
-    fs.open("./config/camera_params.yaml",
-            cv::FileStorage::READ);        // 打开配置文件
-    fs["camera_matrix"] >> camera_matrix;  // 读取相机内参矩阵
-    fs["dist_coeffs"] >> dist_coeffs;      // 读取畸变系数
-    fs.release();                          // 释放文件资源
+    // -------------------- config paths (ROS2 parameters) --------------------
+    this->declare_parameter<std::string>("out_matrix_path", "config/out_matrix.yaml");
+    this->declare_parameter<std::string>("camera_params_path", "config/camera_params.yaml");
+    this->declare_parameter<std::string>("region_points_path", "config/RM2025_Points.yaml");
+
+    const std::string out_matrix_path    = this->get_parameter("out_matrix_path").as_string();
+    const std::string camera_params_path = this->get_parameter("camera_params_path").as_string();
+    const std::string region_points_path = this->get_parameter("region_points_path").as_string();                        // 释放文件资源
 
     // 初始化真实世界坐标点（校准用的参考点，如己方堡垒、己方高塔等）
     real_points.push_back(self_FORTRESS);  // 己方堡垒
@@ -43,8 +45,31 @@ Calibrate::Calibrate(const rclcpp::NodeOptions& options)
     real_points.push_back(enemy_Tower);    // 敌方高塔
     real_points.push_back(enemy_High);     // 敌方高地
 
-    // 初始化解析器（用于处理矩阵变换等）
-    parser_ = new parser();
+    // -------------------- read camera intrinsics --------------------
+    cv::FileStorage fs;
+    fs.open(camera_params_path, cv::FileStorage::READ);
+    if (!fs.isOpened()) {
+        RCLCPP_ERROR(this->get_logger(), "[FATAL] 无法打开 camera_params: %s", camera_params_path.c_str());
+    } else {
+        fs["camera_matrix"] >> camera_matrix;
+        fs["dist_coeffs"] >> dist_coeffs;
+        fs.release();
+    }
+
+    // -------------------- init parser (3-arg ctor) --------------------
+    parser_ = nullptr;
+    try {
+        parser_ = new parser(out_matrix_path, camera_params_path, region_points_path);
+        RCLCPP_INFO(this->get_logger(),
+                    "[INIT] calibrate parser config:\n  out_matrix=%s\n  camera_params=%s\n  region_points=%s",
+                    out_matrix_path.c_str(),
+                    camera_params_path.c_str(),
+                    region_points_path.c_str());
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造异常: %s", e.what());
+    } catch (...) {
+        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造未知异常");
+    }
 
     // 打印初始化成功的日志信息（ASCII艺术字）
     RCLCPP_INFO(this->get_logger(),

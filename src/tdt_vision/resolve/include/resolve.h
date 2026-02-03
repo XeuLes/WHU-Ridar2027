@@ -27,6 +27,8 @@ class Resolve final : public rclcpp::Node {
 public:
     explicit Resolve(const rclcpp::NodeOptions& options);
 
+    ~Resolve() override;
+
     void callback(const std::shared_ptr<geometry_msgs::msg::Vector3> msg);
     void DetectCallback(
         const vision_interface::msg::DetectResult::SharedPtr msg);
@@ -119,6 +121,8 @@ private:
     void  UavKalmanPredict(int idx, const rclcpp::Time& stamp);
     void  UavKalmanUpdate(int idx, double mx, double my, double mz);
 };
+
+
 
 }  // namespace tdt_radar
 

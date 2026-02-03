@@ -18,19 +18,41 @@ static inline bool is_stamp_zero(const builtin_interfaces::msg::Time& t)
 Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     : Node("radar_resolve_node", node_options)
 {
+    // -------------------- parser config paths (ROS2 parameters) --------------------
+    this->declare_parameter<std::string>("out_matrix_path", "config/out_matrix.yaml");
+    this->declare_parameter<std::string>("camera_params_path", "config/camera_params.yaml");
+    this->declare_parameter<std::string>("region_points_path", "config/RM2025_Points.yaml");
+
+    // minimap path (optional)
+    this->declare_parameter<std::string>("minimap_path", "config/RM2025.png");
+
+    const std::string out_matrix_path   = this->get_parameter("out_matrix_path").as_string();
+    const std::string camera_params_path = this->get_parameter("camera_params_path").as_string();
+    const std::string region_points_path = this->get_parameter("region_points_path").as_string();
+    const std::string minimap_path       = this->get_parameter("minimap_path").as_string();
+
+    // -------------------- construct parser --------------------
     parser_ = nullptr;
     try {
-        parser_ = new parser();
+        parser_ = new parser(out_matrix_path, camera_params_path, region_points_path);
+        RCLCPP_INFO(this->get_logger(),
+                    "[INIT] parser config:\n  out_matrix=%s\n  camera_params=%s\n  region_points=%s",
+                    out_matrix_path.c_str(),
+                    camera_params_path.c_str(),
+                    region_points_path.c_str());
     } catch (const std::exception& e) {
         RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造异常: %s", e.what());
     } catch (...) {
         RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造未知异常");
     }
-    
-    minimap = cv::imread("config/RM2025.png");
+
+    // -------------------- load minimap --------------------
+    minimap = cv::imread(minimap_path);
     if (minimap.empty()) {
-        RCLCPP_WARN(this->get_logger(), "minimap图片加载失败: config/RM2025.png");
+        RCLCPP_WARN(this->get_logger(), "minimap图片加载失败: %s", minimap_path.c_str());
     }
+
+    
 
     point_sub = this->create_subscription<geometry_msgs::msg::Vector3>(
         "camera_point2D", rclcpp::SensorDataQoS(),
@@ -109,6 +131,13 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     uav_r_meas_xy_ = this->get_parameter("uav_r_meas_xy").as_double();
     uav_r_meas_z_ = this->get_parameter("uav_r_meas_z").as_double();
     uav_gate_maha_ = this->get_parameter("uav_gate_maha").as_double();
+}
+Resolve::~Resolve()
+{
+    if (parser_) {
+        delete parser_;
+        parser_ = nullptr;
+    }
 }
 
 void Resolve::MatchInfoCallback(

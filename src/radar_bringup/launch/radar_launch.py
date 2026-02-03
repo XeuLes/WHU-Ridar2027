@@ -122,6 +122,12 @@ def generate_launch_description():
             package='tdt_vision',
             plugin='tdt_radar::Resolve',
             name='radar_resolve_node',
+            parameters=[{
+            "out_matrix_path": f"/home/user/code/T-DT_Radar-main/config/out_matrix.yaml",
+            "camera_params_path": f"/home/user/code/T-DT_Radar-main/config/camera_params.yaml",
+            "region_points_path": f"/home/user/code/T-DT_Radar-main/config/GCZX_Points.yaml",
+            "minimap_path": f"/home/user/code/T-DT_Radar-main/config/jichuzhizao.png",
+            }],
             # 移除qos_profile参数
             extra_arguments=[
                 {'use_intra_process_comms': True},
