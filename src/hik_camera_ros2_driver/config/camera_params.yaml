@@ -8,7 +8,7 @@
     # camera_serials: ["DA1234567", "DA7654321"]
 
     # ---------------- cam0（第一台相机） ----------------
-    cam0.camera_info_url: "package://hik_camera_ros2_driver/config/camera_info.yaml"
+    cam0.camera_info_url: "package://hik_camera_ros2_driver/config/camera_info0.yaml"
     cam0.pixel_format: "BayerRG8"
     cam0.adc_bit_depth: "Bits_8"
 
@@ -18,10 +18,10 @@
 
     cam0.acquisition_frame_rate: 120.0
     cam0.exposure_time: 12000
-    cam0.gain: 18.9
+    cam0.gain: 16.9
 
     # ---------------- cam1（第二台相机） ----------------
-    cam1.camera_info_url: "package://hik_camera_ros2_driver/config/camera_info.yaml"
+    cam1.camera_info_url: "package://hik_camera_ros2_driver/config/camera_info1.yaml"
     cam1.pixel_format: "BayerRG8"
     cam1.adc_bit_depth: "Bits_8"
 
@@ -31,4 +31,4 @@
 
     cam1.acquisition_frame_rate: 120.0
     cam1.exposure_time: 12000
-    cam1.gain: 16.9
+    cam1.gain: 26.9

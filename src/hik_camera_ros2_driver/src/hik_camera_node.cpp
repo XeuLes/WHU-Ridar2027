@@ -384,9 +384,10 @@ private:
             RCLCPP_INFO(this->get_logger(), "[%s] ADC Bit Depth set to %s",
                         cam.prefix.c_str(), adc_bit_depth.c_str());
         } else {
-            RCLCPP_ERROR(this->get_logger(),
-                         "[%s] Failed to set ADC Bit Depth, status = %d",
-                         cam.prefix.c_str(), status);
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] Failed to set ADC Bit Depth to %s, status = "
+                        "%d. Skip.",
+                        cam.prefix.c_str(), adc_bit_depth.c_str(), status);
         }
 
         // Pixel format

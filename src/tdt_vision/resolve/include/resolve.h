@@ -66,9 +66,7 @@ private:
     // cache up to 2 centroids
     std::mutex   uav_other_mutex_;
     int          uav_other_count_{0};  // 0..2
-    double       uav_other_x_[2]{0.0, 0.0};
-    double       uav_other_y_[2]{0.0, 0.0};
-    double       uav_other_z_[2]{0.0, 0.0};
+    std::vector<pcl::PointXYZ> uav_other_clusters_;
     rclcpp::Time uav_other_stamp_{0, 0, RCL_ROS_TIME};
 
     // parameters

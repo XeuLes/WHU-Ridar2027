@@ -1,570 +1,330 @@
-#include <rclcpp/rclcpp.hpp>
+#include "gimbal_aim_solver/gimbal_aim_solver_node.hpp"
 
-#include <auto_aim_fast/msg/aim_target.hpp>
-
-#include <geometry_msgs/msg/point_stamped.hpp>
-#include <std_msgs/msg/float64_multi_array.hpp>
-
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2/LinearMath/Transform.h>
-#include <tf2/LinearMath/Vector3.h>
-#include <tf2_ros/buffer.h>
-#include <tf2_ros/transform_listener.h>
-
-#include <algorithm>
 #include <cmath>
-#include <mutex>
-#include <string>
+#include <vector>
 
-namespace {
-static tf2::Transform
-tfFromMsg(const geometry_msgs::msg::TransformStamped& ts)
+namespace gimbal_aim_solver
 {
-    tf2::Transform T;
-    T.setOrigin(tf2::Vector3(ts.transform.translation.x,
-                             ts.transform.translation.y,
-                             ts.transform.translation.z));
-    tf2::Quaternion q(ts.transform.rotation.x, ts.transform.rotation.y,
-                      ts.transform.rotation.z, ts.transform.rotation.w);
-    q.normalize();
-    T.setRotation(q);
-    return T;
+
+GimbalAimSolverNode::GimbalAimSolverNode(const rclcpp::NodeOptions& options)
+: Node("gimbal_aim_solver_node", options)
+{
+  declareAndLoadParameters();
+
+  uav_sub_ = this->create_subscription<geometry_msgs::msg::PoseArray>(
+    uav_topic_, rclcpp::SensorDataQoS(),
+    std::bind(&GimbalAimSolverNode::uavCallback, this, std::placeholders::_1));
+
+  gimbal_angles_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
+    gimbal_angles_topic_, rclcpp::SensorDataQoS(),
+    std::bind(&GimbalAimSolverNode::gimbalAnglesCallback, this, std::placeholders::_1));
+
+  target_angles_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
+    target_angles_topic_, 10);
+
+  RCLCPP_INFO(this->get_logger(), "gimbal_aim_solver_node started.");
+  RCLCPP_INFO(this->get_logger(), "uav_topic: %s", uav_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "gimbal_angles_topic: %s", gimbal_angles_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "target_angles_topic: %s", target_angles_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "target_side: %s", target_side_.c_str());
+  RCLCPP_INFO(this->get_logger(), "gimbal_angle_order: %s", gimbal_angle_order_.c_str());
+  RCLCPP_INFO(this->get_logger(), "use_increment_output: %s", use_increment_output_ ? "true" : "false");
+  RCLCPP_INFO(this->get_logger(), "publish_debug: %s", publish_debug_ ? "true" : "false");
 }
 
-static tf2::Quaternion axisAngleQuat(const std::string& axis, double angle)
+void GimbalAimSolverNode::declareAndLoadParameters()
 {
-    tf2::Vector3 ax(0, 0, 1);
-    if (axis == "X" || axis == "x")
-        ax = tf2::Vector3(1, 0, 0);
-    else if (axis == "Y" || axis == "y")
-        ax = tf2::Vector3(0, 1, 0);
-    else
-        ax = tf2::Vector3(0, 0, 1);
+  this->declare_parameter<std::string>("uav_topic", "/uav_positions");
+  this->declare_parameter<std::string>("gimbal_angles_topic", "/gimbal/angles");
+  this->declare_parameter<std::string>("target_angles_topic", "/gimbal/target_angles");
 
-    tf2::Quaternion q;
-    q.setRotation(ax, angle);
-    q.normalize();
-    return q;
+  this->declare_parameter<std::string>("target_side", "red");
+  this->declare_parameter<std::string>("gimbal_angle_order", "pitch_yaw");
+
+  this->declare_parameter<bool>("publish_debug", true);
+  this->declare_parameter<bool>("use_increment_output", false);
+
+  this->declare_parameter<double>("max_uav_msg_age_sec", 0.5);
+  this->declare_parameter<double>("max_gimbal_msg_age_sec", 0.5);
+
+  this->declare_parameter<bool>("enable_output_filter", false);
+  this->declare_parameter<double>("output_filter_alpha", 0.2);
+
+  this->declare_parameter<std::vector<double>>(
+    "world_rvec", std::vector<double>{1.3007738496052885, 1.0519496130346802, -1.0480104909702821});
+  this->declare_parameter<std::vector<double>>(
+    "world_tvec", std::vector<double>{-9.0641934014867864, 1.2351673073596281, 23.979868492980199});
+
+  this->declare_parameter<std::vector<double>>(
+    "camera_to_gimbal_xyz", std::vector<double>{-0.05, -0.20, 0.0});
+
+  this->declare_parameter<double>("yaw_offset_deg", 0.0);
+  this->declare_parameter<double>("pitch_offset_deg", 0.0);
+
+  this->declare_parameter<double>("yaw_min_deg", -180.0);
+  this->declare_parameter<double>("yaw_max_deg", 180.0);
+  this->declare_parameter<double>("pitch_min_deg", -45.0);
+  this->declare_parameter<double>("pitch_max_deg", 45.0);
+
+  uav_topic_ = this->get_parameter("uav_topic").as_string();
+  gimbal_angles_topic_ = this->get_parameter("gimbal_angles_topic").as_string();
+  target_angles_topic_ = this->get_parameter("target_angles_topic").as_string();
+
+  target_side_ = this->get_parameter("target_side").as_string();
+  gimbal_angle_order_ = this->get_parameter("gimbal_angle_order").as_string();
+
+  publish_debug_ = this->get_parameter("publish_debug").as_bool();
+  use_increment_output_ = this->get_parameter("use_increment_output").as_bool();
+
+  max_uav_msg_age_sec_ = this->get_parameter("max_uav_msg_age_sec").as_double();
+  max_gimbal_msg_age_sec_ = this->get_parameter("max_gimbal_msg_age_sec").as_double();
+
+  enable_output_filter_ = this->get_parameter("enable_output_filter").as_bool();
+  output_filter_alpha_ = this->get_parameter("output_filter_alpha").as_double();
+
+  const auto world_rvec = this->get_parameter("world_rvec").as_double_array();
+  const auto world_tvec = this->get_parameter("world_tvec").as_double_array();
+
+  const bool ok = extrinsic_transformer_.init(
+    std::vector<double>(world_rvec.begin(), world_rvec.end()),
+    std::vector<double>(world_tvec.begin(), world_tvec.end()));
+
+  if (!ok) {
+    RCLCPP_FATAL(this->get_logger(), "Failed to initialize extrinsic transformer.");
+    throw std::runtime_error("Failed to initialize extrinsic transformer");
+  }
+
+  const auto camera_to_gimbal_xyz = this->get_parameter("camera_to_gimbal_xyz").as_double_array();
+  if (camera_to_gimbal_xyz.size() != 3) {
+    RCLCPP_FATAL(this->get_logger(), "camera_to_gimbal_xyz must have size 3.");
+    throw std::runtime_error("camera_to_gimbal_xyz size error");
+  }
+
+  gimbal_geometry_.setCameraToGimbalTranslation(
+    Eigen::Vector3d(camera_to_gimbal_xyz[0], camera_to_gimbal_xyz[1], camera_to_gimbal_xyz[2]));
+
+  const double yaw_offset_deg = this->get_parameter("yaw_offset_deg").as_double();
+  const double pitch_offset_deg = this->get_parameter("pitch_offset_deg").as_double();
+  angle_solver_.setOffsets(yaw_offset_deg, pitch_offset_deg);
+
+  const double yaw_min_deg = this->get_parameter("yaw_min_deg").as_double();
+  const double yaw_max_deg = this->get_parameter("yaw_max_deg").as_double();
+  const double pitch_min_deg = this->get_parameter("pitch_min_deg").as_double();
+  const double pitch_max_deg = this->get_parameter("pitch_max_deg").as_double();
+
+  angle_solver_.setLimits(yaw_min_deg, yaw_max_deg, pitch_min_deg, pitch_max_deg);
 }
 
-static double deg2rad(double deg)
+bool GimbalAimSolverNode::isFinitePoint(const Eigen::Vector3d& p) const
 {
-    return deg * M_PI / 180.0;
-}
-static double rad2deg(double rad)
-{
-    return rad * 180.0 / M_PI;
+  return std::isfinite(p.x()) && std::isfinite(p.y()) && std::isfinite(p.z());
 }
 
-static double clampAbs(double v, double max_abs)
+bool GimbalAimSolverNode::selectTargetWorldPoint(
+  const geometry_msgs::msg::PoseArray::SharedPtr& msg,
+  Eigen::Vector3d& p_world)
 {
-    if (v > max_abs)
-        return max_abs;
-    if (v < -max_abs)
-        return -max_abs;
-    return v;
-}
+  if (msg->poses.size() < 2) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "uav_positions poses.size() < 2");
+    return false;
+  }
 
-// Solve 2x2: [a b; c d] [x;y] = [e;f]
-static bool solve2x2(double a, double b, double c, double d, double e,
-                     double f, double& x, double& y)
-{
-    const double det = a * d - b * c;
-    if (std::fabs(det) < 1e-12)
-        return false;
-    x = (e * d - b * f) / det;
-    y = (-e * c + a * f) / det;
+  const Eigen::Vector3d red_p(
+    msg->poses[1].position.x,
+    msg->poses[1].position.y,
+    msg->poses[1].position.z);
+
+  const Eigen::Vector3d blue_p(
+    msg->poses[0].position.x,
+    msg->poses[0].position.y,
+    msg->poses[0].position.z);
+
+  const bool red_valid = isFinitePoint(red_p);
+  const bool blue_valid = isFinitePoint(blue_p);
+
+  if (target_side_ == "red") {
+    if (!red_valid) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 1000,
+        "target_side=red but red position invalid. "
+        "red=(%.3f, %.3f, %.3f), blue_valid=%s",
+        red_p.x(), red_p.y(), red_p.z(),
+        blue_valid ? "true" : "false");
+      return false;
+    }
+
+    p_world = red_p;
     return true;
+  }
+
+  if (target_side_ == "blue") {
+    if (!blue_valid) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 1000,
+        "target_side=blue but blue position invalid. "
+        "blue=(%.3f, %.3f, %.3f), red_valid=%s",
+        blue_p.x(), blue_p.y(), blue_p.z(),
+        red_valid ? "true" : "false");
+      return false;
+    }
+
+    p_world = blue_p;
+    return true;
+  }
+
+  RCLCPP_WARN_THROTTLE(
+    this->get_logger(), *this->get_clock(), 1000,
+    "target_side must be 'red' or 'blue', got: %s",
+    target_side_.c_str());
+  return false;
 }
 
-static rclcpp::Time timeFromBuiltin(const builtin_interfaces::msg::Time& t,
-                                    rclcpp::Clock::SharedPtr clock)
+void GimbalAimSolverNode::publishTargetAngles(double yaw_deg, double pitch_deg) const
 {
-    const int64_t ns = static_cast<int64_t>(t.sec) * 1000000000LL +
-                       static_cast<int64_t>(t.nanosec);
-    return rclcpp::Time(ns, clock->get_clock_type());
+  std_msgs::msg::Float64MultiArray msg;
+  msg.data.resize(2);
+  msg.data[0] = yaw_deg;
+  msg.data[1] = pitch_deg;
+  target_angles_pub_->publish(msg);
 }
-}  // namespace
 
-class GimbalAimSolver final : public rclcpp::Node {
-public:
-    explicit GimbalAimSolver(const rclcpp::NodeOptions& opts)
-        : rclcpp::Node("gimbal_aim_solver", opts),
-          tf_buffer_(this->get_clock()),
-          tf_listener_(tf_buffer_)
-    {
-        declareParams();
-        loadParams();
-
-        sub_target_ =
-            this->create_subscription<auto_aim_fast::msg::AimTarget>(
-                aim_target_topic_, rclcpp::QoS(10),
-                std::bind(&GimbalAimSolver::onAimTarget, this,
-                          std::placeholders::_1));
-
-        sub_angles_ =
-            this->create_subscription<std_msgs::msg::Float64MultiArray>(
-                current_angle_topic_, rclcpp::SensorDataQoS(),
-                std::bind(&GimbalAimSolver::onAngles, this,
-                          std::placeholders::_1));
-
-        pub_cmd_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
-            cmd_topic_, rclcpp::QoS(10));
-        pub_target_base_ =
-            this->create_publisher<geometry_msgs::msg::PointStamped>(
-                target_base_topic_, rclcpp::QoS(10));
-
-        RCLCPP_INFO(this->get_logger(),
-                    "Started TF-based solver. base=%s cam=%s laser=%s "
-                    "a1j=%s a1=%s a2j=%s a2=%s",
-                    base_frame_.c_str(), cam_frame_.c_str(),
-                    laser_frame_.c_str(), axis1_joint_frame_.c_str(),
-                    axis1_frame_.c_str(), axis2_joint_frame_.c_str(),
-                    axis2_frame_.c_str());
-    }
-
-private:
-    void declareParams()
-    {
-        this->declare_parameter<std::string>("aim_target_topic",
-                                             "/auto_aim/target");
-        this->declare_parameter<std::string>("current_angle_topic",
-                                             "/gimbal/angles");
-
-        this->declare_parameter<std::string>("cmd_topic",
-                                             "/gimbal/command_angles");
-        this->declare_parameter<std::string>("target_base_topic",
-                                             "/gimbal/target_base");
-
-        // Frames: must match your TF publisher
-        this->declare_parameter<std::string>("base_frame",
-                                             "gimbal_base_frame");
-        this->declare_parameter<std::string>(
-            "cam_frame",
-            "gimbal_cam_frame");  // the frame where tx/ty/tz is expressed
-        this->declare_parameter<std::string>("laser_frame",
-                                             "laser_emitter_frame");
-
-        this->declare_parameter<std::string>("axis1_joint_frame",
-                                             "gimbal_axis1_joint_frame");
-        this->declare_parameter<std::string>("axis1_frame",
-                                             "gimbal_axis1_frame");
-        this->declare_parameter<std::string>("axis2_joint_frame",
-                                             "gimbal_axis2_joint_frame");
-        this->declare_parameter<std::string>("axis2_frame",
-                                             "gimbal_axis2_frame");
-
-        // Angle array format
-        this->declare_parameter<int>("yaw_index", 0);
-        this->declare_parameter<int>("pitch_index", 1);
-        this->declare_parameter<std::string>("current_angle_unit",
-                                             "rad");  // rad/deg
-        this->declare_parameter<std::string>("output_angle_unit",
-                                             "rad");  // rad/deg
-
-        // Axis conventions (must match TF publisher / your mechanical
-        // definition)
-        this->declare_parameter<std::string>("yaw_axis", "Z");
-        this->declare_parameter<std::string>("pitch_axis", "Y");
-        this->declare_parameter<int>("yaw_sign", 1);
-        this->declare_parameter<int>("pitch_sign", 1);
-        this->declare_parameter<double>("yaw_offset", 0.0);
-        this->declare_parameter<double>("pitch_offset", 0.0);
-
-        // IK params
-        this->declare_parameter<int>("ik.max_iter", 15);
-        this->declare_parameter<double>("ik.tol_xy_m", 1e-4);
-        this->declare_parameter<double>("ik.eps_rad", 1e-4);
-        this->declare_parameter<double>("ik.max_step_rad", 0.2);
-
-        // TF query timeout
-        this->declare_parameter<double>("tf_timeout_sec", 0.05);
-    }
-
-    void loadParams()
-    {
-        aim_target_topic_ =
-            this->get_parameter("aim_target_topic").as_string();
-        current_angle_topic_ =
-            this->get_parameter("current_angle_topic").as_string();
-        cmd_topic_ = this->get_parameter("cmd_topic").as_string();
-        target_base_topic_ =
-            this->get_parameter("target_base_topic").as_string();
-
-        base_frame_ = this->get_parameter("base_frame").as_string();
-        cam_frame_ = this->get_parameter("cam_frame").as_string();
-        laser_frame_ = this->get_parameter("laser_frame").as_string();
-
-        axis1_joint_frame_ =
-            this->get_parameter("axis1_joint_frame").as_string();
-        axis1_frame_ = this->get_parameter("axis1_frame").as_string();
-        axis2_joint_frame_ =
-            this->get_parameter("axis2_joint_frame").as_string();
-        axis2_frame_ = this->get_parameter("axis2_frame").as_string();
-
-        yaw_index_ = this->get_parameter("yaw_index").as_int();
-        pitch_index_ = this->get_parameter("pitch_index").as_int();
-        current_angle_unit_ =
-            this->get_parameter("current_angle_unit").as_string();
-        if (current_angle_unit_ != "deg")
-            current_angle_unit_ = "rad";
-        output_angle_unit_ =
-            this->get_parameter("output_angle_unit").as_string();
-        if (output_angle_unit_ != "deg")
-            output_angle_unit_ = "rad";
-
-        yaw_axis_ = this->get_parameter("yaw_axis").as_string();
-        pitch_axis_ = this->get_parameter("pitch_axis").as_string();
-        yaw_sign_ =
-            (this->get_parameter("yaw_sign").as_int() == -1) ? -1 : 1;
-        pitch_sign_ =
-            (this->get_parameter("pitch_sign").as_int() == -1) ? -1 : 1;
-        yaw_offset_ = this->get_parameter("yaw_offset").as_double();
-        pitch_offset_ = this->get_parameter("pitch_offset").as_double();
-
-        const int64_t max_iter_i64 =
-            this->get_parameter("ik.max_iter").as_int();
-        ik_max_iter_ = std::max<int>(1, static_cast<int>(max_iter_i64));
-        ik_tol_xy_m_ = this->get_parameter("ik.tol_xy_m").as_double();
-        ik_eps_rad_ = this->get_parameter("ik.eps_rad").as_double();
-        ik_max_step_rad_ =
-            this->get_parameter("ik.max_step_rad").as_double();
-        if (ik_eps_rad_ <= 0.0)
-            ik_eps_rad_ = 1e-4;
-        if (ik_max_step_rad_ <= 0.0)
-            ik_max_step_rad_ = 0.2;
-
-        tf_timeout_sec_ = this->get_parameter("tf_timeout_sec").as_double();
-        if (tf_timeout_sec_ <= 0.0)
-            tf_timeout_sec_ = 0.05;
-    }
-
-    // raw -> physical
-    double rawToPhysicalYaw(double raw) const
-    {
-        return static_cast<double>(yaw_sign_) * (raw + yaw_offset_);
-    }
-    double rawToPhysicalPitch(double raw) const
-    {
-        return static_cast<double>(pitch_sign_) * (raw + pitch_offset_);
-    }
-
-    // physical -> raw
-    double physicalToRawYaw(double phy) const
-    {
-        return static_cast<double>(yaw_sign_) * phy - yaw_offset_;
-    }
-    double physicalToRawPitch(double phy) const
-    {
-        return static_cast<double>(pitch_sign_) * phy - pitch_offset_;
-    }
-
-    void onAngles(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
-    {
-        const int n = static_cast<int>(msg->data.size());
-        if (n <= 0)
-            return;
-        if (yaw_index_ < 0 || yaw_index_ >= n || pitch_index_ < 0 ||
-            pitch_index_ >= n)
-            return;
-
-        double yaw_raw = msg->data[static_cast<size_t>(yaw_index_)];
-        double pitch_raw = msg->data[static_cast<size_t>(pitch_index_)];
-
-        if (current_angle_unit_ == "deg") {
-            yaw_raw = deg2rad(yaw_raw);
-            pitch_raw = deg2rad(pitch_raw);
-        }
-
-        std::lock_guard<std::mutex> lk(mutex_);
-        has_current_angle_ = true;
-        yaw_raw_cur_ = yaw_raw;
-        pitch_raw_cur_ = pitch_raw;
-    }
-
-    bool lookupTF(const std::string& target, const std::string& source,
-                  const rclcpp::Time&                   stamp,
-                  geometry_msgs::msg::TransformStamped& out)
-    {
-        try {
-            out = tf_buffer_.lookupTransform(
-                target, source, stamp,
-                rclcpp::Duration::from_seconds(tf_timeout_sec_));
-            return true;
-        }
-        catch (const std::exception& e) {
-            RCLCPP_WARN_THROTTLE(
-                this->get_logger(), *this->get_clock(), 2000,
-                "TF lookup failed: %s <- %s at t=%.3f : %s", target.c_str(),
-                source.c_str(), stamp.seconds(), e.what());
-            return false;
-        }
-    }
-
-    // Build base->laser transform using TF chain, but allowing "virtual"
-    // perturbation on joint rotations. delta_yaw: additional rotation
-    // applied at axis1_joint->axis1 delta_pitch: additional rotation
-    // applied at axis2_joint->axis2
-    bool computeBaseToLaserVirtual(const rclcpp::Time& stamp,
-                                   double delta_yaw, double delta_pitch,
-                                   tf2::Transform& T_base_laser_out)
-    {
-        geometry_msgs::msg::TransformStamped ts_base_a1j;
-        geometry_msgs::msg::TransformStamped ts_a1j_a1;
-        geometry_msgs::msg::TransformStamped ts_a1_a2j;
-        geometry_msgs::msg::TransformStamped ts_a2j_a2;
-        geometry_msgs::msg::TransformStamped ts_a2_laser;
-
-        // Note: lookupTransform(target, source) returns source->target
-        if (!lookupTF(axis1_joint_frame_, base_frame_, stamp, ts_base_a1j))
-            return false;
-        if (!lookupTF(axis1_frame_, axis1_joint_frame_, stamp, ts_a1j_a1))
-            return false;
-        if (!lookupTF(axis2_joint_frame_, axis1_frame_, stamp, ts_a1_a2j))
-            return false;
-        if (!lookupTF(axis2_frame_, axis2_joint_frame_, stamp, ts_a2j_a2))
-            return false;
-        if (!lookupTF(laser_frame_, axis2_frame_, stamp, ts_a2_laser))
-            return false;
-
-        tf2::Transform T_base_a1j = tfFromMsg(ts_base_a1j);
-        tf2::Transform T_a1j_a1 = tfFromMsg(ts_a1j_a1);
-        tf2::Transform T_a1_a2j = tfFromMsg(ts_a1_a2j);
-        tf2::Transform T_a2j_a2 = tfFromMsg(ts_a2j_a2);
-        tf2::Transform T_a2_laser = tfFromMsg(ts_a2_laser);
-
-        // Apply virtual yaw perturbation at axis1_joint->axis1 rotation
-        // (keep translation)
-        {
-            tf2::Transform d;
-            d.setOrigin(tf2::Vector3(0, 0, 0));
-            d.setRotation(axisAngleQuat(yaw_axis_, delta_yaw));
-            // Since joint axis is defined in axis1_joint frame,
-            // left-multiply is appropriate.
-            T_a1j_a1.setRotation(d.getRotation() * T_a1j_a1.getRotation());
-        }
-
-        // Apply virtual pitch perturbation at axis2_joint->axis2 rotation
-        {
-            tf2::Transform d;
-            d.setOrigin(tf2::Vector3(0, 0, 0));
-            d.setRotation(axisAngleQuat(pitch_axis_, delta_pitch));
-            T_a2j_a2.setRotation(d.getRotation() * T_a2j_a2.getRotation());
-        }
-
-        // Chain: base->laser = (a2->laser) * (a2j->a2) * (a1->a2j) *
-        // (a1j->a1) * (base->a1j)
-        T_base_laser_out =
-            T_a2_laser * T_a2j_a2 * T_a1_a2j * T_a1j_a1 * T_base_a1j;
-        return true;
-    }
-
-    bool computeCamToBase(const rclcpp::Time& stamp,
-                          tf2::Transform&     T_cam_base_out)
-    {
-        geometry_msgs::msg::TransformStamped ts_base_cam;
-        if (!lookupTF(base_frame_, cam_frame_, stamp, ts_base_cam))
-            return false;
-        // ts_base_cam is cam->base (source=cam, target=base) by our lookup
-        T_cam_base_out = tfFromMsg(ts_base_cam);
-        return true;
-    }
-
-    bool computeLaserToBase(const rclcpp::Time& stamp,
-                            tf2::Transform&     T_laser_base_out)
-    {
-        geometry_msgs::msg::TransformStamped ts_laser_base;
-        if (!lookupTF(laser_frame_, base_frame_, stamp, ts_laser_base))
-            return false;  // base->laser? actually source=base target=laser
-                           // => base->laser; we want base->laser and invert
-        tf2::Transform T_base_laser = tfFromMsg(ts_laser_base);
-        T_laser_base_out = T_base_laser.inverse();
-        return true;
-    }
-
-    bool solveDeltaIK(const rclcpp::Time& stamp, const tf2::Vector3& p_base,
-                      double& dyaw_out, double& dpitch_out)
-    {
-        // Newton in delta space
-        double dyaw = 0.0;
-        double dpit = 0.0;
-
-        for (int it = 0; it < ik_max_iter_; ++it) {
-            tf2::Transform T_base_laser;
-            if (!computeBaseToLaserVirtual(stamp, dyaw, dpit, T_base_laser))
-                return false;
-
-            const tf2::Vector3 p_laser =
-                T_base_laser * p_base;  // base->laser
-            const double fx = p_laser.x();
-            const double fy = p_laser.y();
-
-            const double err = std::sqrt(fx * fx + fy * fy);
-            if (err < ik_tol_xy_m_) {
-                dyaw_out = dyaw;
-                dpitch_out = dpit;
-                return true;
-            }
-
-            const double eps = ik_eps_rad_;
-
-            tf2::Transform T_eps;
-            // yaw derivative
-            if (!computeBaseToLaserVirtual(stamp, dyaw + eps, dpit, T_eps))
-                return false;
-            const tf2::Vector3 p_y = T_eps * p_base;
-
-            // pitch derivative
-            if (!computeBaseToLaserVirtual(stamp, dyaw, dpit + eps, T_eps))
-                return false;
-            const tf2::Vector3 p_p = T_eps * p_base;
-
-            const double dfx_dyaw = (p_y.x() - fx) / eps;
-            const double dfy_dyaw = (p_y.y() - fy) / eps;
-            const double dfx_dpit = (p_p.x() - fx) / eps;
-            const double dfy_dpit = (p_p.y() - fy) / eps;
-
-            double step_yaw = 0.0, step_pit = 0.0;
-            // J * step = -f
-            if (!solve2x2(dfx_dyaw, dfx_dpit, dfy_dyaw, dfy_dpit, -fx, -fy,
-                          step_yaw, step_pit))
-                break;
-
-            step_yaw = clampAbs(step_yaw, ik_max_step_rad_);
-            step_pit = clampAbs(step_pit, ik_max_step_rad_);
-
-            dyaw += step_yaw;
-            dpit += step_pit;
-        }
-
-        dyaw_out = dyaw;
-        dpitch_out = dpit;
-        return false;
-    }
-
-    void onAimTarget(const auto_aim_fast::msg::AimTarget::SharedPtr msg)
-    {
-        if (!msg->has_pose)
-            return;
-
-        const rclcpp::Time stamp =
-            timeFromBuiltin(msg->stamp, this->get_clock());
-
-        // Target in cam frame (assume AimTarget.tx/ty/tz is in cam_frame_)
-        const tf2::Vector3 p_cam(msg->tx, msg->ty, msg->tz);
-
-        // cam->base
-        tf2::Transform T_cam_base;
-        if (!computeCamToBase(stamp, T_cam_base))
-            return;
-
-        const tf2::Vector3 p_base = T_cam_base * p_cam;
-
-        // publish target in base
-        {
-            geometry_msgs::msg::PointStamped out;
-            out.header.stamp = stamp;
-            out.header.frame_id = base_frame_;
-            out.point.x = p_base.x();
-            out.point.y = p_base.y();
-            out.point.z = p_base.z();
-            pub_target_base_->publish(out);
-        }
-
-        // current angles as absolute setpoint initial
-        double yaw_phy = 0.0;
-        double pitch_phy = 0.0;
-        {
-            std::lock_guard<std::mutex> lk(mutex_);
-            if (has_current_angle_) {
-                yaw_phy = rawToPhysicalYaw(yaw_raw_cur_);
-                pitch_phy = rawToPhysicalPitch(pitch_raw_cur_);
-            }
-        }
-
-        // compute delta to make laser z-axis go through target (x=y=0 in
-        // laser frame)
-        double dyaw = 0.0, dpit = 0.0;
-        (void)solveDeltaIK(stamp, p_base, dyaw, dpit);
-
-        const double yaw_cmd_phy = yaw_phy + dyaw;
-        const double pitch_cmd_phy = pitch_phy + dpit;
-
-        // output raw command
-        double yaw_raw_cmd = physicalToRawYaw(yaw_cmd_phy);
-        double pitch_raw_cmd = physicalToRawPitch(pitch_cmd_phy);
-        if (output_angle_unit_ == "deg") {
-            yaw_raw_cmd = rad2deg(yaw_raw_cmd);
-            pitch_raw_cmd = rad2deg(pitch_raw_cmd);
-        }
-
-        std_msgs::msg::Float64MultiArray cmd;
-        cmd.data.resize(2);
-        cmd.data[0] = yaw_raw_cmd;
-        cmd.data[1] = pitch_raw_cmd;
-        pub_cmd_->publish(cmd);
-    }
-
-private:
-    // TF
-    tf2_ros::Buffer            tf_buffer_;
-    tf2_ros::TransformListener tf_listener_;
-
-    // topics
-    std::string aim_target_topic_;
-    std::string current_angle_topic_;
-    std::string cmd_topic_;
-    std::string target_base_topic_;
-
-    // frames
-    std::string base_frame_;
-    std::string cam_frame_;
-    std::string laser_frame_;
-    std::string axis1_joint_frame_;
-    std::string axis1_frame_;
-    std::string axis2_joint_frame_;
-    std::string axis2_frame_;
-
-    // angles
-    int         yaw_index_{0};
-    int         pitch_index_{1};
-    std::string current_angle_unit_{"rad"};
-    std::string output_angle_unit_{"rad"};
-    std::string yaw_axis_{"Z"};
-    std::string pitch_axis_{"Y"};
-    int         yaw_sign_{1};
-    int         pitch_sign_{1};
-    double      yaw_offset_{0.0};
-    double      pitch_offset_{0.0};
-
-    // IK
-    int    ik_max_iter_{15};
-    double ik_tol_xy_m_{1e-4};
-    double ik_eps_rad_{1e-4};
-    double ik_max_step_rad_{0.2};
-
-    double tf_timeout_sec_{0.05};
-
-    // interfaces
-    rclcpp::Subscription<auto_aim_fast::msg::AimTarget>::SharedPtr
-        sub_target_;
-    rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr
-        sub_angles_;
-    rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_;
-    rclcpp::Publisher<geometry_msgs::msg::PointStamped>::SharedPtr
-        pub_target_base_;
-
-    // current angle cache
-    std::mutex mutex_;
-    bool       has_current_angle_{false};
-    double     yaw_raw_cur_{0.0};
-    double     pitch_raw_cur_{0.0};
-};
-
-int main(int argc, char** argv)
+void GimbalAimSolverNode::gimbalAnglesCallback(
+  const std_msgs::msg::Float64MultiArray::SharedPtr msg)
 {
-    rclcpp::init(argc, argv);
-    rclcpp::spin(std::make_shared<GimbalAimSolver>(rclcpp::NodeOptions()));
-    rclcpp::shutdown();
-    return 0;
+  if (msg->data.size() < 2) {
+    RCLCPP_WARN(this->get_logger(), "/gimbal/angles data.size() < 2");
+    return;
+  }
+
+  if (gimbal_angle_order_ == "pitch_yaw") {
+    current_gimbal_state_.pitch_deg = msg->data[0];
+    current_gimbal_state_.yaw_deg = msg->data[1];
+  } else if (gimbal_angle_order_ == "yaw_pitch") {
+    current_gimbal_state_.yaw_deg = msg->data[0];
+    current_gimbal_state_.pitch_deg = msg->data[1];
+  } else {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 2000,
+      "Invalid gimbal_angle_order: %s", gimbal_angle_order_.c_str());
+    return;
+  }
+
+  if (!std::isfinite(current_gimbal_state_.yaw_deg) ||
+      !std::isfinite(current_gimbal_state_.pitch_deg)) {
+    RCLCPP_WARN(this->get_logger(), "/gimbal/angles contains NaN/Inf");
+    return;
+  }
+
+  current_gimbal_state_.valid = true;
+  last_gimbal_msg_time_ = this->now();
+  has_gimbal_msg_time_ = true;
 }
+
+void GimbalAimSolverNode::uavCallback(
+  const geometry_msgs::msg::PoseArray::SharedPtr msg)
+{
+  const rclcpp::Time now_time = this->now();
+
+  if ((now_time - msg->header.stamp).seconds() > max_uav_msg_age_sec_) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 2000,
+      "/uav_positions too old: %.3f sec",
+      (now_time - msg->header.stamp).seconds());
+    return;
+  }
+
+  Eigen::Vector3d p_world;
+  if (!selectTargetWorldPoint(msg, p_world)) {
+    return;
+  }
+
+  const Eigen::Vector3d p_camera = extrinsic_transformer_.worldToCamera(p_world);
+  if (!isFinitePoint(p_camera)) {
+    RCLCPP_WARN(this->get_logger(), "camera point has NaN/Inf");
+    return;
+  }
+
+  const Eigen::Vector3d p_gimbal = gimbal_geometry_.cameraToGimbal(p_camera);
+  if (!isFinitePoint(p_gimbal)) {
+    RCLCPP_WARN(this->get_logger(), "gimbal point has NaN/Inf");
+    return;
+  }
+
+  TargetAngles target = angle_solver_.solve(p_gimbal);
+  if (!target.valid) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "target invalid, likely behind camera/gimbal. p_gimbal=(%.3f, %.3f, %.3f)",
+      p_gimbal.x(), p_gimbal.y(), p_gimbal.z());
+    return;
+  }
+
+  double out_yaw_deg = target.yaw_deg;
+  double out_pitch_deg = target.pitch_deg;
+
+  if (use_increment_output_) {
+    if (!current_gimbal_state_.valid || !has_gimbal_msg_time_) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "increment mode enabled, but no valid current gimbal state.");
+      return;
+    }
+
+    if ((now_time - last_gimbal_msg_time_).seconds() > max_gimbal_msg_age_sec_) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "current gimbal state too old: %.3f sec",
+        (now_time - last_gimbal_msg_time_).seconds());
+      return;
+    }
+
+    out_yaw_deg = target.yaw_deg - current_gimbal_state_.yaw_deg;
+    out_pitch_deg = target.pitch_deg - current_gimbal_state_.pitch_deg;
+  }
+
+  if (enable_output_filter_) {
+    const double a = output_filter_alpha_;
+    if (!has_last_output_) {
+      last_output_yaw_deg_ = out_yaw_deg;
+      last_output_pitch_deg_ = out_pitch_deg;
+      has_last_output_ = true;
+    } else {
+      last_output_yaw_deg_ = a * out_yaw_deg + (1.0 - a) * last_output_yaw_deg_;
+      last_output_pitch_deg_ = a * out_pitch_deg + (1.0 - a) * last_output_pitch_deg_;
+    }
+    out_yaw_deg = last_output_yaw_deg_;
+    out_pitch_deg = last_output_pitch_deg_;
+  }
+
+  publishTargetAngles(out_yaw_deg, out_pitch_deg);
+
+  if (publish_debug_) {
+    if (use_increment_output_) {
+      RCLCPP_INFO_THROTTLE(
+        this->get_logger(), *this->get_clock(), 200,
+        "[%s] world=(%.3f, %.3f, %.3f), camera=(%.3f, %.3f, %.3f), gimbal=(%.3f, %.3f, %.3f), "
+        "target_abs=(yaw=%.2f, pitch=%.2f), current=(yaw=%.2f, pitch=%.2f), out_inc=(yaw=%.2f, pitch=%.2f)",
+        target_side_.c_str(),
+        p_world.x(), p_world.y(), p_world.z(),
+        p_camera.x(), p_camera.y(), p_camera.z(),
+        p_gimbal.x(), p_gimbal.y(), p_gimbal.z(),
+        target.yaw_deg, target.pitch_deg,
+        current_gimbal_state_.yaw_deg, current_gimbal_state_.pitch_deg,
+        out_yaw_deg, out_pitch_deg);
+    } else {
+      RCLCPP_INFO_THROTTLE(
+        this->get_logger(), *this->get_clock(), 200,
+        "[%s] world=(%.3f, %.3f, %.3f), camera=(%.3f, %.3f, %.3f), gimbal=(%.3f, %.3f, %.3f), "
+        "out_abs=(yaw=%.2f, pitch=%.2f)",
+        target_side_.c_str(),
+        p_world.x(), p_world.y(), p_world.z(),
+        p_camera.x(), p_camera.y(), p_camera.z(),
+        p_gimbal.x(), p_gimbal.y(), p_gimbal.z(),
+        out_yaw_deg, out_pitch_deg);
+    }
+  }
+}
+
+}  // namespace gimbal_aim_solver

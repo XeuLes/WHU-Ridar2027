@@ -61,8 +61,8 @@ static rclcpp::QoS makeInfoQoS()
 AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("auto_aim_node", options)
 {
-  this->declare_parameter<std::string>("image_topic", "/camera/image");
-  this->declare_parameter<std::string>("camera_info_topic", "/camera/camera_info");
+  this->declare_parameter<std::string>("image_topic", "/camera0/image");
+  this->declare_parameter<std::string>("camera_info_topic", "/camera0/camera_info");
 
   this->declare_parameter<bool>("qos.use_sensor_data_qos", true);
   this->declare_parameter<int>("qos.depth", 1);

@@ -89,11 +89,11 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
 
     // params
     this->declare_parameter<int>("uav_other_timeout_ms", 500);
-    this->declare_parameter<double>("uav_default_z", 2.30);
+    this->declare_parameter<double>("uav_default_z", 2.1);
     this->declare_parameter<double>("uav_huber_delta_xy", 0.8);
     this->declare_parameter<double>("uav_w_vision_xy", 0.5);  // 降低相机权重(透视变换外推不准)
     this->declare_parameter<double>("uav_w_lidar_xy", 0.7);   // 提高雷达权重
-    this->declare_parameter<double>("uav_assign_gate_m", 4.0);
+    this->declare_parameter<double>("uav_assign_gate_m", 5.0);
 
     this->declare_parameter<double>("uav_z_ema_alpha", 0.90);
     this->declare_parameter<double>("uav_z_jump_max", 0.80);
@@ -176,20 +176,14 @@ void Resolve::UavOtherClusterCallback(
     pcl::fromROSMsg(*msg, cloud);
 
     std::lock_guard<std::mutex> lk(uav_other_mutex_);
-    uav_other_count_ = 0;
+    uav_other_clusters_.clear();
+    uav_other_clusters_.reserve(cloud.points.size());
 
     for (const auto& p : cloud.points) {
-        if (!std::isfinite(p.x) || !std::isfinite(p.y) ||
-            !std::isfinite(p.z))
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
             continue;
-        if (uav_other_count_ < 2) {
-            uav_other_x_[uav_other_count_] = p.x;
-            uav_other_y_[uav_other_count_] = p.y;
-            uav_other_z_[uav_other_count_] = p.z;
-            uav_other_count_++;
-        } else {
-            break;
         }
+        uav_other_clusters_.push_back(p);
     }
 
     uav_other_stamp_ = is_stamp_zero(msg->header.stamp)
@@ -230,7 +224,7 @@ void Resolve::UavKalmanReset(int idx)
 void Resolve::UavKalmanInit(int idx, double x, double y, double z,
                             const rclcpp::Time& stamp)
 {
-    uav_kf_inited_[idx] = false;
+    uav_kf_inited_[idx] = true;
     uav_kf_stamp_[idx] = stamp;
     uav_kf_last_update_[idx] = stamp;
 
@@ -241,9 +235,12 @@ void Resolve::UavKalmanInit(int idx, double x, double y, double z,
     uav_vy_[idx] = 0.0;
     uav_vz_[idx] = 0.0;
 
-    for (int r = 0; r < 6; r++)
-        for (int c = 0; c < 6; c++)
+    for (int r = 0; r < 6; r++) {
+        for (int c = 0; c < 6; c++) {
             uav_P_[idx][r][c] = 0.0;
+        }
+    }
+
     uav_P_[idx][0][0] = 1.0;
     uav_P_[idx][1][1] = 1.0;
     uav_P_[idx][2][2] = 4.0;
@@ -251,7 +248,6 @@ void Resolve::UavKalmanInit(int idx, double x, double y, double z,
     uav_P_[idx][4][4] = 25.0;
     uav_P_[idx][5][5] = 25.0;
 }
-
 void Resolve::UavKalmanPredict(int idx, const rclcpp::Time& stamp)
 {
     if (!uav_kf_inited_[idx])
@@ -436,39 +432,34 @@ void Resolve::DetectCallback(
     }
 
     // ========== 阶段二：读取雷达聚类数据 ==========
-    double cX[2]{0.0, 0.0}, cY[2]{0.0, 0.0}, cZ[2]{0.0, 0.0};
-    int    cN = 0;
-    bool   other_fresh = false;
+    std::vector<pcl::PointXYZ> clusters;
+    bool other_fresh = false;
+
     {
         std::lock_guard<std::mutex> lk(uav_other_mutex_);
-        cN = uav_other_count_;
-        if (cN > 0) {
-            cX[0] = uav_other_x_[0];
-            cY[0] = uav_other_y_[0];
-            cZ[0] = uav_other_z_[0];
-        }
-        if (cN > 1) {
-            cX[1] = uav_other_x_[1];
-            cY[1] = uav_other_y_[1];
-            cZ[1] = uav_other_z_[1];
-        }
-        const rclcpp::Time t_cam = is_stamp_zero(msg->header.stamp) 
-                                   ? this->now() 
-                                   : rclcpp::Time(msg->header.stamp);
+        clusters = uav_other_clusters_;
+
+        const rclcpp::Time t_cam = is_stamp_zero(msg->header.stamp)
+                                    ? this->now()
+                                    : rclcpp::Time(msg->header.stamp);
+
         const auto dt_ns = (t_cam - uav_other_stamp_).nanoseconds();
         const auto dt_ms = std::llabs(dt_ns) / 1000000LL;
         other_fresh = (dt_ms <= uav_other_timeout_ms_);
-        
+
         if (has_blue_uav || has_red_uav) {
             RCLCPP_INFO(this->get_logger(), "========== [阶段二：读取雷达聚类数据] ==========");
-            RCLCPP_INFO(this->get_logger(), "  聚类中心数量: %d, 时间差: %lld ms, 数据新鲜: %s", 
-                cN, (long long)dt_ms, other_fresh ? "是" : "否");
-            if (other_fresh && cN > 0) {
-                RCLCPP_INFO(this->get_logger(), "  雷达聚类[0]: (%.3f, %.3f, %.3f)", cX[0], cY[0], cZ[0]);
-                if (cN > 1) {
-                    RCLCPP_INFO(this->get_logger(), "  雷达聚类[1]: (%.3f, %.3f, %.3f)", cX[1], cY[1], cZ[1]);
+            RCLCPP_INFO(this->get_logger(),
+                        "  聚类中心数量: %zu, 时间差: %lld ms, 数据新鲜: %s",
+                        clusters.size(), (long long)dt_ms, other_fresh ? "是" : "否");
+
+            if (other_fresh && !clusters.empty()) {
+                for (size_t i = 0; i < clusters.size(); ++i) {
+                    RCLCPP_INFO(this->get_logger(),
+                                "  雷达聚类[%zu]: (%.3f, %.3f, %.3f)",
+                                i, clusters[i].x, clusters[i].y, clusters[i].z);
                 }
-            } else if (cN == 0) {
+            } else if (clusters.empty()) {
                 RCLCPP_WARN(this->get_logger(), "  ⚠️ 无可用聚类中心");
             } else {
                 RCLCPP_WARN(this->get_logger(), "  ⚠️ 聚类数据超时");
@@ -488,98 +479,127 @@ void Resolve::DetectCallback(
         float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
         return cv::Point2f(clamp_x, clamp_y);
     };
+    auto solve_xyz_on_z = [&](float px, float py, float z_plane) -> cv::Point3f {
+    cv::Point2f pixel(px, py);
+    cv::Point2f world_xy = parser_->parse_with_height(pixel, z_plane - 0.15f);
 
-    // ========== 阶段三：相机-雷达数据关联 ==========
-    int    assign_blue = -1, assign_red = -1;
+    float y_offset = world_xy.y + 15.0f;
+    float clamp_x = std::clamp(world_xy.x, 0.0f, 28.0f);
+    float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
+    float clamp_z = z_plane;   // UAV 当前假设高度
+
+    return cv::Point3f(clamp_x, clamp_y, clamp_z);
+    };
+
+    // ========== 阶段三：相机-雷达数据关联（基于2.3m三维最近邻） ==========
+    int assign_blue = -1, assign_red = -1;
     double dist_blue = 1e9, dist_red = 1e9;
 
-    if (other_fresh && cN > 0 && (has_blue_uav || has_red_uav)) {
-        RCLCPP_INFO(this->get_logger(), "========== [阶段三：相机-雷达数据关联] ==========");
-        RCLCPP_INFO(this->get_logger(), "  [粗匹配] 使用默认z=%.2fm投影相机像素:", uav_default_z_);
+    cv::Point3f blue_cam_3d(0.f, 0.f, 0.f);
+    cv::Point3f red_cam_3d(0.f, 0.f, 0.f);
 
-        auto dist2 = [&](double x, double y,
-                         const cv::Point2f& p) -> double {
-            double dx = x - p.x, dy = y - p.y;
-            return dx * dx + dy * dy;
+    if (other_fresh && !clusters.empty() && (has_blue_uav || has_red_uav)) {
+        RCLCPP_INFO(this->get_logger(), "========== [阶段三：相机-雷达数据关联] ==========");
+        RCLCPP_INFO(this->get_logger(),
+                    "  [三维匹配] 使用默认z=%.2fm反解相机UAV三维坐标，再做最近邻空间距离匹配",
+                    uav_default_z_);
+
+        auto dist3 = [](const cv::Point3f& a, const pcl::PointXYZ& b) -> double {
+            const double dx = static_cast<double>(a.x) - b.x;
+            const double dy = static_cast<double>(a.y) - b.y;
+            const double dz = static_cast<double>(a.z) - b.z;
+            return std::sqrt(dx * dx + dy * dy + dz * dz);
         };
 
-        // 步骤1: 对蓝方UAV,使用默认z投影得到粗略XY
-        cv::Point2f blue_rough;
+        const double gate = std::max(0.1, uav_assign_gate_m_);
+
+        // 蓝方
         if (has_blue_uav) {
-            float z_default = static_cast<float>(uav_default_z_);
-            blue_rough = solve_xy_on_z(msg->blue_x[6], msg->blue_y[6], z_default);
-            RCLCPP_INFO(this->get_logger(), "    蓝方相机(%.1f,%.1f) z=%.2fm → 粗投影(%.2f,%.2f)", 
-                msg->blue_x[6], msg->blue_y[6], z_default, blue_rough.x, blue_rough.y);
-            
-            // 步骤2: 用粗略XY与所有聚类比较距离
-            for (int i = 0; i < cN; i++) {
-                double dist = std::sqrt(dist2(cX[i], cY[i], blue_rough));
-                RCLCPP_INFO(this->get_logger(), "      vs 聚类[%d](%.2f,%.2f,z=%.3f): 距离%.3fm", 
-                    i, cX[i], cY[i], cZ[i], dist);
+            blue_cam_3d = solve_xyz_on_z(msg->blue_x[6], msg->blue_y[6],
+                                        static_cast<float>(uav_default_z_));
+
+            RCLCPP_INFO(this->get_logger(),
+                        "    蓝方相机(%.1f, %.1f) z=%.2f → 三维点(%.3f, %.3f, %.3f)",
+                        msg->blue_x[6], msg->blue_y[6], uav_default_z_,
+                        blue_cam_3d.x, blue_cam_3d.y, blue_cam_3d.z);
+
+            for (size_t i = 0; i < clusters.size(); ++i) {
+                double dist = dist3(blue_cam_3d, clusters[i]);
+                RCLCPP_INFO(this->get_logger(),
+                            "      vs 聚类[%zu](%.3f, %.3f, %.3f): 空间距离 %.3fm",
+                            i, clusters[i].x, clusters[i].y, clusters[i].z, dist);
+
                 if (dist < dist_blue) {
                     dist_blue = dist;
-                    assign_blue = i;
+                    assign_blue = static_cast<int>(i);
                 }
             }
-        }
-        
-        // 步骤1: 对红方UAV,使用默认z投影得到粗略XY
-        cv::Point2f red_rough;
-        if (has_red_uav) {
-            float z_default = static_cast<float>(uav_default_z_);
-            red_rough = solve_xy_on_z(msg->red_x[6], msg->red_y[6], z_default);
-            RCLCPP_INFO(this->get_logger(), "    红方相机(%.1f,%.1f) z=%.2fm → 粗投影(%.2f,%.2f)", 
-                msg->red_x[6], msg->red_y[6], z_default, red_rough.x, red_rough.y);
-            
-            // 步骤2: 用粗略XY与所有聚类比较距离
-            for (int i = 0; i < cN; i++) {
-                double dist = std::sqrt(dist2(cX[i], cY[i], red_rough));
-                RCLCPP_INFO(this->get_logger(), "      vs 聚类[%d](%.2f,%.2f,z=%.3f): 距离%.3fm", 
-                    i, cX[i], cY[i], cZ[i], dist);
-                if (dist < dist_red) {
-                    dist_red = dist;
-                    assign_red = i;
-                }
+
+            if (assign_blue >= 0 && dist_blue > gate) {
+                RCLCPP_WARN(this->get_logger(),
+                            "  蓝方: 最近聚类[%d]空间距离 %.3fm > 门限 %.3fm, ❌拒绝",
+                            assign_blue, dist_blue, gate);
+                assign_blue = -1;
             }
         }
 
-        // 门限检查
-        const double gate = std::max(0.1, uav_assign_gate_m_);
-        if (assign_blue >= 0 && dist_blue > gate) {
-            RCLCPP_WARN(this->get_logger(), "  蓝方: 聚类[%d]距离%.3fm > 门限%.1fm, ❌拒绝", 
-                assign_blue, dist_blue, gate);
-            assign_blue = -1;
+        // 红方
+        if (has_red_uav) {
+            red_cam_3d = solve_xyz_on_z(msg->red_x[6], msg->red_y[6],
+                                        static_cast<float>(uav_default_z_));
+
+            RCLCPP_INFO(this->get_logger(),
+                        "    红方相机(%.1f, %.1f) z=%.2f → 三维点(%.3f, %.3f, %.3f)",
+                        msg->red_x[6], msg->red_y[6], uav_default_z_,
+                        red_cam_3d.x, red_cam_3d.y, red_cam_3d.z);
+
+            for (size_t i = 0; i < clusters.size(); ++i) {
+                double dist = dist3(red_cam_3d, clusters[i]);
+                RCLCPP_INFO(this->get_logger(),
+                            "      vs 聚类[%zu](%.3f, %.3f, %.3f): 空间距离 %.3fm",
+                            i, clusters[i].x, clusters[i].y, clusters[i].z, dist);
+
+                if (dist < dist_red) {
+                    dist_red = dist;
+                    assign_red = static_cast<int>(i);
+                }
+            }
+
+            if (assign_red >= 0 && dist_red > gate) {
+                RCLCPP_WARN(this->get_logger(),
+                            "  红方: 最近聚类[%d]空间距离 %.3fm > 门限 %.3fm, ❌拒绝",
+                            assign_red, dist_red, gate);
+                assign_red = -1;
+            }
         }
-        if (assign_red >= 0 && dist_red > gate) {
-            RCLCPP_WARN(this->get_logger(), "  红方: 聚类[%d]距离%.3fm > 门限%.1fm, ❌拒绝", 
-                assign_red, dist_red, gate);
-            assign_red = -1;
-        }
-        
-        // 如果两个UAV都检测到,确保它们匹配到不同的聚类
+
+        // 蓝红冲突消解
         if (has_blue_uav && has_red_uav && assign_blue >= 0 && assign_red >= 0) {
             if (assign_blue == assign_red) {
-                // 两个UAV匹配到同一聚类,保留距离更近的
                 if (dist_blue <= dist_red) {
-                    RCLCPP_WARN(this->get_logger(), "  ⚠️ 冲突: 蓝红都选聚类[%d], 保留蓝方(%.3fm < %.3fm)", 
-                        assign_blue, dist_blue, dist_red);
+                    RCLCPP_WARN(this->get_logger(),
+                                "  ⚠️ 冲突: 蓝红都选聚类[%d], 保留蓝方(%.3fm < %.3fm)",
+                                assign_blue, dist_blue, dist_red);
                     assign_red = -1;
                 } else {
-                    RCLCPP_WARN(this->get_logger(), "  ⚠️ 冲突: 蓝红都选聚类[%d], 保留红方(%.3fm < %.3fm)", 
-                        assign_red, dist_red, dist_blue);
+                    RCLCPP_WARN(this->get_logger(),
+                                "  ⚠️ 冲突: 蓝红都选聚类[%d], 保留红方(%.3fm < %.3fm)",
+                                assign_red, dist_red, dist_blue);
                     assign_blue = -1;
                 }
             }
         }
-        
-        // 输出匹配结果
+
         if (assign_blue >= 0) {
-            RCLCPP_INFO(this->get_logger(), "  ✓ 蓝方 -> 聚类[%d] 距离%.3fm", assign_blue, dist_blue);
+            RCLCPP_INFO(this->get_logger(), "  ✓ 蓝方 -> 聚类[%d] 空间距离 %.3fm",
+                        assign_blue, dist_blue);
         } else if (has_blue_uav) {
             RCLCPP_WARN(this->get_logger(), "  ❌ 蓝方: 无匹配聚类");
         }
+
         if (assign_red >= 0) {
-            RCLCPP_INFO(this->get_logger(), "  ✓ 红方 -> 聚类[%d] 距离%.3fm", assign_red, dist_red);
+            RCLCPP_INFO(this->get_logger(), "  ✓ 红方 -> 聚类[%d] 空间距离 %.3fm",
+                        assign_red, dist_red);
         } else if (has_red_uav) {
             RCLCPP_WARN(this->get_logger(), "  ❌ 红方: 无匹配聚类");
         }
@@ -591,23 +611,35 @@ void Resolve::DetectCallback(
 
     auto compute_meas = [&](int idx, float px, float py, int assigned) {
         const char* side_name = (idx == 0) ? "蓝方" : "红方";
-        bool has_cluster = (other_fresh && assigned >= 0 && assigned < cN);
+        bool has_cluster =
+        (other_fresh &&
+        assigned >= 0 &&
+        assigned < static_cast<int>(clusters.size()));
         
         if (!has_cluster) {
-            // 纯相机模式: 使用默认z值
             float z_plane = static_cast<float>(uav_default_z_);
             cv::Point2f pv = solve_xy_on_z(px, py, z_plane);
+
             meas_ok[idx] = true;
             meas_x[idx] = pv.x;
             meas_y[idx] = pv.y;
             meas_z[idx] = uav_default_z_;
-            RCLCPP_INFO(this->get_logger(), "  %s: 纯相机模式 z=%.2f -> (%.3f, %.3f, %.3f)", 
-                side_name, z_plane, meas_x[idx], meas_y[idx], meas_z[idx]);
+
+            RCLCPP_WARN(this->get_logger(),
+                        "  %s: 无合法聚类( other_fresh=%s, assigned=%d, clusters=%zu )，纯相机模式 z=%.2f -> (%.3f, %.3f, %.3f)",
+                        side_name,
+                        other_fresh ? "true" : "false",
+                        assigned,
+                        clusters.size(),
+                        z_plane,
+                        meas_x[idx], meas_y[idx], meas_z[idx]);
             return;
         }
         
         // 融合模式: 智能选择z值
-        double xL = cX[assigned], yL = cY[assigned], zL = cZ[assigned];
+        double xL = clusters[assigned].x;
+        double yL = clusters[assigned].y;
+        double zL = clusters[assigned].z;
         
         // 步骤3A: 先用默认z投影,计算距离
         float z_default = static_cast<float>(uav_default_z_);
@@ -653,14 +685,18 @@ void Resolve::DetectCallback(
         const double wL = std::max(1e-6, uav_w_lidar_xy_) * huber;
         
         meas_ok[idx] = true;
-        meas_x[idx] = (wV * xV + wL * xL) / (wV + wL);
-        meas_y[idx] = (wV * yV + wL * yL) / (wV + wL);
-        meas_z[idx] = zL;
+        const double w_sum = std::max(1e-6, wV + wL);
+        meas_x[idx] = (wV * xV + wL * xL) / w_sum;
+        meas_y[idx] = (wV * yV + wL * yL) / w_sum;
+        meas_z[idx] = z_lidar;
         
         // 计算归一化后的权重(用于日志显示)
-        const double w_sum = wV + wL;
         const double wV_norm = wV / w_sum;
         const double wL_norm = wL / w_sum;
+
+        RCLCPP_INFO(this->get_logger(),
+            "  %s: 使用聚类[%d] = (%.3f, %.3f, %.3f)",
+            side_name, assigned, xL, yL, zL);
         
         RCLCPP_INFO(this->get_logger(), "  %s: [融合] 相机(%.2f,%.2f)*%.3f + 雷达(%.2f,%.2f)*%.3f = 最终(%.3f,%.3f,%.3f)", 
             side_name, xV, yV, wV_norm, xL, yL, wL_norm, meas_x[idx], meas_y[idx], meas_z[idx]);

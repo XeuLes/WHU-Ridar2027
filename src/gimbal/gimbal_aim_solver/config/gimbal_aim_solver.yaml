@@ -1,50 +1,47 @@
-gimbal_aim_solver:
+gimbal_aim_solver_node:
   ros__parameters:
-    aim_target_topic: "/auto_aim/target"
-    current_angle_topic: "/gimbal/angles"
+    uav_topic: "/uav_positions"
+    gimbal_angles_topic: "/gimbal/angles"
+    target_angles_topic: "/gimbal/target_angles"
 
-    cmd_topic: "/gimbal/command_angles"
-    cmd_pred_topic: "/gimbal/command_angles_pred"
+    # red / blue
+    target_side: "red"
 
-    target_base_topic: "/gimbal/target_base"
-    target_base_pred_topic: "/gimbal/target_base_pred"
+    # /gimbal/angles 的顺序:
+    # "pitch_yaw" 表示 data[0]=pitch, data[1]=yaw
+    # "yaw_pitch" 表示 data[0]=yaw, data[1]=pitch
+    gimbal_angle_order: "pitch_yaw"
 
-    output_angle_unit: "rad"       # rad / deg
-    current_angle_unit: "rad"      # rad / deg
+    # false: 发布绝对目标角
+    # true: 发布相对当前角度的增量
+    use_increment_output: false
 
-    yaw_index: 0
-    pitch_index: 1
+    publish_debug: true
 
-    # 如果 auto_aim_fast 的 (tx,ty,tz) 坐标系与你的 gimbal_cam_frame 不是完全一致，可在这里给固定补偿
-    T_targetmsg_to_gimbal_cam_xyz: [0.0, 0.0, 0.0]
-    T_targetmsg_to_gimbal_cam_rpy: [0.0, 0.0, 0.0]
+    # 新鲜度保护
+    max_uav_msg_age_sec: 0.5
+    max_gimbal_msg_age_sec: 0.5
 
-    # 与 gimbal_tf_publisher 保持一致的几何参数
-    T_gimbal_base_to_axis1_joint_xyz: [0.0, 0.0, 0.0]
-    T_gimbal_base_to_axis1_joint_rpy: [0.0, 0.0, 0.0]
+    # 输出角滤波
+    enable_output_filter: false
+    output_filter_alpha: 0.2
 
-    T_axis1_to_axis2_joint_xyz: [0.0, 0.0, 0.0]
-    T_axis1_to_axis2_joint_rpy: [0.0, 0.0, 0.0]
+    # world -> camera, OpenCV 外参
+    world_rvec: [1.3007738496052885, 1.0519496130346802, -1.0480104909702821]
+    world_tvec: [-9.0641934014867864, 1.2351673073596281, 23.979868492980199]
 
-    T_axis2_to_gimbal_cam_xyz: [0.0, 0.0, 0.0]
-    T_axis2_to_gimbal_cam_rpy: [0.0, 0.0, 0.0]
+    # 云台原点在相机坐标系中的坐标，单位米
+    # 相机坐标系按 OpenCV:
+    # x右, y下, z前
+    # 云台在相机左5cm、上20cm => (-0.05, -0.20, 0.0)
+    camera_to_gimbal_xyz: [-0.05, -0.20, 0.0]
 
-    T_gimbal_cam_to_laser_xyz: [0.0, 0.0, 0.0]
-    T_gimbal_cam_to_laser_rpy: [0.0, 0.0, 0.0]
+    # 零偏补偿
+    yaw_offset_deg: 0.0
+    pitch_offset_deg: 0.0
 
-    yaw_offset: 0.0
-    pitch_offset: 0.0
-    yaw_axis: "Z"
-    pitch_axis: "Y"
-    yaw_sign: 1
-    pitch_sign: 1
-
-    ik:
-      max_iter: 20
-      tol_xy_m: 1.0e-4
-      eps_rad: 1.0e-4
-      max_step_rad: 0.2
-
-    prediction:
-      enable: true
-      max_dt_sec: 0.2
+    # 机械限幅
+    yaw_min_deg: -180.0
+    yaw_max_deg: 180.0
+    pitch_min_deg: -30.0
+    pitch_max_deg: 30.0
