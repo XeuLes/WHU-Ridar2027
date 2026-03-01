@@ -52,7 +52,11 @@ KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options)
             "/match_info", 10,
             std::bind(&KalmanFilter::match_callback, this,
                       std::placeholders::_1));
+    
 
+    this->declare_parameter<int>("kf_available_timeout_ms", 300);
+kf_available_timeout_ms_ =
+    this->get_parameter("kf_available_timeout_ms").as_int();
     // 输出节点启动日志信息
     RCLCPP_INFO(this->get_logger(), "Kalman_filter_Node has been started.");
 }
@@ -71,104 +75,66 @@ void KalmanFilter::detect_callback(
 {
     static int callback_count = 0;
     callback_count++;
-    
-    rclcpp::Time time = msg->header.stamp;  // 获取消息时间戳
-    
-    // 【数据流追踪】记录接收到的数据
-    bool has_vehicle_data = false;
-    std::string recv_log = "[KalmanFilter接收] resolve_result (第" + std::to_string(callback_count) + "次): ";
-    
-    for (int i = 0; i < 7; i++) {
-        if (msg->blue_x[i] != 0 || msg->blue_y[i] != 0) {
-            recv_log += "B" + std::to_string(i+1) + "(";
-            recv_log += std::to_string((int)msg->blue_x[i]) + ",";
-            recv_log += std::to_string((int)msg->blue_y[i]) + ") ";
-            has_vehicle_data = true;
-        }
-        if (msg->red_x[i] != 0 || msg->red_y[i] != 0) {
-            recv_log += "R" + std::to_string(i+1) + "(";
-            recv_log += std::to_string((int)msg->red_x[i]) + ",";
-            recv_log += std::to_string((int)msg->red_y[i]) + ") ";
-            has_vehicle_data = true;
-        }
-    }
-    
-    if (has_vehicle_data) {
-        RCLCPP_WARN(this->get_logger(), "%s", recv_log.c_str());
-    }
-    
-    // 【临时修复】直接转发 Resolve 数据到 /kalman_detect，不依赖雷达融合
-    // 原问题：如果没有雷达点云 (/livox/lidar_cluster)，主callback()不执行，数据流中断
-    vision_interface::msg::DetectResult forward_msg = *msg;
-    
-    // 保持原逻辑：根据self_color镜像坐标
-    if (match_info.self_color == 0) {
-        // 【修复】循环7次以支持UAV（索引6），允许单个坐标为0的情况
-        for (int i = 0; i < 7; i++) {
-            // 改用OR条件，允许x或y其中一个为0的情况
-            if (forward_msg.blue_x[i] != 0 || forward_msg.blue_y[i] != 0) {
-                forward_msg.blue_x[i] = 28 - forward_msg.blue_x[i];
-                forward_msg.blue_y[i] = 15 - forward_msg.blue_y[i];
-            }
-            if (forward_msg.red_x[i] != 0 || forward_msg.red_y[i] != 0) {
-                forward_msg.red_x[i] = 28 - forward_msg.red_x[i];
-                forward_msg.red_y[i] = 15 - forward_msg.red_y[i];
-            }
-        }
-    }
-    
-    // 【调试日志已注释】避免卡顿
-    // std::string forward_log = "[KalmanFilter发布] /kalman_detect: ";
-    // bool has_forward_data = false;
-    // for (int i = 0; i < 7; i++) {
-    //     if (forward_msg.blue_x[i] != 0 || forward_msg.blue_y[i] != 0) {
-    //         forward_log += "B" + std::to_string(i+1) + "(";
-    //         forward_log += std::to_string((int)forward_msg.blue_x[i]) + ",";
-    //         forward_log += std::to_string((int)forward_msg.blue_y[i]) + ") ";
-    //         has_forward_data = true;
-    //     }
-    //     if (forward_msg.red_x[i] != 0 || forward_msg.red_y[i] != 0) {
-    //         forward_log += "R" + std::to_string(i+1) + "(";
-    //         forward_log += std::to_string((int)forward_msg.red_x[i]) + ",";
-    //         forward_log += std::to_string((int)forward_msg.red_y[i]) + ") ";
-    //         has_forward_data = true;
-    //     }
-    // }
-    // 
-    // if (has_forward_data) {
-    //     RCLCPP_WARN(this->get_logger(), "%s [直接转发模式]", forward_log.c_str());
-    // }
-    
-    radar_detect_pub_->publish(forward_msg);
 
-    // 保留原camera_match逻辑（用于雷达融合，暂时不影响）
-    // 【修复】循环7次以支持UAV的camera_match
+    rclcpp::Time time = msg->header.stamp;
+    if (time.nanoseconds() == 0) {
+        time = this->now();
+    }
+
+    // 判断当前KF是否可用（近期收到过雷达点云）
+    bool kf_active_now = false;
+    if (kf_available_ &&
+        last_lidar_cluster_stamp_.nanoseconds() != 0 &&
+        !KFs.empty()) {
+        const double dt_ms =
+            std::fabs((time - last_lidar_cluster_stamp_).seconds()) * 1000.0;
+        kf_active_now = (dt_ms <= static_cast<double>(kf_available_timeout_ms_));
+    }
+
+    // 如果KF当前可用，则不再直传resolve_result到 /kalman_detect
+    if (!kf_active_now) {
+        vision_interface::msg::DetectResult forward_msg = *msg;
+
+        // 保持原逻辑：根据self_color镜像坐标
+        if (match_info.self_color == 0) {
+            for (int i = 0; i < 7; i++) {
+                if (forward_msg.blue_x[i] != 0 || forward_msg.blue_y[i] != 0) {
+                    forward_msg.blue_x[i] = 28 - forward_msg.blue_x[i];
+                    forward_msg.blue_y[i] = 15 - forward_msg.blue_y[i];
+                }
+                if (forward_msg.red_x[i] != 0 || forward_msg.red_y[i] != 0) {
+                    forward_msg.red_x[i] = 28 - forward_msg.red_x[i];
+                    forward_msg.red_y[i] = 15 - forward_msg.red_y[i];
+                }
+            }
+        }
+
+        radar_detect_pub_->publish(forward_msg);
+    }
+
+    // 保留原camera_match逻辑（用于KF融合）
     for (int i = 0; i < 7; i++) {
-        pcl::PointXY red_point;                    // 创建2D点
-        red_point.x = msg->red_x[i];               // 设置x坐标
-        red_point.y = msg->red_y[i];               // 设置y坐标
-        if (red_point.x == 0 || red_point.y == 0)  // 跳过无效点
+        pcl::PointXY red_point;
+        red_point.x = msg->red_x[i];
+        red_point.y = msg->red_y[i];
+        if (red_point.x == 0 || red_point.y == 0)
             continue;
 
-        // 对所有卡尔曼滤波器进行相机匹配
         for (auto& kf : KFs) {
-            kf.camera_match(time, red_point, 2, i);  // 颜色2代表红色
+            kf.camera_match_and_update(time, red_point, 2, i);
         }
 
-        // 处理蓝色方检测点（颜色编号0）
         pcl::PointXY blue_point;
         blue_point.x = msg->blue_x[i];
         blue_point.y = msg->blue_y[i];
         if (blue_point.x == 0 || blue_point.y == 0)
             continue;
 
-        // 对所有卡尔曼滤波器进行相机匹配
         for (auto& kf : KFs) {
-            kf.camera_match(time, blue_point, 0, i);  // 颜色0代表蓝色
+            kf.camera_match_and_update(time, blue_point, 0, i);
         }
     }
 }
-
 // 激光雷达检测回调函数
 void KalmanFilter::lidar_callback(
     const vision_interface::msg::RadarWarn::SharedPtr msg)
@@ -176,11 +142,35 @@ void KalmanFilter::lidar_callback(
     this->lidar_detect = *msg;  // 保存激光雷达检测结果
 }
 
+bool KalmanFilter::is_kf_available_now(const rclcpp::Time& now_time) const
+{
+    if (!kf_available_) {
+        return false;
+    }
+
+    if (last_lidar_cluster_stamp_.nanoseconds() == 0) {
+        return false;
+    }
+
+    const double dt_ms =
+        std::fabs((now_time - last_lidar_cluster_stamp_).seconds()) * 1000.0;
+
+    return dt_ms <= static_cast<double>(kf_available_timeout_ms_);
+}
+
 // 主回调函数：处理点云数据
 void KalmanFilter::callback(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
     rclcpp::Time time = msg->header.stamp;  // 获取消息时间戳
+    if (time.nanoseconds() == 0) {
+        time = this->now();
+    }
+
+    last_lidar_cluster_stamp_ = time;
+    kf_available_ = true;
+
+
     auto         now_time =
         std::chrono::steady_clock::now();  // 记录当前时间用于性能测量
 
@@ -225,7 +215,7 @@ void KalmanFilter::callback(
             KFs.push_back(kf);
         } else if (match_kf_indexs.size() == 1) {
             // 只有一个匹配的滤波器，直接更新
-            KFs[match_kf_indexs[0]].update(point, time);
+            KFs[match_kf_indexs[0]].update_lidar(point, time);
         } else {
             // 多个滤波器匹配，选择距离最近的滤波器
             float min_distance = 1000000;  // 初始化最小距离
@@ -241,7 +231,7 @@ void KalmanFilter::callback(
                 }
             }
             // 更新距离最近的滤波器
-            KFs[min_index].update(point, time);
+            KFs[min_index].update_lidar(point, time);
         }
     }
 

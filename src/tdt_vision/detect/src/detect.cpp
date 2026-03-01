@@ -130,6 +130,18 @@ cv::Rect getSafeRectUAV(const cv::Mat& image, const cv::Rect& rect)
     return cv::Rect(x1, y1, width, height);
 }
 
+static float lowPass1st(float input, float& state, bool& inited, float alpha)
+{
+    if (!inited) {
+        state = input;
+        inited = true;
+        return state;
+    }
+
+    state = alpha * input + (1.0f - alpha) * state;
+    return state;
+}
+
 static cv::Mat resize_keep_ratio_blackpad(
     const cv::Mat& src,
     const cv::Size& target_size,
@@ -246,11 +258,11 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Classifier loaded");
     
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading armor_yolo model...");
-    this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.55f);
+    this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.45f);
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Armor YOLO loaded");
     
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading main yolo model...");
-    this->yolo = yolo::load(yolo_path, yolo::Type::V26, 0.65f, 0.45f);
+    this->yolo = yolo::load(yolo_path, yolo::Type::V26, 0.65f, 0.25f);
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Main YOLO loaded");
 
 
@@ -510,7 +522,7 @@ RCLCPP_INFO(this->get_logger(),
         cv::Rect temp_car_rect = getSafeRect(img, temp_rect);
 
         // 过滤过小的检测框
-        if (temp_car_rect.area() < 50 * 50) continue;
+        if (temp_car_rect.area() < 10 * 10) continue;
 
         // 【关键点：提前绘制】
         if (debug) {
@@ -607,17 +619,70 @@ RCLCPP_INFO(this->get_logger(),
                 
                 // 计算车辆中心点和颜色
                 const auto& best_armor = car.armors[best_armor_idx];
-                cv::Rect max_rect(best_armor.left + car.car.left, best_armor.top + car.car.top,
-                                 best_armor.right - best_armor.left, best_armor.bottom - best_armor.top);
-                
+                cv::Rect best_rect(
+                    best_armor.left + car.car.left,
+                    best_armor.top + car.car.top,
+                    best_armor.right - best_armor.left,
+                    best_armor.bottom - best_armor.top
+                );
+
+                // 车号仍然沿用“最佳装甲板”的分类结果
                 car.number = best_armor.class_label;
-                auto safe_rect = getSafeRect(img, max_rect);
+
+                // 颜色仍然沿用“最佳装甲板ROI”判断
+                auto safe_rect = getSafeRect(img, best_rect);
                 cv::Mat armor_roi = img(safe_rect).clone();
                 car.color = getColor(armor_roi);
-                car.center = cv::Point2f(max_rect.x + max_rect.width / 2.0f, 
-                                        max_rect.y + max_rect.height / 2.0f);
-                
+
+                // ------------------------------
+                // 新的最终定位定义：
+                // x = 车框中心
+                // y = 该车所有装甲板中心y的平均值
+                // 前提：这辆车存在 best_armor_idx（即已有有效最佳装甲板）
+                // ------------------------------
+
+                float final_center_x = car.car_rect.x + car.car_rect.width / 2.0f;
+
+                float sum_center_y = 0.0f;
+                int valid_armor_count = 0;
+                for (const auto& armor : car.armors) {
+                    if (armor.class_label == 0 || armor.class_label == 5) {
+                        continue;
+                    }
+
+                    float armor_center_y =
+                        (armor.top + car.car.top) +
+                        (armor.bottom - armor.top) / 2.0f;
+
+                    sum_center_y += armor_center_y;
+                    valid_armor_count++;
+                }
+
+                float final_center_y = best_rect.y + best_rect.height / 2.0f;
+                if (valid_armor_count > 0) {
+                    final_center_y = sum_center_y / static_cast<float>(valid_armor_count);
+                }
+
+                float filtered_center_y = final_center_y;
                 int idx = car.number - 1;
+                if (idx >= 0 && idx < 7) {
+                    if (car.color == 0) {
+                        filtered_center_y = lowPass1st(
+                            final_center_y,
+                            blue_y_lpf_[idx],
+                            blue_y_lpf_init_[idx],
+                            y_lpf_alpha_);
+                    } else if (car.color == 2) {
+                        filtered_center_y = lowPass1st(
+                            final_center_y,
+                            red_y_lpf_[idx],
+                            red_y_lpf_init_[idx],
+                            y_lpf_alpha_);
+                    }
+                }
+
+                car.center = cv::Point2f(final_center_x, filtered_center_y);
+                
                 
                 // 填充检测结果数组（防崩溃检查）
                 if (idx >= 0 && idx < (int)array_limit) {

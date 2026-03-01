@@ -26,7 +26,7 @@ def generate_launch_description():
     # -----------------------------
     tool_pkg_share = FindPackageShare("camera_field_calib_tool")
     default_intrinsics = PathJoinSubstitution([tool_pkg_share, "config", "camera_intrinsics.yaml"])
-    default_out_matrix = PathJoinSubstitution([tool_pkg_share, "config", "out_matrix.yaml"])
+    default_out_matrix = PathJoinSubstitution([tool_pkg_share, "config", "out_matrix_gc.yaml"])
 
     # -----------------------------
     # Environment variables

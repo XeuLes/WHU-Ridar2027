@@ -78,6 +78,13 @@ private:
     std::string classify_path;
     std::string uav_path;
 
+    float blue_y_lpf_[7]{0};
+    float red_y_lpf_[7]{0};
+    bool  blue_y_lpf_init_[7]{false};
+    bool  red_y_lpf_init_[7]{false};
+
+    float y_lpf_alpha_ = 0.35f;
+
     std::vector<TrackedUav> tracked_uavs;
     const int HIT_THRESHOLD = 3;   // 连续3帧出现才认为有效
     const int MAX_MISS_COUNT = 5;  // 连续丢失5帧才删除

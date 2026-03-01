@@ -27,6 +27,14 @@ def generate_launch_description():
     debug_map_share_dir = get_package_share_directory('debug_map')
     kalman_filter_share_dir = get_package_share_directory('kalman_filter')
     hik_camera_share_dir = get_package_share_directory('hik_camera_ros2_driver')
+    gim_rough_share = get_package_share_directory('gimbal_aim_solver')
+    gim_bridge_share = get_package_share_directory("gimbal_serial_bridge")
+    
+    
+
+
+
+
     # 海康相机参数文件路径
     hik_params_file = os.path.join(hik_camera_share_dir, 'config', 'camera_params.yaml')
     # 海康相机节点
@@ -47,6 +55,11 @@ def generate_launch_description():
     # Livox驱动配置
     cur_config_path = os.path.join(livox_share_dir, 'config')
     user_config_path = os.path.join(cur_config_path, 'MID360_config.json')
+
+
+    # 云台配置
+    gim_rough_cfg = os.path.join(gim_rough_share, 'config', 'gimbal_aim_solver.yaml')
+    gim_bridge_params = os.path.join(gim_bridge_share, "config", "gimbal_serial_bridge.yaml")
 
 
     
@@ -123,10 +136,11 @@ def generate_launch_description():
             plugin='tdt_radar::Resolve',
             name='radar_resolve_node',
             parameters=[{
-            "out_matrix_path": f"/home/user/code/T-DT_Radar-main/config/out_matrix.yaml",
+            "out_matrix_path": f"/home/user/code/T-DT_Radar-main/config/out_matrix_gc.yaml",
             "camera_params_path": f"/home/user/code/T-DT_Radar-main/config/camera_params.yaml",
             "region_points_path": f"/home/user/code/T-DT_Radar-main/config/GCZX_Points.yaml",
             "minimap_path": f"/home/user/code/T-DT_Radar-main/config/jichuzhizao.png",
+            "is_test":True,
             }],
             # 移除qos_profile参数
             extra_arguments=[
@@ -161,6 +175,31 @@ def generate_launch_description():
                 {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
             ]
         )
+
+def get_new_map_node():
+    return Node(
+        package='debug_map',
+        executable='debug_map_homo_node',
+        name='debug_map_homo_node',
+        output='screen',
+        parameters=[{
+            'map_path': os.path.join(debug_map_share_dir, 'config', 'jichuzhizao.png'),
+            'homography_path': os.path.join(debug_map_share_dir, 'config', 'debug_map_homography.yaml'),
+            'auto_load_homography': True,
+            'auto_save_homography': True,
+
+            'target_w': 700,
+            'target_h': 375,
+            'kalman_topic': '/kalman_detect',
+            'resolve_topic': '/resolve_result',
+            'uav_topic': '/uav_positions',
+            'match_info_topic': '/match_info',
+            'debug_image_topic': '/debug_map_homo',
+            'draw_timeout_ms': 500,
+            'show_window': True,
+            'prefer_kalman': True,
+        }]
+    )
     
     def get_rosbag_player_node():
         return ComposableNode(
@@ -175,6 +214,34 @@ def generate_launch_description():
                 {'use_intra_process_comms': True},
                 {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
             ]
+        )
+    
+    def get_radar_calib_node(package, plugin):
+        return ComposableNode(
+            package=package,
+            plugin=plugin,
+            name='radar_calib_node',
+            extra_arguments=[{'use_intra_process_comms': True}]
+        )
+    
+    radar_calib_node = get_radar_calib_node('tdt_vision', 'tdt_radar::Calibrate')
+    
+    def get_gimbal_rough_node():
+        return  Node(
+            package='gimbal_aim_solver',
+            executable='gimbal_aim_solver_node',
+            name='gimbal_aim_solver_node',
+            output='screen',
+            parameters=[gim_rough_cfg]
+        )
+
+    def get_gimbal_bridge_node():
+        return Node(
+            package="gimbal_serial_bridge",
+            executable="gimbal_serial_bridge_node",
+            name="gimbal_serial_bridge",
+            output="screen",
+            parameters=[gim_bridge_params],
         )
         
     # 地图点云发布节点
@@ -196,25 +263,25 @@ def generate_launch_description():
 
     # 创建节点容器
     container = ComposableNodeContainer(
-        name='radar_debug_container',
-        namespace='',
-        package='rclcpp_components',
-        executable='component_container',
-        composable_node_descriptions=[
-            # get_rosbag_player_node(),
-            get_localization_node(),
-            get_dynamic_cloud_node(),
-            get_debug_map_node(),
-            get_cluster_node(),
-            get_detect_node(),
-            get_resolve_node(),
-            get_kalman_filter_node(),
-            # get_radar_calib_node('tdt_vision', 'tdt_radar::Calibrate')
-        ],
-        output='both',
-        emulate_tty=True,
-        on_exit=Shutdown()
-    )
+    name='radar_debug_container',
+    namespace='',
+    package='rclcpp_components',
+    executable='component_container',
+    composable_node_descriptions=[
+        # get_rosbag_player_node(),
+        # get_radar_calib_node('tdt_vision', 'tdt_radar::Calibrate'),
+        get_localization_node(),
+        get_dynamic_cloud_node(),
+        get_cluster_node(),
+        get_detect_node(),
+        get_resolve_node(),
+        get_kalman_filter_node(),
+        
+    ],
+    output='both',
+    emulate_tty=True,
+    on_exit=Shutdown()
+)
 
     # 打印路径日志
     log_rviz_path = LogInfo(msg=f"RViz2 config path: {rviz_config_path}")
@@ -232,13 +299,15 @@ def generate_launch_description():
 
 
     return LaunchDescription([
-        log_rviz_path,
-        log_map_path,
-        log_debug_map_path,
+    log_rviz_path,
+    log_map_path,
+    log_debug_map_path,
 
-        get_hik_camera_node(),  # 启动现实相机节点
-        container,
-        mappcd_node,
-
-        rviz_node
-    ])
+    get_hik_camera_node(),     # Node ✅
+    get_gimbal_rough_node(),   # Node ✅（移到外面）
+    get_gimbal_bridge_node(),  # Node ✅（移到外面）
+    get_new_map_node(),
+    container,                 # Container ✅（只装 composable）
+    mappcd_node,               # Node ✅
+    rviz_node
+])

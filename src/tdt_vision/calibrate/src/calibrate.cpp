@@ -30,7 +30,7 @@ Calibrate::Calibrate(const rclcpp::NodeOptions& options)
 
     // 读取相机内参和畸变系数（从yaml配置文件）
     // -------------------- config paths (ROS2 parameters) --------------------
-    this->declare_parameter<std::string>("out_matrix_path", "config/out_matrix.yaml");
+    this->declare_parameter<std::string>("out_matrix_path", "config/out_matrix_gc.yaml");
     this->declare_parameter<std::string>("camera_params_path", "config/camera_params.yaml");
     this->declare_parameter<std::string>("region_points_path", "config/RM2025_Points.yaml");
 
@@ -89,9 +89,9 @@ Calibrate::Calibrate(const rclcpp::NodeOptions& options)
                 "       `8'      `8'       o888o   o888o    `YbodP'        "
                 "    o888o         `Y8bood8P'  o888o  o88888o ");
 
-    // 创建普通图像订阅者，订阅"camera_image"话题
+    // 创建普通图像订阅者，订阅"camera0/image"话题
     image_sub = this->create_subscription<sensor_msgs::msg::Image>(
-        "camera_image",
+        "camera0/image",
         rclcpp::SensorDataQoS(),  // 话题名和QoS设置（传感器数据类型）
         std::bind(&Calibrate::callback, this,
                   std::placeholders::_1));  // 绑定回调函数

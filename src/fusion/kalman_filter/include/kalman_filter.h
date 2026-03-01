@@ -42,8 +42,12 @@ private:
     lidar_callback(const vision_interface::msg::RadarWarn::SharedPtr msg);
     void
     match_callback(const vision_interface::msg::MatchInfo::SharedPtr msg);
+    bool is_kf_available_now(const rclcpp::Time& now_time) const;
     std::vector<Kalman_filter_plus>  KFs;
     vision_interface::msg::RadarWarn lidar_detect;
     vision_interface::msg::MatchInfo match_info;
+    rclcpp::Time last_lidar_cluster_stamp_{0, 0, RCL_ROS_TIME};
+    bool kf_available_{false};
+    int kf_available_timeout_ms_{300};   // 可调
 };
 }  // namespace tdt_radar

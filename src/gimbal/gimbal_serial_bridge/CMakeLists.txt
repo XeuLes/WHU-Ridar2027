@@ -9,6 +9,7 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 
 add_executable(gimbal_serial_bridge_node
@@ -17,6 +18,7 @@ add_executable(gimbal_serial_bridge_node
 ament_target_dependencies(gimbal_serial_bridge_node
   rclcpp
   std_msgs
+  geometry_msgs
 )
 
 add_executable(xxx_test_node
@@ -25,7 +27,8 @@ add_executable(xxx_test_node
 ament_target_dependencies(xxx_test_node 
 rclcpp 
 std_msgs 
-sensor_msgs)
+sensor_msgs
+geometry_msgs)
 
 install(TARGETS
   gimbal_serial_bridge_node

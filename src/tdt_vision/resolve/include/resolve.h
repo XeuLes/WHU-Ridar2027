@@ -70,6 +70,8 @@ private:
     rclcpp::Time uav_other_stamp_{0, 0, RCL_ROS_TIME};
 
     // parameters
+    bool is_test_{false};
+
     int    uav_other_timeout_ms_{500};
     double uav_default_z_{1.95};
     double uav_huber_delta_xy_{0.8};

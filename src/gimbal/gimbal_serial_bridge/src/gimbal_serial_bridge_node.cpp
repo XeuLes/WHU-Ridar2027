@@ -3,6 +3,7 @@
 #include <std_msgs/msg/bool.hpp>
 #include <std_msgs/msg/float64_multi_array.hpp>
 #include <std_msgs/msg/u_int8.hpp>
+#include <geometry_msgs/msg/quaternion_stamped.hpp>
 
 #include <atomic>
 #include <cerrno>
@@ -181,6 +182,9 @@ public:
         pub_angles_ =
             this->create_publisher<std_msgs::msg::Float64MultiArray>(
                 angles_topic_, rclcpp::SensorDataQoS());
+        pub_quaternion_ =
+            this->create_publisher<geometry_msgs::msg::QuaternionStamped>(
+                quaternion_topic_, rclcpp::SensorDataQoS());
         pub_mode_ = this->create_publisher<std_msgs::msg::UInt8>(
             mode_up_topic_, rclcpp::QoS(10));
 
@@ -230,9 +234,10 @@ private:
             "serial_ports", std::vector<std::string>{});
         this->declare_parameter<int>("baud", 115200);
 
-        this->declare_parameter<std::string>("angles_topic", "/gimbal/angles");
-        this->declare_parameter<std::string>("mode_up_topic", "/gimbal/mode_up");
-        this->declare_parameter<std::string>("cmd_topic", "/gimbal/command_angles");
+        this->declare_parameter<std::string>("angles_topic", "/gimbal/angles"); // gimbal angle
+        this->declare_parameter<std::string>("quaternion_topic", "/gimbal/quaternion"); // gimbal quaternion 
+        this->declare_parameter<std::string>("mode_up_topic", "/gimbal/mode_up"); 
+        this->declare_parameter<std::string>("cmd_topic", "/gimbal/command_angles"); // target angle
         this->declare_parameter<std::string>("enable_topic", "/gimbal/enable");
 
         this->declare_parameter<std::string>("angle_unit", "rad"); // rad/deg
@@ -249,6 +254,7 @@ private:
         baud_ = this->get_parameter("baud").as_int();
 
         angles_topic_ = this->get_parameter("angles_topic").as_string();
+        quaternion_topic_ = this->get_parameter("quaternion_topic").as_string();
         mode_up_topic_ = this->get_parameter("mode_up_topic").as_string();
         cmd_topic_ = this->get_parameter("cmd_topic").as_string();
         enable_topic_ = this->get_parameter("enable_topic").as_string();
@@ -411,11 +417,11 @@ private:
                 }
 
                 // ✅ CRC OK：先打印 RX 原始帧，再解析
-                RCLCPP_INFO_THROTTLE(
-                    this->get_logger(), *this->get_clock(), 500 /*ms*/,
-                    "[RX] %zu bytes: %s",
-                    frame_len,
-                    hex_dump(frame_bytes, frame_len).c_str());
+                // RCLCPP_INFO_THROTTLE(
+                //     this->get_logger(), *this->get_clock(), 500 /*ms*/,
+                //     "[RX] %zu bytes: %s",
+                //     frame_len,
+                //     hex_dump(frame_bytes, frame_len).c_str());
 
                 // CRC OK：解析并消费
                 GimbalToVision rx{};
@@ -428,6 +434,18 @@ private:
                 angles.data[0] = static_cast<double>(rx.yaw);
                 angles.data[1] = static_cast<double>(rx.pitch);
                 pub_angles_->publish(angles);
+
+                geometry_msgs::msg::QuaternionStamped qmsg;
+                qmsg.header.stamp = this->now();
+                qmsg.header.frame_id = "gimbal_frame";
+
+                // 协议注明 q[4] 是 wxyz
+                qmsg.quaternion.w = static_cast<double>(rx.q[0]);
+                qmsg.quaternion.x = static_cast<double>(rx.q[1]);
+                qmsg.quaternion.y = static_cast<double>(rx.q[2]);
+                qmsg.quaternion.z = static_cast<double>(rx.q[3]);
+
+                pub_quaternion_->publish(qmsg);
 
                 // publish mode_up
                 std_msgs::msg::UInt8 m;
@@ -512,12 +530,12 @@ private:
             std::memcpy(tx_bytes + sizeof(VisionToGimbal) - sizeof(uint16_t),
                         &tx_crc, sizeof(uint16_t));
 
-            // 低频日志，避免影响实时性
-            RCLCPP_INFO_THROTTLE(
-                this->get_logger(), *this->get_clock(), 500 /*ms*/,
-                "[TX] %zu bytes: %s",
-                sizeof(tx_bytes),
-                hex_dump(tx_bytes, sizeof(tx_bytes)).c_str());
+            // // 低频日志，避免影响实时性
+            // RCLCPP_INFO_THROTTLE(
+            //     this->get_logger(), *this->get_clock(), 500 /*ms*/,
+            //     "[TX] %zu bytes: %s",
+            //     sizeof(tx_bytes),
+            //     hex_dump(tx_bytes, sizeof(tx_bytes)).c_str());
 
             if (!write_all_nonblock(fd_local, tx_bytes, sizeof(tx_bytes))) {
                 closeFd();
@@ -544,6 +562,8 @@ private:
     std::string mode_up_topic_;
     std::string cmd_topic_;
     std::string enable_topic_;
+    std::string quaternion_topic_;
+
 
     std::string angle_unit_{"rad"};
     int         yaw_index_{0};
@@ -562,6 +582,7 @@ private:
 
     // ROS
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_angles_;
+    rclcpp::Publisher<geometry_msgs::msg::QuaternionStamped>::SharedPtr pub_quaternion_;
     rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr            pub_mode_;
     rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr sub_cmd_;
     rclcpp::Subscription<std_msgs::msg::Bool>::SharedPtr              sub_enable_;

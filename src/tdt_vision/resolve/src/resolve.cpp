@@ -23,6 +23,8 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<std::string>("camera_params_path", "config/camera_params.yaml");
     this->declare_parameter<std::string>("region_points_path", "config/RM2025_Points.yaml");
 
+    this->declare_parameter<bool>("is_test", false);
+
     // minimap path (optional)
     this->declare_parameter<std::string>("minimap_path", "config/RM2025.png");
 
@@ -30,6 +32,8 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     const std::string camera_params_path = this->get_parameter("camera_params_path").as_string();
     const std::string region_points_path = this->get_parameter("region_points_path").as_string();
     const std::string minimap_path       = this->get_parameter("minimap_path").as_string();
+
+    is_test_ = this->get_parameter("is_test").as_bool();
 
     // -------------------- construct parser --------------------
     parser_ = nullptr;
@@ -812,14 +816,21 @@ void Resolve::DetectCallback(
                     send_data.blue_y[i] = 0;
                 }
             } else {
-                // 地面车辆: 使用区域高度进行转换
                 float h = parser_->get_height(p);
                 auto cp = parser_->parse_with_height(p, h);
-                float y_offset = cp.y + 15;
-                float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
-                float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-                send_data.blue_x[i] = clamp_x;
-                send_data.blue_y[i] = clamp_y;
+                
+                if (is_test_) {
+                    // 测试模式：直接使用投影原始值，不做y偏移和clamp
+                    send_data.blue_x[i] = cp.x;
+                    send_data.blue_y[i] = cp.y;
+                } else {
+                    // 原逻辑：做y偏移和clamp
+                    float y_offset = cp.y + 15.0f;
+                    float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
+                    float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
+                    send_data.blue_x[i] = clamp_x;
+                    send_data.blue_y[i] = clamp_y;
+                }
             }
         } else {
             send_data.blue_x[i] = 0;
@@ -842,14 +853,21 @@ void Resolve::DetectCallback(
                     send_data.red_y[i] = 0;
                 }
             } else {
-                // 地面车辆: 使用区域高度进行转换
+                
                 float h = parser_->get_height(p);
                 auto cp = parser_->parse_with_height(p, h);
-                float y_offset = cp.y + 15;
-                float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
-                float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-                send_data.red_x[i] = clamp_x;
-                send_data.red_y[i] = clamp_y;
+                if (is_test_) {
+                    // 测试模式：直接使用投影原始值，不做y偏移和clamp
+                    send_data.red_x[i] = cp.x;
+                    send_data.red_y[i] = cp.y;
+                } else {
+                    // 原逻辑：做y偏移和clamp
+                    float y_offset = cp.y + 15.0f;
+                    float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
+                    float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
+                    send_data.red_x[i] = clamp_x;
+                    send_data.red_y[i] = clamp_y;
+                }
             }
         } else {
             send_data.red_x[i] = 0;

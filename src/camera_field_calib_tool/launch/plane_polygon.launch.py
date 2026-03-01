@@ -35,7 +35,7 @@ def generate_launch_description():
         [tool_pkg_share, "config", "camera_intrinsics.yaml"]
     )
     default_out_matrix = PathJoinSubstitution(
-        [tool_pkg_share, "config", "out_matrix.yaml"]
+        [tool_pkg_share, "config", "out_matrix_gc.yaml"]
     )
     default_field_points = PathJoinSubstitution(
         [tool_pkg_share, "config", "Field_Points.yaml"]
