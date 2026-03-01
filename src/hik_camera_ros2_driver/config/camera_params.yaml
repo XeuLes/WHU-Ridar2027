@@ -30,5 +30,5 @@
     cam1.camera_topic: "camera1/image"
 
     cam1.acquisition_frame_rate: 120.0
-    cam1.exposure_time: 12000
-    cam1.gain: 26.9
+    cam1.exposure_time: 10000
+    cam1.gain: 23.0
