@@ -1,3 +1,5 @@
+image_width: 1624
+image_height: 1424
 camera_name: camera1
 camera_matrix:
   rows: 3

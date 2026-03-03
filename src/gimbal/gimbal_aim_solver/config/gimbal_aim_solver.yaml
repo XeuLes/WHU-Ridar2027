@@ -2,7 +2,7 @@ gimbal_aim_solver_node:
   ros__parameters:
     uav_topic: "/uav_positions"
     gimbal_angles_topic: "/gimbal/angles"
-    target_angles_topic: "/gimbal/target_angles"
+    target_angles_topic: "/gimbal/rough_command_angles"
 
     # red / blue
     target_side: "red"

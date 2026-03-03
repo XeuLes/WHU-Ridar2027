@@ -2,8 +2,7 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
-from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -28,11 +27,11 @@ def generate_launch_description():
     stdout_linebuf_envvar = SetEnvironmentVariable("RCUTILS_LOGGING_BUFFERED_STREAM", "1")
     colorized_output_envvar = SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1")
 
-    # Declare args (match hik original semantics)
+    # Declare args
     declare_hik_params = DeclareLaunchArgument(
         "hik_params_file",
         default_value=os.path.join(hik_share, "config", "camera_params.yaml"),
-        description="Hik camera parameter file (same as hik_camera_launch.py default)",
+        description="Hik camera parameter file",
     )
 
     declare_log_level = DeclareLaunchArgument(
@@ -41,7 +40,6 @@ def generate_launch_description():
         description="log level",
     )
 
-    # auto_aim params defaults
     declare_tracker = DeclareLaunchArgument(
         "tracker_params",
         default_value=os.path.join(aim_share, "config", "tracker.yaml"),
@@ -68,14 +66,14 @@ def generate_launch_description():
         description="auto_aim camera_info usage params",
     )
 
-    # Include the ORIGINAL hik launch (most robust)
-    hik_launch_path = os.path.join(hik_share, "launch", "hik_camera_launch.py")
-    hik_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(hik_launch_path),
-        launch_arguments={
-            "params_file": hik_params_file,
-            "log_level": log_level,
-        }.items(),
+    # Directly launch Hik camera driver node
+    hik_camera_node = Node(
+        package="hik_camera_ros2_driver",
+        executable="hik_camera_ros2_driver_node",
+        name="hik_camera_ros2_driver",
+        output="screen",
+        parameters=[hik_params_file],
+        arguments=["--ros-args", "--log-level", log_level],
     )
 
     # auto_aim node
@@ -101,7 +99,7 @@ def generate_launch_description():
     ld.add_action(declare_qos)
     ld.add_action(declare_info)
 
-    ld.add_action(hik_launch)
+    ld.add_action(hik_camera_node)
     ld.add_action(auto_aim_node)
 
     return ld

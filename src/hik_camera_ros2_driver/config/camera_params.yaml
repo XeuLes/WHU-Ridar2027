@@ -31,4 +31,4 @@
 
     cam1.acquisition_frame_rate: 120.0
     cam1.exposure_time: 10000
-    cam1.gain: 23.0
+    cam1.gain: 20.0
