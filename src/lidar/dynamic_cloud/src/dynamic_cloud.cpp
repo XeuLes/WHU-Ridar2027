@@ -41,7 +41,7 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
 
     // 初始化订阅者和发布者
     sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/livox/lidar", 10,
+        "/livox/lidar_integrated", 10,
         std::bind(&DynamicCloud::callback, this, std::placeholders::_1));
 
     pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_dynamic", 10);

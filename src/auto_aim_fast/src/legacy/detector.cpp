@@ -264,8 +264,8 @@ std::vector<SimpleLightDetector::Light> SimpleLightDetector::detectLights(
     }
 
     // ✅ 输出检测结果统计
-    printf("[Detection] Total contours: %zu, Valid lights: %zu, Target color: %d\n", 
-           contours.size(), lights.size(), params_.target_color);
+    // printf("[Detection] Total contours: %zu, Valid lights: %zu, Target color: %d\n", 
+    //        contours.size(), lights.size(), params_.target_color);
     fflush(stdout);
 
     return lights;
@@ -367,11 +367,11 @@ std::vector<SimpleLightDetector::PairResult> SimpleLightDetector::pairLights(
     std::vector<PairResult> pairs;
 
     // ✅ 输出灯条数量
-    printf("[Pairing] Total lights detected: %zu\n", lights.size());
+    // printf("[Pairing] Total lights detected: %zu\n", lights.size());
     fflush(stdout);
 
     if (lights.size() < 2) {
-        printf("[Pairing] ❌ Not enough lights for pairing (need >= 2)\n");
+        // printf("[Pairing] ❌ Not enough lights for pairing (need >= 2)\n");
         fflush(stdout);
         return pairs;
     }
@@ -443,22 +443,22 @@ std::vector<SimpleLightDetector::PairResult> SimpleLightDetector::pairLights(
 bool SimpleLightDetector::canPair(const Light& l1, const Light& l2,
                                  float& center_dist, float& angle_diff) const {
 
-    printf("[canPair] Testing L1(%.1f,%.1f) vs L2(%.1f,%.1f)\n", 
-           l1.center.x, l1.center.y, l2.center.x, l2.center.y);
+    // printf("[canPair] Testing L1(%.1f,%.1f) vs L2(%.1f,%.1f)\n", 
+    //        l1.center.x, l1.center.y, l2.center.x, l2.center.y);
 
     // 1. 长度比例检查 - 两个灯条长度应该相似
     float length_ratio = std::min(l1.length, l2.length) / std::max(l1.length, l2.length);
-    printf("  [Step1] length_ratio=%.3f (min=%.3f)\n", length_ratio, params_.min_light_ratio);
+    // printf("  [Step1] length_ratio=%.3f (min=%.3f)\n", length_ratio, params_.min_light_ratio);
     if (length_ratio < params_.min_light_ratio) {
-        printf("  ❌ Step1 FAILED: length_ratio too small\n");
+        // printf("  ❌ Step1 FAILED: length_ratio too small\n");
         return false;
     }
 
     // 2. 角度差检查 - 两个灯条应该平行
     angle_diff = angleDifference(l1.angle, l2.angle);
-    printf("  [Step2] angle_diff=%.2f° (max=%.2f°)\n", angle_diff, params_.max_pair_angle);
+    // printf("  [Step2] angle_diff=%.2f° (max=%.2f°)\n", angle_diff, params_.max_pair_angle);
     if (angle_diff > params_.max_pair_angle) {
-        printf("  ❌ Step2 FAILED: angle_diff too large\n");
+        // printf("  ❌ Step2 FAILED: angle_diff too large\n");
         return false;
     }
 
@@ -470,19 +470,19 @@ bool SimpleLightDetector::canPair(const Light& l1, const Light& l2,
     
     // 3. X坐标差异检查 - 两个灯条应该在同一垂直线上（图像中）
     float x_diff_ratio = dx / avg_length;
-    printf("  [Step3] x_diff_ratio=%.3f (max=%.3f), dx=%.2f, avg_length=%.2f\n", 
-           x_diff_ratio, params_.max_x_diff_ratio, dx, avg_length);
+    // printf("  [Step3] x_diff_ratio=%.3f (max=%.3f), dx=%.2f, avg_length=%.2f\n", 
+    //        x_diff_ratio, params_.max_x_diff_ratio, dx, avg_length);
     if (x_diff_ratio > params_.max_x_diff_ratio) {
-        printf("  ❌ Step3 FAILED: x_diff_ratio too large\n");
+        // printf("  ❌ Step3 FAILED: x_diff_ratio too large\n");
         return false;
     }
     
     // 4. 垂直距离检查 - 上下距离应该在合理范围内
     float vertical_dist = dy / avg_length;
-    printf("  [Step4] vertical_dist=%.3f (range=[%.3f, %.3f]), dy=%.2f\n", 
-           vertical_dist, params_.min_vertical_dist, params_.max_vertical_dist, dy);
+    // printf("  [Step4] vertical_dist=%.3f (range=[%.3f, %.3f]), dy=%.2f\n", 
+    //        vertical_dist, params_.min_vertical_dist, params_.max_vertical_dist, dy);
     if (vertical_dist < params_.min_vertical_dist || vertical_dist > params_.max_vertical_dist) {
-        printf("  ❌ Step4 FAILED: vertical_dist out of range\n");
+        // printf("  ❌ Step4 FAILED: vertical_dist out of range\n");
         return false;
     }
     
@@ -490,19 +490,19 @@ bool SimpleLightDetector::canPair(const Light& l1, const Light& l2,
     // Step 5: 连线角度范围检查 - 过滤水平配对，保留接近垂直的配对
     float connect_angle = std::atan2(dy, dx) * 180.0f / CV_PI;
     
-    printf("  Step5: connect_angle=%.2f° (range: [%.2f°, %.2f°]), dx=%.2f, dy=%.2f\n",
-           connect_angle, params_.min_connect_angle, params_.max_connect_angle, dx, dy);
+    // printf("  Step5: connect_angle=%.2f° (range: [%.2f°, %.2f°]), dx=%.2f, dy=%.2f\n",
+    //        connect_angle, params_.min_connect_angle, params_.max_connect_angle, dx, dy);
     fflush(stdout);
     
     if (connect_angle < params_.min_connect_angle || connect_angle > params_.max_connect_angle) {
-        printf("  ❌ Step5 FAILED: angle %.2f° not in valid range [%.2f°, %.2f°] (L1=(%.1f,%.1f), L2=(%.1f,%.1f))\n",
-               connect_angle, params_.min_connect_angle, params_.max_connect_angle,
-               l1.center.x, l1.center.y, l2.center.x, l2.center.y);
+        // printf("  ❌ Step5 FAILED: angle %.2f° not in valid range [%.2f°, %.2f°] (L1=(%.1f,%.1f), L2=(%.1f,%.1f))\n",
+        //        connect_angle, params_.min_connect_angle, params_.max_connect_angle,
+        //        l1.center.x, l1.center.y, l2.center.x, l2.center.y);
         fflush(stdout);
         return false;
     }
     
-    printf("  ✅ Step5 PASSED: angle %.2f° in valid range\n", connect_angle);
+    // printf("  ✅ Step5 PASSED: angle %.2f° in valid range\n", connect_angle);
     fflush(stdout);
     
     center_dist = vertical_dist;  // 返回垂直距离作为中心距
