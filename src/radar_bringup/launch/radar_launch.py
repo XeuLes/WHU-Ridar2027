@@ -39,23 +39,22 @@ def generate_launch_description():
     hik_params_file = os.path.join(hik_camera_share_dir, 'config', 'camera_params.yaml')
 
     # 地图点云
-    map_pcd_path = os.path.join(localization_share_dir, 'config', '基础制造.pcd')
+    map_pcd_path = os.path.join(localization_share_dir, 'config', '基础制造_rm_frame.pcd')
 
     # localization 在线初值所需配置
     camera_extrinsic_yaml = "/home/user/code/T-DT_Radar-main/config/out_matrix_gc.yaml"
     camera_to_lidar_yaml = os.path.join(localization_share_dir, 'config', 'camera_to_lidar.yaml')
 
     # Livox驱动配置
-    # Livox 驱动配置（严格参考 livox_ros2_driver 原始启动文件）
     cur_config_path = os.path.join(livox_share_dir, 'config')
     livox_rviz_config_path = os.path.join(cur_config_path, 'livox_lidar.rviz')
     user_config_path = os.path.join(cur_config_path, 'livox_lidar_config.json')
 
-    xfer_format   = 0
-    multi_topic   = 0
-    data_src      = 0
-    publish_freq  = 10.0
-    output_type   = 0
+    xfer_format = 0
+    multi_topic = 0
+    data_src = 0
+    publish_freq = 10.0
+    output_type = 0
     livox_frame_id = 'livox_frame'
     lvx_file_path = '/home/livox/livox_test.lvx'
     cmdline_bd_code = 'livox0000000001'
@@ -195,12 +194,13 @@ def generate_launch_description():
             name='localization_node',
             parameters=[{
                 # 地图
-                'use_map': True,
-                'map_frame': 'rm_frame',
                 'target_pcd_path': map_pcd_path,
 
-                # 初值模式: offline / online
+                # 初值模式: offline / online / auto
                 'initial_pose_mode': 'online',
+
+                # online 失败是否自动退回 offline
+                'fallback_to_offline_if_online_failed': True,
 
                 # offline 模式备用参数
                 'initial_x': 0.0,
@@ -216,7 +216,7 @@ def generate_launch_description():
 
                 # GICP 总时间超时
                 'enable_gicp_total_timeout': True,
-                'gicp_total_timeout_sec': 10.0,
+                'gicp_total_timeout_sec': 20.0,
                 'fallback_to_initial_after_timeout': True,
 
                 # GICP 参数
@@ -236,10 +236,13 @@ def generate_launch_description():
                 'roi_min_y': -10.0,
                 'roi_max_y': 10.0,
                 'roi_max_z': 5.0,
+
+                # 异步TF/GICP频率
+                'tf_publish_rate_hz': 20.0,
+                'gicp_worker_rate_hz': 0.1,
             }],
             extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
+                {'use_intra_process_comms': False}
             ]
         )
 
@@ -252,8 +255,7 @@ def generate_launch_description():
                 'map_pcd_path': map_pcd_path
             }],
             extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
+                {'use_intra_process_comms': True}
             ]
         )
 
@@ -263,8 +265,7 @@ def generate_launch_description():
             plugin='tdt_radar::Cluster',
             name='cluster_node',
             extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
+                {'use_intra_process_comms': True}
             ]
         )
 
@@ -277,8 +278,7 @@ def generate_launch_description():
                 "image_topic": "/camera0/image",
             }],
             extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
+                {'use_intra_process_comms': True}
             ]
         )
 
@@ -295,8 +295,7 @@ def generate_launch_description():
                 "is_test": True,
             }],
             extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
+                {'use_intra_process_comms': True}
             ]
         )
 
@@ -306,18 +305,19 @@ def generate_launch_description():
             plugin='tdt_radar::KalmanFilter',
             name='kalman_filter_node',
             extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
+                {'use_intra_process_comms': True}
             ]
         )
+
     def get_livox_driver_node():
-            return Node(
-                package='livox_ros2_driver',
-                executable='livox_ros2_driver_node',
-                name='livox_lidar_publisher',
-                output='screen',
-                parameters=livox_ros2_params
-            )
+        return Node(
+            package='livox_ros2_driver',
+            executable='livox_ros2_driver_node',
+            name='livox_lidar_publisher',
+            output='screen',
+            parameters=livox_ros2_params
+        )
+
     # -----------------------------
     # 容器
     # -----------------------------
@@ -325,7 +325,7 @@ def generate_launch_description():
         name='radar_debug_container',
         namespace='',
         package='rclcpp_components',
-        executable='component_container',
+        executable='component_container_mt',
         composable_node_descriptions=[
             get_localization_node(),
             get_dynamic_cloud_node(),
@@ -360,20 +360,20 @@ def generate_launch_description():
     )
 
     mappcd_node = get_map_pcd_publisher()
+
     integrator = Node(
-            package='livox_cloud_integrator',
-            executable='cloud_integrator_node',
-            name='cloud_integrator',
-            output='screen',
-            parameters=[
-                {"input_topic": '/livox/lidar'},
-                {"output_topic": '/livox/lidar_integrated'},
-                {"window_sec": 0.5},
-                {"use_header_stamp": True},
-                {"max_points": int(2000000)},
-            ],
-        )
-    
+        package='livox_cloud_integrator',
+        executable='cloud_integrator_node',
+        name='cloud_integrator',
+        output='screen',
+        parameters=[
+            {"input_topic": '/livox/lidar'},
+            {"output_topic": '/livox/lidar_integrated'},
+            {"window_sec": 0.5},
+            {"use_header_stamp": True},
+            {"max_points": int(2000000)},
+        ],
+    )
 
     return LaunchDescription([
         log_rviz_path,
@@ -384,7 +384,7 @@ def generate_launch_description():
 
         # 普通节点
         get_hik_camera_node(),
-        get_auto_aim_node(),
+        # get_auto_aim_node(),
         get_gimbal_rough_node(),
         get_laser_aim_node(),
         get_gimbal_bridge_node(),
