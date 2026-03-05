@@ -880,6 +880,34 @@ void Resolve::DetectCallback(
 
     // publish /uav_positions every frame (debug_map depends on timely
     // updates)
+    
+    // ================= 临时：/uav_positions 的红方UAV改为“红方3号小车” =================
+// 约定：red[2] 是红方3号车（数组索引 0..5 对应 1..6号车，2=>3号车）
+{
+    const int car_idx = 2;  // 红方3号小车
+    const float x = send_data.red_x[car_idx];
+    const float y = send_data.red_y[car_idx];
+
+    if (x != 0.0f && y != 0.0f) {
+        uav_out.poses[1].position.x = static_cast<double>(x);
+        uav_out.poses[1].position.y = static_cast<double>(y);
+        uav_out.poses[1].position.z = 0.0;   // 或者给个固定值/地图高度
+
+        // 如果你希望姿态保持 NaN，就别动 orientation；否则可以置单位四元数
+        // uav_out.poses[1].orientation.w = 1.0;
+        // uav_out.poses[1].orientation.x = 0.0;
+        // uav_out.poses[1].orientation.y = 0.0;
+        // uav_out.poses[1].orientation.z = 0.0;
+    } else {
+        // 红方3号车无坐标时，保持原逻辑（KF/测量）或继续 NaN
+        // 这里按你的需求二选一：
+        // 1) 什么都不做：保持原本uav_out.poses[1]（KF/测量/NaN）
+        // 2) 强制NaN（更“彻底”的临时替换）：
+        // set_nan_pose(uav_out.poses[1]);
+    }
+}
+
+
     pub_uav_positions_->publish(uav_out);
 }
 

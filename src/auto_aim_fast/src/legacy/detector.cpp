@@ -4,6 +4,38 @@
 #include <numeric> // For std::accumulate if needed
 #include <iostream> // For std::cout debug logging
 
+// detector.cpp 顶部追加
+#ifdef AUTO_AIM_FAST_USE_CUDA
+  #include <opencv2/core/cuda.hpp>
+  #include <opencv2/cudaimgproc.hpp>
+  #include <opencv2/cudaarithm.hpp>
+  #include <opencv2/cudafilters.hpp>
+#endif
+
+#ifdef AUTO_AIM_FAST_USE_CUDA
+  #include <cuda_runtime.h>
+  #include <opencv2/core/cuda_stream_accessor.hpp>
+
+  struct Float2 { float x, y; };
+
+  extern "C" bool detect_color_cuda(
+      const cv::cuda::GpuMat& d_bgr,
+      int roi_x, int roi_y, int roi_w, int roi_h,
+      const Float2 rect_pts[4],
+      int sample_step,
+      int* h_red_sum, int* h_blue_sum, int* h_count,
+      cudaStream_t stream);
+
+  struct FrameCudaCache {
+    bool valid = false;
+    cv::cuda::GpuMat d_bgr;
+    cv::cuda::Stream stream;
+    int w = 0, h = 0;
+  };
+
+  static thread_local FrameCudaCache g_cuda_frame;
+#endif
+
 
 // 静态成员初始化
 const cv::Scalar SimpleLightDetector::RED_COLOR = cv::Scalar(0, 0, 255);
@@ -74,6 +106,17 @@ std::vector<cv::Point2f> SimpleLightDetector::detect(const cv::Mat& image) {
     last_lights_.clear();
     last_pairs_.clear();
 
+    #ifdef AUTO_AIM_FAST_USE_CUDA
+  if (!image.empty() && image.type() == CV_8UC3 && cv::cuda::getCudaEnabledDeviceCount() > 0) {
+    g_cuda_frame.valid = true;
+    g_cuda_frame.w = image.cols;
+    g_cuda_frame.h = image.rows;
+    g_cuda_frame.d_bgr.upload(image, g_cuda_frame.stream);
+  } else {
+    g_cuda_frame.valid = false;
+  }
+#endif
+
     // 预处理
     last_binary_ = preprocess(image);
 
@@ -89,6 +132,10 @@ std::vector<cv::Point2f> SimpleLightDetector::detect(const cv::Mat& image) {
     for (const auto& pair : last_pairs_) {
         centers.push_back(pair.center);
     }
+
+    #ifdef AUTO_AIM_FAST_USE_CUDA
+  g_cuda_frame.valid = false;
+#endif
 
     return centers;
 }
@@ -213,16 +260,58 @@ cv::Mat SimpleLightDetector::getDebugImage() const {
 // ==================== 私有方法实现 ====================
 
 // 预处理
-cv::Mat SimpleLightDetector::preprocess(const cv::Mat& image) const {
+cv::Mat SimpleLightDetector::preprocess(const cv::Mat& image) const
+{
+#ifdef AUTO_AIM_FAST_USE_CUDA
+    // 运行时兜底：没 CUDA 设备 / 输入不对就退回 CPU
+    if (!image.empty() &&
+        image.type() == CV_8UC3 &&
+        cv::cuda::getCudaEnabledDeviceCount() > 0)
+    {
+        // 线程内缓存：避免每帧反复创建 Filter / 反复申请显存
+        struct CudaCache {
+            bool inited = false;
+            cv::cuda::GpuMat d_bgr, d_gray, d_bin, d_tmp;
+            cv::Ptr<cv::cuda::Filter> close_f;
+            cv::Ptr<cv::cuda::Filter> open_f;
+            cv::cuda::Stream stream;
+        };
+        static thread_local CudaCache cache;
+
+        if (!cache.inited) {
+            // kernel 与 CPU 版完全一致：3x3 MORPH_RECT
+            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
+            cache.close_f = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, CV_8UC1, kernel);
+            cache.open_f  = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN,  CV_8UC1, kernel);
+            cache.inited = true;
+        }
+
+        // upload -> cuda preprocess -> download
+        cache.d_bgr.upload(image, cache.stream);
+        cv::cuda::cvtColor(cache.d_bgr, cache.d_gray, cv::COLOR_BGR2GRAY, 0, cache.stream);
+
+        // 阈值逻辑保持不变：THRESH_BINARY + params_.binary_thresh
+        cv::cuda::threshold(
+            cache.d_gray, cache.d_bin,
+            params_.binary_thresh, 255.0,
+            cv::THRESH_BINARY, cache.stream);
+
+        cache.close_f->apply(cache.d_bin, cache.d_tmp, cache.stream);
+        cache.open_f->apply(cache.d_tmp, cache.d_bin, cache.stream);
+
+        cv::Mat binary;
+        cache.d_bin.download(binary, cache.stream);
+        cache.stream.waitForCompletion();
+        return binary;
+    }
+#endif
+
+    // ========= CPU fallback（保持你原来的逻辑不变）=========
     cv::Mat gray, binary;
 
-    // 转为灰度图
     cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
-
-    // 二值化
     cv::threshold(gray, binary, params_.binary_thresh, 255, cv::THRESH_BINARY);
 
-    // 可选：形态学操作去除噪点
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
     cv::morphologyEx(binary, binary, cv::MORPH_CLOSE, kernel);
     cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel);
@@ -293,71 +382,88 @@ bool SimpleLightDetector::isValidLight(const Light& light) const {
 }
 
 // 检测灯条颜色
-int SimpleLightDetector::detectColor(const Light& light, const cv::Mat& color_img) const {
+int SimpleLightDetector::detectColor(const Light& light, const cv::Mat& color_img) const
+{
     cv::Rect rect = light.boundingRect();
 
-    // 确保ROI在图像范围内
     rect.x = std::max(0, rect.x);
     rect.y = std::max(0, rect.y);
-    rect.width = std::min(rect.width, color_img.cols - rect.x);
+    rect.width  = std::min(rect.width,  color_img.cols - rect.x);
     rect.height = std::min(rect.height, color_img.rows - rect.y);
 
     if (rect.width <= 0 || rect.height <= 0) {
-        return -1; // ROI无效
+        return -1;
     }
 
-    // 采样检查轮廓内的像素颜色
-    cv::Mat roi = color_img(rect);
+#ifdef AUTO_AIM_FAST_USE_CUDA
+    // GPU 分支：等价实现（采样步长=2，点在旋转矩形内判断，累加 R/B）
+    if (g_cuda_frame.valid && !g_cuda_frame.d_bgr.empty() &&
+        g_cuda_frame.d_bgr.cols == color_img.cols && g_cuda_frame.d_bgr.rows == color_img.rows &&
+        cv::cuda::getCudaEnabledDeviceCount() > 0)
+    {
+        // 旋转矩形四点（绝对坐标）
+        std::vector<cv::Point2f> pts(4);
+        light.rect.points(pts.data());
 
-    // 修复：删除了错误的 std::vector<cv::Point> contour 初始化行
-    // std::vector<cv::Point> contour = std::vector<cv::Point>(light.rect.boundingRect());
+        Float2 fpts[4] = {
+          {pts[0].x, pts[0].y},
+          {pts[1].x, pts[1].y},
+          {pts[2].x, pts[2].y},
+          {pts[3].x, pts[3].y}
+        };
+
+        int red_sum=0, blue_sum=0, pixel_count=0;
+        const int sample_step = 2;
+
+        cudaStream_t s = cv::cuda::StreamAccessor::getStream(g_cuda_frame.stream);
+        bool ok = detect_color_cuda(
+            g_cuda_frame.d_bgr,
+            rect.x, rect.y, rect.width, rect.height,
+            fpts,
+            sample_step,
+            &red_sum, &blue_sum, &pixel_count,
+            s);
+
+        // 等待本次 light 的结果 ready（确保 host sum 可用）
+        g_cuda_frame.stream.waitForCompletion();
+
+        if (ok && pixel_count > 0) {
+            if (red_sum > blue_sum + params_.color_threshold) return 0;
+            if (blue_sum > red_sum + params_.color_threshold) return 1;
+            return -1;
+        }
+        // 否则 fallback 到 CPU（不影响稳定性）
+    }
+#endif
+
+    // ========= CPU fallback：你原来的逻辑完全保留 =========
+    cv::Mat roi = color_img(rect);
 
     int red_sum = 0, blue_sum = 0;
     int pixel_count = 0;
 
-    // 获取旋转矩形的四个顶点用于精确判断点是否在内部
     std::vector<cv::Point2f> rect_points(4);
     light.rect.points(rect_points.data());
-    // Convert Point2f to Point for pointPolygonTest
     std::vector<cv::Point> polygon_points(rect_points.begin(), rect_points.end());
 
-    // 在ROI内采样检查
     for (int i = 0; i < roi.rows; i += 2) {
         const cv::Vec3b* row = roi.ptr<cv::Vec3b>(i);
         for (int j = 0; j < roi.cols; j += 2) {
-            // 计算点在原图中的绝对坐标
             cv::Point abs_pt(j + rect.x, i + rect.y);
-
-            // 检查点是否在旋转矩形内 (更精确)
             double test_result = cv::pointPolygonTest(polygon_points, abs_pt, false);
-            if (test_result >= 0) { // 点在多边形内部或边上
-                red_sum += row[j][2];  // BGR格式，索引2是红色通道
-                blue_sum += row[j][0]; // 索引0是蓝色通道
-                pixel_count++;
-            }
-            // 原始近似方法（如果 pointPolygonTest 性能不好或有问题可考虑，但 boundingRect 太粗糙）
-            /*
-            else if (rect.contains(abs_pt)) { // rect 是 axis-aligned bounding box
-                red_sum += row[j][2];
+            if (test_result >= 0) {
+                red_sum  += row[j][2];
                 blue_sum += row[j][0];
                 pixel_count++;
             }
-            */
         }
     }
 
-    if (pixel_count == 0) {
-        return -1; // 没有采样到有效像素
-    }
+    if (pixel_count == 0) return -1;
 
-    // 判断颜色
-    if (red_sum > blue_sum + params_.color_threshold) {
-        return 0;  // 红色
-    } else if (blue_sum > red_sum + params_.color_threshold) {
-        return 1;  // 蓝色
-    } else {
-        return -1; // 不确定
-    }
+    if (red_sum > blue_sum + params_.color_threshold) return 0;
+    if (blue_sum > red_sum + params_.color_threshold) return 1;
+    return -1;
 }
 
 // 灯条配对

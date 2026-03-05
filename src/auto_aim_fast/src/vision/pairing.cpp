@@ -27,8 +27,16 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
   // 1) run legacy detector
   const auto pairs = detector_->detectDetailed(pre.bgr);
 
-  // 2) build debug images (复现优先：每次都产出最新 debug/binary)
-  {
+  // 2) build debug images (降频，避免每帧 clone/draw)
+{
+  // 最小改法：先写死每10帧生成一次
+  // 如果效果好，后面再把这个值做成参数传下来
+  static uint64_t debug_build_counter = 0;
+  constexpr uint64_t kDebugDecimation = 3;
+
+  debug_build_counter++;
+
+  if ((debug_build_counter % kDebugDecimation) == 0) {
     cv::Mat dbg = pre.bgr.clone();
     detector_->drawResults(dbg, true, true);
 
@@ -38,6 +46,7 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
     last_debug_bgr_ = dbg;
     last_binary_ = bin.clone();
   }
+}
 
   if (pairs.empty()) {
     return {};

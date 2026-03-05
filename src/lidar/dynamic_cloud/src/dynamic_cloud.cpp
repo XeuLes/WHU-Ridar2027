@@ -31,7 +31,7 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     // 对地图点云进行体素下采样
     pcl::VoxelGrid<pcl::PointXYZ> sor;
     sor.setInputCloud(temp_cloud);
-    sor.setLeafSize(0.1f, 0.1f, 0.1f);
+    sor.setLeafSize(0.2f, 0.2f, 0.2f);
     auto result = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
     sor.filter(*result);
     map_cloud = result;
@@ -223,12 +223,12 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
             continue; 
         }
         
-        // 己方死区过滤
-        float sum_xy = point.x + point.y;
-        float sub_yx = point.y - point.x;
-        if (sum_xy > 19.4 && sum_xy < 23.6 && sub_yx > -7.2 && sub_yx < -5.8) {
-            continue; 
-        }
+        // // 己方死区过滤
+        // float sum_xy = point.x + point.y;
+        // float sub_yx = point.y - point.x;
+        // if (sum_xy > 19.4 && sum_xy < 23.6 && sub_yx > -7.2 && sub_yx < -5.8) {
+        //     continue; 
+        // }
 
         filtered_cloud.push_back(point); 
     }

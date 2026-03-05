@@ -44,6 +44,7 @@ def generate_launch_description():
     # localization 在线初值所需配置
     camera_extrinsic_yaml = "/home/user/code/T-DT_Radar-main/config/out_matrix_gc.yaml"
     camera_to_lidar_yaml = os.path.join(localization_share_dir, 'config', 'camera_to_lidar.yaml')
+    manual_yaml = os.path.join(localization_share_dir, 'config', 'livox_rm_manual.yaml')
 
     # Livox驱动配置
     cur_config_path = os.path.join(livox_share_dir, 'config')
@@ -188,59 +189,64 @@ def generate_launch_description():
     # ComposableNode
     # -----------------------------
     def get_localization_node():
+        override_params = {
+            # 地图
+            'target_pcd_path': map_pcd_path,
+
+            # 初值模式
+            'initial_pose_mode': 'online',
+
+            # online 失败自动退回 offline
+            'fallback_to_offline_if_online_failed': True,
+
+            # offline 模式备用初值
+            'initial_x': 0.0,
+            'initial_y': 0.0,
+            'initial_z': 0.0,
+            'initial_roll': 0.0,
+            'initial_pitch': 0.0,
+            'initial_yaw': 0.0,
+
+            # online 模式两个 yaml
+            'camera_extrinsic_yaml': camera_extrinsic_yaml,
+            'camera_to_lidar_yaml': camera_to_lidar_yaml,
+
+            # GICP 总时间超时
+            'enable_gicp_total_timeout': True,
+            'gicp_total_timeout_sec': 5.0,
+            'fallback_to_initial_after_timeout': True,
+
+            # GICP 参数
+            'gicp_max_iterations': 100,
+            'gicp_transformation_epsilon': 1e-8,
+            'gicp_euclidean_fitness_epsilon': 1e-6,
+            'gicp_success_fitness_threshold': 0.3,
+
+            # 点云累积与滤波
+            'accumulate_time': 30,
+            'grid_size_degrees': 0.05,
+            'downsample_leaf_size': 0.2,
+
+            # ROI
+            'roi_min_x': 0.0,
+            'roi_max_x': 12.0,
+            'roi_min_y': -10.0,
+            'roi_max_y': 10.0,
+            'roi_max_z': 5.0,
+
+            # 异步TF/GICP频率
+            'tf_publish_rate_hz': 20.0,
+            'gicp_worker_rate_hz': 10.0,
+        }
+
         return ComposableNode(
             package='localization',
             plugin='tdt_radar::Localization',
             name='localization_node',
-            parameters=[{
-                # 地图
-                'target_pcd_path': map_pcd_path,
-
-                # 初值模式: offline / online / auto
-                'initial_pose_mode': 'online',
-
-                # online 失败是否自动退回 offline
-                'fallback_to_offline_if_online_failed': True,
-
-                # offline 模式备用参数
-                'initial_x': 0.0,
-                'initial_y': 0.0,
-                'initial_z': 0.0,
-                'initial_roll': 0.0,
-                'initial_pitch': 0.0,
-                'initial_yaw': 0.0,
-
-                # online 模式读取两个 yaml
-                'camera_extrinsic_yaml': camera_extrinsic_yaml,
-                'camera_to_lidar_yaml': camera_to_lidar_yaml,
-
-                # GICP 总时间超时
-                'enable_gicp_total_timeout': True,
-                'gicp_total_timeout_sec': 20.0,
-                'fallback_to_initial_after_timeout': True,
-
-                # GICP 参数
-                'gicp_max_iterations': 20,
-                'gicp_transformation_epsilon': 1e-8,
-                'gicp_euclidean_fitness_epsilon': 1e-6,
-                'gicp_success_fitness_threshold': 0.15,
-
-                # 点云累积与滤波
-                'accumulate_time': 40,
-                'grid_size_degrees': 0.05,
-                'downsample_leaf_size': 0.2,
-
-                # ROI
-                'roi_min_x': 0.0,
-                'roi_max_x': 12.0,
-                'roi_min_y': -10.0,
-                'roi_max_y': 10.0,
-                'roi_max_z': 5.0,
-
-                # 异步TF/GICP频率
-                'tf_publish_rate_hz': 20.0,
-                'gicp_worker_rate_hz': 0.1,
-            }],
+            parameters=[
+                manual_yaml,
+                override_params
+            ],
             extra_arguments=[
                 {'use_intra_process_comms': False}
             ]
@@ -369,9 +375,9 @@ def generate_launch_description():
         parameters=[
             {"input_topic": '/livox/lidar'},
             {"output_topic": '/livox/lidar_integrated'},
-            {"window_sec": 0.5},
+            {"window_sec": 0.2},
             {"use_header_stamp": True},
-            {"max_points": int(2000000)},
+            {"max_points": int(200000)},
         ],
     )
 
@@ -384,7 +390,7 @@ def generate_launch_description():
 
         # 普通节点
         get_hik_camera_node(),
-        # get_auto_aim_node(),
+        get_auto_aim_node(),
         get_gimbal_rough_node(),
         get_laser_aim_node(),
         get_gimbal_bridge_node(),

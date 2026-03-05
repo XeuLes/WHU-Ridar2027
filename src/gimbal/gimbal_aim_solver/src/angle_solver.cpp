@@ -36,7 +36,7 @@ TargetAngles AngleSolver::solve(const Eigen::Vector3d& p_gimbal) const
   }
 
   const double yaw_rad = std::atan2(-x, z);
-  const double pitch_rad = std::atan2(y, std::sqrt(x * x + z * z));
+  const double pitch_rad = -std::atan2(y, std::sqrt(x * x + z * z));
 
   double yaw_deg = yaw_rad * 180.0 / M_PI + yaw_offset_deg_;
   double pitch_deg = pitch_rad * 180.0 / M_PI + pitch_offset_deg_;

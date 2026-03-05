@@ -23,7 +23,7 @@ CloudIntegrator::CloudIntegrator(const rclcpp::NodeOptions& options)
   output_topic_ = this->declare_parameter<std::string>("output_topic", "/livox/lidar_integrated");
   window_sec_ = this->declare_parameter<double>("window_sec", 0.2);
   use_header_stamp_ = this->declare_parameter<bool>("use_header_stamp", true);
-  max_points_ = static_cast<size_t>(this->declare_parameter<int>("max_points", 2000000));
+  max_points_ = static_cast<size_t>(this->declare_parameter<int>("max_points", 200000));
 
   pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(output_topic_, qos_from_sensor_data_reliable());
   sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(

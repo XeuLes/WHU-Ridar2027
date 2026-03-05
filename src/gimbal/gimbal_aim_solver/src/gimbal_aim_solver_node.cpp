@@ -2,6 +2,7 @@
 
 #include <cmath>
 #include <vector>
+#include <std_msgs/msg/bool.hpp>
 
 namespace gimbal_aim_solver
 {
@@ -21,6 +22,9 @@ GimbalAimSolverNode::GimbalAimSolverNode(const rclcpp::NodeOptions& options)
 
   target_angles_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
     target_angles_topic_, 10);
+
+  gimbal_enable_pub_ = this->create_publisher<std_msgs::msg::Bool>(
+  "/gimbal/enable", 10);
 
   RCLCPP_INFO(this->get_logger(), "gimbal_aim_solver_node started.");
   RCLCPP_INFO(this->get_logger(), "uav_topic: %s", uav_topic_.c_str());
@@ -63,8 +67,8 @@ void GimbalAimSolverNode::declareAndLoadParameters()
 
   this->declare_parameter<double>("yaw_min_deg", -180.0);
   this->declare_parameter<double>("yaw_max_deg", 180.0);
-  this->declare_parameter<double>("pitch_min_deg", -45.0);
-  this->declare_parameter<double>("pitch_max_deg", 45.0);
+  this->declare_parameter<double>("pitch_min_deg", -60.0);
+  this->declare_parameter<double>("pitch_max_deg", 60.0);
 
   uav_topic_ = this->get_parameter("uav_topic").as_string();
   gimbal_angles_topic_ = this->get_parameter("gimbal_angles_topic").as_string();
@@ -188,6 +192,10 @@ void GimbalAimSolverNode::publishTargetAngles(double yaw_deg, double pitch_deg) 
   msg.data[0] = yaw_deg;
   msg.data[1] = pitch_deg;
   target_angles_pub_->publish(msg);
+
+  std_msgs::msg::Bool enable_msg;
+  enable_msg.data = true;
+  gimbal_enable_pub_->publish(enable_msg);
 }
 
 void GimbalAimSolverNode::gimbalAnglesCallback(

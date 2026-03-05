@@ -18,7 +18,42 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 
-find_package(OpenCV REQUIRED)
+# =========================================================
+# OpenCV / CUDA selection
+# Prefer user-installed CUDA-enabled OpenCV if available.
+# This lets you use plain `colcon build` without extra cmake args.
+# =========================================================
+option(AUTO_AIM_FAST_USE_CUDA "Enable OpenCV CUDA preprocess" ON)
+
+if(NOT DEFINED OpenCV_DIR)
+  set(OpenCV_DIR "$ENV{HOME}/opencv_cuda_install/lib/cmake/opencv4" CACHE PATH "OpenCV config path")
+endif()
+
+message(STATUS "AUTO_AIM_FAST_USE_CUDA = ${AUTO_AIM_FAST_USE_CUDA}")
+message(STATUS "OpenCV_DIR = ${OpenCV_DIR}")
+
+if(AUTO_AIM_FAST_USE_CUDA)
+  find_package(OpenCV QUIET COMPONENTS core imgproc cudaimgproc cudaarithm cudafilters highgui calib3d)
+
+  if(OpenCV_FOUND)
+    message(STATUS "OpenCV CUDA modules found, enabling GPU preprocess")
+    add_compile_definitions(AUTO_AIM_FAST_USE_CUDA)
+    enable_language(CUDA)
+    find_package(CUDAToolkit REQUIRED)
+  else()
+    message(WARNING "OpenCV CUDA modules not found, fallback to CPU OpenCV")
+    set(AUTO_AIM_FAST_USE_CUDA OFF)
+    unset(OpenCV_FOUND)
+    find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui calib3d)
+  endif()
+else()
+  find_package(OpenCV REQUIRED COMPONENTS core imgproc highgui calib3d)
+endif()
+
+message(STATUS "OpenCV version: ${OpenCV_VERSION}")
+message(STATUS "OpenCV libraries: ${OpenCV_LIBS}")
+message(STATUS "OpenCV include dirs: ${OpenCV_INCLUDE_DIRS}")
+
 find_package(cv_bridge REQUIRED)
 
 find_package(rosidl_default_generators REQUIRED)
@@ -57,6 +92,7 @@ add_library(auto_aim_fast_core
 
   src/legacy/detector.cpp
   src/legacy/solve_pnp.cpp
+  src/legacy/detect_color_cuda.cu
 )
 
 target_include_directories(auto_aim_fast_core PUBLIC
@@ -67,6 +103,13 @@ target_include_directories(auto_aim_fast_core PUBLIC
 
 target_link_libraries(auto_aim_fast_core
   ${OpenCV_LIBS}
+  CUDA::cudart
+)
+
+set_target_properties(auto_aim_fast_core PROPERTIES
+  CUDA_STANDARD 17
+  CUDA_STANDARD_REQUIRED ON
+  CUDA_ARCHITECTURES 89
 )
 
 ament_target_dependencies(auto_aim_fast_core

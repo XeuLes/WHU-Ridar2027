@@ -4,6 +4,7 @@
 #include <string>
 
 #include <Eigen/Core>
+#include <std_msgs/msg/bool.hpp>
 
 #include <geometry_msgs/msg/pose_array.hpp>
 #include <rclcpp/rclcpp.hpp>
@@ -42,6 +43,7 @@ private:
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr uav_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr gimbal_angles_sub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr target_angles_pub_;
+  rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr gimbal_enable_pub_;
 
   ExtrinsicTransformer extrinsic_transformer_;
   GimbalGeometry gimbal_geometry_;

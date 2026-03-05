@@ -44,10 +44,10 @@ include_directories(
 find_package(ament_cmake_auto REQUIRED)
 ament_auto_find_build_dependencies()
 
-find_package(OpenCV 4.5 REQUIRED)
-if(NOT OpenCV_VERSION MATCHES "4.5.*")
-  message(FATAL_ERROR "需要 OpenCV 4.5.x！当前版本: ${OpenCV_VERSION}")
-endif()
+find_package(OpenCV REQUIRED)
+# if(NOT OpenCV_VERSION MATCHES "4.5.*")
+#   message(FATAL_ERROR "需要 OpenCV 4.5.x！当前版本: ${OpenCV_VERSION}")
+# endif()
 
 # CUDA头文件和库（改为CUDA 13.0路径，删除11.8硬编码）
 include_directories(/usr/local/cuda/include)

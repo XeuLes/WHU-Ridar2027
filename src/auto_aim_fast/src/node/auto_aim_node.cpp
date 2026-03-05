@@ -82,6 +82,7 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   // debug image publish
   this->declare_parameter<bool>("debug.publish_debug_image", false);
   this->declare_parameter<bool>("debug.publish_binary_image", false);
+  this->declare_parameter<int>("debug.decimation", 3);   // 每3帧生成/发布1次
   this->declare_parameter<std::string>("debug.debug_topic", "/auto_aim/debug_image");
   this->declare_parameter<std::string>("debug.binary_topic", "/auto_aim/binary_image");
 
@@ -427,21 +428,34 @@ void AutoAimNode::onPublish()
   // ---- debug image publish (复现优先) ----
   const bool pub_dbg = this->get_parameter("debug.publish_debug_image").as_bool();
   const bool pub_bin = this->get_parameter("debug.publish_binary_image").as_bool();
+  const int64_t debug_decimation_raw = this->get_parameter("debug.decimation").as_int();
+  const int debug_decimation = static_cast<int>(std::max<int64_t>(1, debug_decimation_raw));
 
-  if (pub_dbg || pub_bin) {
+  static uint64_t debug_frame_counter = 0;
+  debug_frame_counter++;
+
+  const bool debug_this_frame = ((debug_frame_counter % static_cast<uint64_t>(debug_decimation)) == 0);
+
+  if ((pub_dbg || pub_bin) && debug_this_frame) {
     cv::Mat dbg_bgr, bin;
     if (pipeline_.getLastDebugImages(dbg_bgr, bin)) {
       if (pub_dbg && !dbg_bgr.empty()) {
-        auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::BGR8, dbg_bgr).toImageMsg();
+        auto msg = cv_bridge::CvImage(
+          std_msgs::msg::Header(),
+          sensor_msgs::image_encodings::BGR8,
+          dbg_bgr).toImageMsg();
         pub_debug_image_->publish(*msg);
       }
+
       if (pub_bin && !bin.empty()) {
-        // ensure mono8
         cv::Mat mono = bin;
         if (bin.channels() != 1) {
           cv::cvtColor(bin, mono, cv::COLOR_BGR2GRAY);
         }
-        auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), sensor_msgs::image_encodings::MONO8, mono).toImageMsg();
+        auto msg = cv_bridge::CvImage(
+          std_msgs::msg::Header(),
+          sensor_msgs::image_encodings::MONO8,
+          mono).toImageMsg();
         pub_binary_image_->publish(*msg);
       }
     }
