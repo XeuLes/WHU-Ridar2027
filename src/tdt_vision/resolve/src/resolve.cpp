@@ -25,6 +25,10 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
 
     this->declare_parameter<bool>("is_test", false);
 
+    this->declare_parameter<double>("uav_default_out_x", 26.37);
+    this->declare_parameter<double>("uav_default_out_y", 5.0);
+    this->declare_parameter<double>("uav_default_out_z", 1.2);
+
     // minimap path (optional)
     this->declare_parameter<std::string>("minimap_path", "config/RM2025.png");
 
@@ -108,6 +112,7 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<double>("uav_r_meas_xy", 0.25);
     this->declare_parameter<double>("uav_r_meas_z", 0.16);
     this->declare_parameter<double>("uav_gate_maha", 500);
+    
 
     uav_other_timeout_ms_ =
         this->get_parameter("uav_other_timeout_ms").as_int();
@@ -135,6 +140,11 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     uav_r_meas_xy_ = this->get_parameter("uav_r_meas_xy").as_double();
     uav_r_meas_z_ = this->get_parameter("uav_r_meas_z").as_double();
     uav_gate_maha_ = this->get_parameter("uav_gate_maha").as_double();
+
+
+    uav_default_out_x_ = this->get_parameter("uav_default_out_x").as_double();
+    uav_default_out_y_ = this->get_parameter("uav_default_out_y").as_double();
+    uav_default_out_z_ = this->get_parameter("uav_default_out_z").as_double();
 }
 Resolve::~Resolve()
 {
@@ -414,8 +424,18 @@ void Resolve::DetectCallback(
         p.orientation.z = nan;
         p.orientation.w = nan;
     };
-    set_nan_pose(uav_out.poses[0]);
-    set_nan_pose(uav_out.poses[1]);
+    auto set_default_pose = [&](geometry_msgs::msg::Pose& p) {
+    p.position.x = uav_default_out_x_;
+    p.position.y = uav_default_out_y_;
+    p.position.z = uav_default_out_z_;
+    p.orientation.x = 0.0;
+    p.orientation.y = 0.0;
+    p.orientation.z = 0.0;
+    p.orientation.w = 1.0;
+    };
+    
+    set_default_pose(uav_out.poses[0]);
+    set_default_pose(uav_out.poses[1]);
 
     // ========== 阶段一：接收检测消息 ==========
     const bool has_blue_uav = (msg->blue_x[6] != 0.0f && msg->blue_y[6] != 0.0f);
@@ -892,6 +912,8 @@ void Resolve::DetectCallback(
         uav_out.poses[1].position.x = static_cast<double>(x);
         uav_out.poses[1].position.y = static_cast<double>(y);
         uav_out.poses[1].position.z = 0.0;   // 或者给个固定值/地图高度
+        // uav_out.poses[1].position.x = 10.37;
+        // uav_out.poses[1].position.y = 3.88;
 
         // 如果你希望姿态保持 NaN，就别动 orientation；否则可以置单位四元数
         // uav_out.poses[1].orientation.w = 1.0;

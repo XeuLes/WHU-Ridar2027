@@ -411,15 +411,15 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 
 
     // ==================== DEBUG: print raw YOLO outputs ====================
-RCLCPP_INFO(this->get_logger(), "[CAR] raw result.size() = %zu", result.size());
+// RCLCPP_INFO(this->get_logger(), "[CAR] raw result.size() = %zu", result.size());
 
 for (int i = 0; i < (int)std::min<size_t>(result.size(), 20); ++i) {
     const auto& b = result[i];
-    RCLCPP_INFO(this->get_logger(),
-        "[CAR-RAW] i=%d cls=%d conf=%.4f box=[%.1f %.1f %.1f %.1f] wh=[%.1f %.1f]",
-        i, (int)b.class_label, (double)b.confidence,
-        (double)b.left, (double)b.top, (double)b.right, (double)b.bottom,
-        (double)(b.right - b.left), (double)(b.bottom - b.top));
+    // RCLCPP_INFO(this->get_logger(),
+    //     "[CAR-RAW] i=%d cls=%d conf=%.4f box=[%.1f %.1f %.1f %.1f] wh=[%.1f %.1f]",
+    //     i, (int)b.class_label, (double)b.confidence,
+    //     (double)b.left, (double)b.top, (double)b.right, (double)b.bottom,
+    //     (double)(b.right - b.left), (double)(b.bottom - b.top));
 }
 
 // 统计分布：NaN/Inf、负宽高、低置信度
@@ -438,9 +438,9 @@ for (const auto& b : result) {
     max_conf = std::max(max_conf, b.confidence);
     if (b.confidence < 0.01f) low_cnt++;
 }
-RCLCPP_INFO(this->get_logger(),
-    "[CAR-STATS] nan=%d bad_wh=%d low_conf(<0.01)=%d conf_range=[%.4f, %.4f]",
-    nan_cnt, badwh_cnt, low_cnt, (double)min_conf, (double)max_conf);
+// RCLCPP_INFO(this->get_logger(),
+//     "[CAR-STATS] nan=%d bad_wh=%d low_conf(<0.01)=%d conf_range=[%.4f, %.4f]",
+//     nan_cnt, badwh_cnt, low_cnt, (double)min_conf, (double)max_conf);
 
 
     // ==================== 阶段2: 初始化检测结果消息 ====================
@@ -509,9 +509,9 @@ RCLCPP_INFO(this->get_logger(),
 
     for (const auto& box : car_filtered) {
 
-        RCLCPP_INFO(this->get_logger(),
-            "Detected CAR: ID=%d, Conf=%.3f, Rect=[%.1f,%.1f,%.1f,%.1f]",
-            box.class_label, box.confidence, box.left, box.top, box.right, box.bottom);
+        // RCLCPP_INFO(this->get_logger(),
+        //     "Detected CAR: ID=%d, Conf=%.3f, Rect=[%.1f,%.1f,%.1f,%.1f]",
+        //     box.class_label, box.confidence, box.left, box.top, box.right, box.bottom);
 
         int l = (int)std::round(box.left);
         int t = (int)std::round(box.top);
@@ -717,8 +717,8 @@ RCLCPP_INFO(this->get_logger(),
 
 
     // 4.1 UAV检测结果预处理（按置信度排序，只保留top 2）
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                        "[UAV] Raw detections: %zu", uav_raw_result.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //                     "[UAV] Raw detections: %zu", uav_raw_result.size());
     
     std::sort(uav_raw_result.begin(), uav_raw_result.end(), 
               [](const yolo::Box& a, const yolo::Box& b) { return a.confidence > b.confidence; });
@@ -726,11 +726,11 @@ RCLCPP_INFO(this->get_logger(),
     std::vector<yolo::Box> uav_filtered;
     for (size_t i = 0; i < uav_raw_result.size() && i < 2; i++) {
         uav_filtered.push_back(uav_raw_result[i]);
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                            "[UAV] Filtered #%zu: conf=%.3f, box=[%.1f,%.1f,%.1f,%.1f]",
-                            i, uav_raw_result[i].confidence,
-                            uav_raw_result[i].left, uav_raw_result[i].top,
-                            uav_raw_result[i].right, uav_raw_result[i].bottom);
+        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        //                     "[UAV] Filtered #%zu: conf=%.3f, box=[%.1f,%.1f,%.1f,%.1f]",
+        //                     i, uav_raw_result[i].confidence,
+        //                     uav_raw_result[i].left, uav_raw_result[i].top,
+        //                     uav_raw_result[i].right, uav_raw_result[i].bottom);
     }
     
     // 4.2 准备DeepSORT跟踪器输入数据
@@ -779,9 +779,9 @@ RCLCPP_INFO(this->get_logger(),
     std::vector<std::shared_ptr<UAVTrack>> confirmed_tracks;
     if (uav_tracker_ != nullptr) {
         confirmed_tracks = uav_tracker_->update(uav_bboxes, uav_confidences, uav_features);
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                            "[UAV-Track] Detections: %zu, Confirmed tracks: %zu",
-                            uav_bboxes.size(), confirmed_tracks.size());
+        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        //                     "[UAV-Track] Detections: %zu, Confirmed tracks: %zu",
+        //                     uav_bboxes.size(), confirmed_tracks.size());
     } else {
         RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
                              "[UAV-Track] Tracker not initialized!");
@@ -805,10 +805,10 @@ RCLCPP_INFO(this->get_logger(),
         //      time_since_update>0: 仅卡尔曼预测
         bool has_detection = (track->getTimeSinceUpdate() == 0);
 
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                            "[UAV] Track ID=%d, has_detection=%s, time_since_update=%d",
-                            track->getID(), has_detection ? "YES" : "NO", 
-                            track->getTimeSinceUpdate());
+        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        //                     "[UAV] Track ID=%d, has_detection=%s, time_since_update=%d",
+        //                     track->getID(), has_detection ? "YES" : "NO", 
+        //                     track->getTimeSinceUpdate());
 
         // 4.4.2 根据检测状态选择边界框
         auto area_ratio_ok = [&](const cv::Rect& r) -> bool {
@@ -869,11 +869,11 @@ RCLCPP_INFO(this->get_logger(),
                 detected_lights, detected_uav_targets
             );
             
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "[UAV-Fine] %s: Detected %zu lights, %zu targets, center=(%.1f,%.1f)",
-                                has_detection ? "YOLO" : "KALMAN",
-                                detected_lights.size(), detected_uav_targets.size(),
-                                refined_center.x, refined_center.y);
+            // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            //                     "[UAV-Fine] %s: Detected %zu lights, %zu targets, center=(%.1f,%.1f)",
+            //                     has_detection ? "YOLO" : "KALMAN",
+            //                     detected_lights.size(), detected_uav_targets.size(),
+            //                     refined_center.x, refined_center.y);
         } else {
             // 无检测时直接使用预测框中心
             refined_center = cv::Point2f(
@@ -881,10 +881,10 @@ RCLCPP_INFO(this->get_logger(),
                 uav_rect.y + uav_rect.height / 2.0f
             );
             
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "[UAV-Fine] No fine detection, using %s center=(%.1f,%.1f)",
-                                has_detection ? "YOLO" : "predicted",
-                                refined_center.x, refined_center.y);
+            // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            //                     "[UAV-Fine] No fine detection, using %s center=(%.1f,%.1f)",
+            //                     has_detection ? "YOLO" : "predicted",
+            //                     refined_center.x, refined_center.y);
         }
 
         // 4.4.5 填充检测结果
@@ -899,11 +899,11 @@ RCLCPP_INFO(this->get_logger(),
             uav_rect.y + uav_rect.height *0.60f
         );
         
-        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                            "[UAV-Box] uav_rect=[%d,%d,%d,%d], center=(%.1f,%.1f), refined_center=(%.1f,%.1f)",
-                            uav_rect.x, uav_rect.y, uav_rect.width, uav_rect.height,
-                            uav_box_center.x, uav_box_center.y,
-                            refined_center.x, refined_center.y);
+        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+        //                     "[UAV-Box] uav_rect=[%d,%d,%d,%d], center=(%.1f,%.1f), refined_center=(%.1f,%.1f)",
+        //                     uav_rect.x, uav_rect.y, uav_rect.width, uav_rect.height,
+        //                     uav_box_center.x, uav_box_center.y,
+        //                     refined_center.x, refined_center.y);
 
         if (uav_color == 0) { // Blue
             color_bgr = cv::Scalar(255, 0, 0);
@@ -911,9 +911,9 @@ RCLCPP_INFO(this->get_logger(),
                 if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
                     detect_result.blue_x[idx] = uav_box_center.x;
                     detect_result.blue_y[idx] = uav_box_center.y;
-                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                        "[UAV] Blue team sent: refined_center=(%.1f, %.1f)", 
-                                        refined_center.x, refined_center.y);
+                    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    //                     "[UAV] Blue team sent: refined_center=(%.1f, %.1f)", 
+                    //                     refined_center.x, refined_center.y);
                 } else {
                     detect_result.blue_x[idx] = 0.0f;
                     detect_result.blue_y[idx] = 0.0f;
@@ -926,18 +926,18 @@ RCLCPP_INFO(this->get_logger(),
                 detect_result.blue_uav_light_x[i] = uav_rect.x + fine_roi_local.x + detected_uav_targets[i].center.x;
                 detect_result.blue_uav_light_y[i] = uav_rect.y + fine_roi_local.y + detected_uav_targets[i].center.y;
             }
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "[UAV-Light] Blue team: %u light pairs sent", 
-                                detect_result.blue_uav_light_count);
+            // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            //                     "[UAV-Light] Blue team: %u light pairs sent", 
+            //                     detect_result.blue_uav_light_count);
         } else if (uav_color == 2) { // Red
             color_bgr = cv::Scalar(0, 0, 255);
             if (can_send) {
                 if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
                     detect_result.red_x[idx] = uav_box_center.x;
                     detect_result.red_y[idx] = uav_box_center.y;
-                    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                        "[UAV] Red team sent: refined_center=(%.1f, %.1f)", 
-                                        refined_center.x, refined_center.y);
+                    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                    //                     "[UAV] Red team sent: refined_center=(%.1f, %.1f)", 
+                    //                     refined_center.x, refined_center.y);
                 } else {
                     detect_result.red_x[idx] = 0.0f;
                     detect_result.red_y[idx] = 0.0f;
@@ -950,9 +950,9 @@ RCLCPP_INFO(this->get_logger(),
                 detect_result.red_uav_light_x[i] = uav_rect.x + fine_roi_local.x + detected_uav_targets[i].center.x;
                 detect_result.red_uav_light_y[i] = uav_rect.y + fine_roi_local.y + detected_uav_targets[i].center.y;
             }
-            RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                                "[UAV-Light] Red team: %u light pairs sent", 
-                                detect_result.red_uav_light_count);
+            // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+            //                     "[UAV-Light] Red team: %u light pairs sent", 
+            //                     detect_result.red_uav_light_count);
         } else {
             color_bgr = cv::Scalar(255, 0, 255); 
         }
@@ -1022,12 +1022,12 @@ RCLCPP_INFO(this->get_logger(),
 
     // ==================== 阶段5: 发布结果与性能统计 ====================
 
-    RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] header.stamp: sec=%u, nsec=%u", detect_result.header.stamp.sec, detect_result.header.stamp.nanosec);
+    // RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] header.stamp: sec=%u, nsec=%u", detect_result.header.stamp.sec, detect_result.header.stamp.nanosec);
     // 输出UAV相关坐标日志，便于调试
     int uav_id = UAV_ID; // 7
     int idx = uav_id - 1; // 6
-    RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] blue_x[%d]=%.2f, blue_y[%d]=%.2f, red_x[%d]=%.2f, red_y[%d]=%.2f", 
-        idx, detect_result.blue_x[idx], idx, detect_result.blue_y[idx], idx, detect_result.red_x[idx], idx, detect_result.red_y[idx]);
+    // RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] blue_x[%d]=%.2f, blue_y[%d]=%.2f, red_x[%d]=%.2f, red_y[%d]=%.2f", 
+    //     idx, detect_result.blue_x[idx], idx, detect_result.blue_y[idx], idx, detect_result.red_x[idx], idx, detect_result.red_y[idx]);
 
     // 5.1 设置header.stamp为当前时间并发布检测结果到话题
     //detect_result.header.stamp = this->now();

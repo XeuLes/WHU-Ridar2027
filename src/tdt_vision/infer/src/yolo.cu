@@ -238,9 +238,10 @@ static __global__ void decode_kernel_v26_fp16_nxc(
 ){
     // 只打印一次
     if (blockIdx.x == 0 && threadIdx.x == 0) {
-        printf("\n=== [DEBUG V26 FP16 NXC] ===\n");
-        printf("half[0]=%f half[4]=%f\n", __half2float(predict[0]), __half2float(predict[4]));
-        printf("===========================\n");
+        // printf("\n=== [DEBUG V26 FP16 NXC] ===\n");
+        // printf("half[0]=%f half[4]=%f\n", __half2float(predict[0]), __half2float(predict[4]));
+        // printf("===========================\n");
+        
     }
 
     int position = blockDim.x * blockIdx.x + threadIdx.x;

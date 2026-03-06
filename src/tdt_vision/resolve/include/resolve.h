@@ -72,6 +72,10 @@ private:
     // parameters
     bool is_test_{false};
 
+    double uav_default_out_x_{0.0};
+    double uav_default_out_y_{0.0};
+    double uav_default_out_z_{0.0};
+
     int    uav_other_timeout_ms_{500};
     double uav_default_z_{1.95};
     double uav_huber_delta_xy_{0.8};
