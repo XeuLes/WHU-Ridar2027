@@ -11,27 +11,37 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 
-
 add_executable(gimbal_serial_bridge_node
   src/gimbal_serial_bridge_node.cpp
 )
 ament_target_dependencies(gimbal_serial_bridge_node
   rclcpp
   std_msgs
+  sensor_msgs
   geometry_msgs
+)
+
+add_executable(manual_angle_cmd_node
+  src/manual_angle_cmd_node.cpp
+)
+ament_target_dependencies(manual_angle_cmd_node
+  rclcpp
+  std_msgs
 )
 
 add_executable(xxx_test_node
   src/XXX_test_node.cpp
 )
-ament_target_dependencies(xxx_test_node 
-rclcpp 
-std_msgs 
-sensor_msgs
-geometry_msgs)
+ament_target_dependencies(xxx_test_node
+  rclcpp
+  std_msgs
+  sensor_msgs
+  geometry_msgs
+)
 
 install(TARGETS
   gimbal_serial_bridge_node
+  manual_angle_cmd_node
   xxx_test_node
   DESTINATION lib/${PROJECT_NAME}
 )

@@ -24,7 +24,7 @@ GimbalAimSolverNode::GimbalAimSolverNode(const rclcpp::NodeOptions& options)
     target_angles_topic_, 10);
 
   gimbal_enable_pub_ = this->create_publisher<std_msgs::msg::Bool>(
-  "/gimbal/enable", 10);
+    "/gimbal/enable", 10);
 
   RCLCPP_INFO(this->get_logger(), "gimbal_aim_solver_node started.");
   RCLCPP_INFO(this->get_logger(), "uav_topic: %s", uav_topic_.c_str());
@@ -61,6 +61,10 @@ void GimbalAimSolverNode::declareAndLoadParameters()
 
   this->declare_parameter<std::vector<double>>(
     "camera_to_gimbal_xyz", std::vector<double>{-0.05, -0.20, 0.0});
+
+  // 新增：激光发射点相对于云台解算原点，在“云台本体系”下的安装偏置
+  this->declare_parameter<std::vector<double>>(
+    "laser_offset_xyz", std::vector<double>{0.0, 0.0, 0.0});
 
   this->declare_parameter<double>("yaw_offset_deg", 0.0);
   this->declare_parameter<double>("pitch_offset_deg", 0.0);
@@ -107,6 +111,17 @@ void GimbalAimSolverNode::declareAndLoadParameters()
   gimbal_geometry_.setCameraToGimbalTranslation(
     Eigen::Vector3d(camera_to_gimbal_xyz[0], camera_to_gimbal_xyz[1], camera_to_gimbal_xyz[2]));
 
+  const auto laser_offset_xyz = this->get_parameter("laser_offset_xyz").as_double_array();
+  if (laser_offset_xyz.size() != 3) {
+    RCLCPP_FATAL(this->get_logger(), "laser_offset_xyz must have size 3.");
+    throw std::runtime_error("laser_offset_xyz size error");
+  }
+
+  laser_offset_xyz_ = Eigen::Vector3d(
+    laser_offset_xyz[0],
+    laser_offset_xyz[1],
+    laser_offset_xyz[2]);
+
   const double yaw_offset_deg = this->get_parameter("yaw_offset_deg").as_double();
   const double pitch_offset_deg = this->get_parameter("pitch_offset_deg").as_double();
   angle_solver_.setOffsets(yaw_offset_deg, pitch_offset_deg);
@@ -122,6 +137,26 @@ void GimbalAimSolverNode::declareAndLoadParameters()
 bool GimbalAimSolverNode::isFinitePoint(const Eigen::Vector3d& p) const
 {
   return std::isfinite(p.x()) && std::isfinite(p.y()) && std::isfinite(p.z());
+}
+
+Eigen::Matrix3d GimbalAimSolverNode::rotationFromSolvedYawPitchDeg(
+  double yaw_deg, double pitch_deg) const
+{
+  // 与 AngleSolver::solve() 保持一致的坐标约定：
+  // x = right, y = down, z = forward
+  // yaw = atan2(-x, z)     => 正yaw朝左
+  // pitch = -atan2(y, ...) => 正pitch朝上
+  //
+  // 因此从“云台本体系”旋到“静止初始云台系”的旋转可写为：
+  // R = Ry(-yaw) * Rx(pitch)
+
+  const double yaw_rad = yaw_deg * M_PI / 180.0;
+  const double pitch_rad = pitch_deg * M_PI / 180.0;
+
+  const Eigen::AngleAxisd yaw_rot(-yaw_rad, Eigen::Vector3d::UnitY());
+  const Eigen::AngleAxisd pitch_rot(pitch_rad, Eigen::Vector3d::UnitX());
+
+  return (yaw_rot * pitch_rot).toRotationMatrix();
 }
 
 bool GimbalAimSolverNode::selectTargetWorldPoint(
@@ -260,12 +295,34 @@ void GimbalAimSolverNode::uavCallback(
     return;
   }
 
-  TargetAngles target = angle_solver_.solve(p_gimbal);
+  // 第一次粗解：原始“前向轴对准目标”
+  TargetAngles raw_target = angle_solver_.solve(p_gimbal);
+  if (!raw_target.valid) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "raw target invalid, likely behind camera/gimbal. p_gimbal=(%.3f, %.3f, %.3f)",
+      p_gimbal.x(), p_gimbal.y(), p_gimbal.z());
+    return;
+  }
+
+  // 把激光安装偏置从“云台本体系”旋到“静止初始云台系”
+  const Eigen::Matrix3d R_gimbal = rotationFromSolvedYawPitchDeg(
+    raw_target.yaw_deg, raw_target.pitch_deg);
+  const Eigen::Vector3d laser_offset_in_static_gimbal = R_gimbal * laser_offset_xyz_;
+
+  // 关键补偿：让“激光发射点 -> 目标”的向量进入解算
+  const Eigen::Vector3d p_from_laser = p_gimbal - laser_offset_in_static_gimbal;
+  if (!isFinitePoint(p_from_laser)) {
+    RCLCPP_WARN(this->get_logger(), "laser-relative point has NaN/Inf");
+    return;
+  }
+
+  TargetAngles target = angle_solver_.solve(p_from_laser);
   if (!target.valid) {
     RCLCPP_WARN_THROTTLE(
       this->get_logger(), *this->get_clock(), 1000,
-      "target invalid, likely behind camera/gimbal. p_gimbal=(%.3f, %.3f, %.3f)",
-      p_gimbal.x(), p_gimbal.y(), p_gimbal.z());
+      "laser-corrected target invalid. p_from_laser=(%.3f, %.3f, %.3f)",
+      p_from_laser.x(), p_from_laser.y(), p_from_laser.z());
     return;
   }
 
@@ -313,11 +370,14 @@ void GimbalAimSolverNode::uavCallback(
       RCLCPP_INFO_THROTTLE(
         this->get_logger(), *this->get_clock(), 200,
         "[%s] world=(%.3f, %.3f, %.3f), camera=(%.3f, %.3f, %.3f), gimbal=(%.3f, %.3f, %.3f), "
+        "laser_rel=(%.3f, %.3f, %.3f), raw_abs=(yaw=%.2f, pitch=%.2f), "
         "target_abs=(yaw=%.2f, pitch=%.2f), current=(yaw=%.2f, pitch=%.2f), out_inc=(yaw=%.2f, pitch=%.2f)",
         target_side_.c_str(),
         p_world.x(), p_world.y(), p_world.z(),
         p_camera.x(), p_camera.y(), p_camera.z(),
         p_gimbal.x(), p_gimbal.y(), p_gimbal.z(),
+        p_from_laser.x(), p_from_laser.y(), p_from_laser.z(),
+        raw_target.yaw_deg, raw_target.pitch_deg,
         target.yaw_deg, target.pitch_deg,
         current_gimbal_state_.yaw_deg, current_gimbal_state_.pitch_deg,
         out_yaw_deg, out_pitch_deg);
@@ -325,11 +385,13 @@ void GimbalAimSolverNode::uavCallback(
       RCLCPP_INFO_THROTTLE(
         this->get_logger(), *this->get_clock(), 200,
         "[%s] world=(%.3f, %.3f, %.3f), camera=(%.3f, %.3f, %.3f), gimbal=(%.3f, %.3f, %.3f), "
-        "out_abs=(yaw=%.2f, pitch=%.2f)",
+        "laser_rel=(%.3f, %.3f, %.3f), raw_abs=(yaw=%.2f, pitch=%.2f), out_abs=(yaw=%.2f, pitch=%.2f)",
         target_side_.c_str(),
         p_world.x(), p_world.y(), p_world.z(),
         p_camera.x(), p_camera.y(), p_camera.z(),
         p_gimbal.x(), p_gimbal.y(), p_gimbal.z(),
+        p_from_laser.x(), p_from_laser.y(), p_from_laser.z(),
+        raw_target.yaw_deg, raw_target.pitch_deg,
         out_yaw_deg, out_pitch_deg);
     }
   }

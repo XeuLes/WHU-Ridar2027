@@ -19,6 +19,8 @@
 
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>my_robot_driver</exec_depend>
+  <exec_depend>hik_camera_ros2_driver</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

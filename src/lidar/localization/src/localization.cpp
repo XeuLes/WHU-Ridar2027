@@ -25,6 +25,7 @@
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/u_int8.hpp>
 
 #include <opencv2/core.hpp>
 #include <opencv2/calib3d.hpp>
@@ -38,6 +39,12 @@ namespace tdt_radar {
 struct Grid {
     pcl::PointXYZ farthestPoint;
     double maxDistance = -1.0;
+};
+
+enum class LocalizationStatus : uint8_t {
+    LOCALIZING   = 0,
+    PRIOR_SUCCESS = 1,
+    INIT_ONLY    = 2
 };
 
 class Localization : public rclcpp::Node {
@@ -177,6 +184,9 @@ public:
         filter_rm_publisher_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/filter_map_rm", rclcpp::SensorDataQoS());
 
+        status_publisher_ = this->create_publisher<std_msgs::msg::UInt8>(
+            "/localization/status", 10);
+
         subscription_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "/livox/lidar", rclcpp::SensorDataQoS().keep_last(1),
             std::bind(&Localization::callback, this, std::placeholders::_1));
@@ -208,6 +218,8 @@ public:
         // 启动后立刻发一帧地图
         publishMapOnce();
 
+        publishLocalizationStatus(LocalizationStatus::LOCALIZING);
+
         // 注意：这里不要主动 publishCurrentTF()
         // 必须等收到第一帧有效 lidar 时间戳后再发 TF
     }
@@ -220,6 +232,32 @@ private:
         voxelgrid.setLeafSize(leaf_size, leaf_size, leaf_size);
         voxelgrid.setInputCloud(input);
         voxelgrid.filter(*output);
+    }
+
+    void publishLocalizationStatus(LocalizationStatus status)
+    {
+        current_status_ = status;
+
+        std_msgs::msg::UInt8 msg;
+        msg.data = static_cast<uint8_t>(status);
+        status_publisher_->publish(msg);
+
+        const char* status_str = "UNKNOWN";
+        switch (status) {
+            case LocalizationStatus::LOCALIZING:
+                status_str = "LOCALIZING";
+                break;
+            case LocalizationStatus::PRIOR_SUCCESS:
+                status_str = "PRIOR_SUCCESS";
+                break;
+            case LocalizationStatus::INIT_ONLY:
+                status_str = "INIT_ONLY";
+                break;
+            default:
+                break;
+        }
+
+        RCLCPP_INFO(this->get_logger(), "Localization status -> %s", status_str);
     }
 
     void publishMapOnce()
@@ -515,10 +553,13 @@ private:
         if (enable_gicp_total_timeout_) {
             const double elapsed = (this->now() - gicp_start_time_).seconds();
             if (elapsed > gicp_total_timeout_sec_) {
-                gicp_timeout_reached_ = true;
-                RCLCPP_WARN(this->get_logger(),
-                            "GICP 总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，继续使用初值",
-                            elapsed, gicp_total_timeout_sec_);
+                if (!gicp_timeout_reached_) {
+                    gicp_timeout_reached_ = true;
+                    publishLocalizationStatus(LocalizationStatus::INIT_ONLY);
+                    RCLCPP_WARN(this->get_logger(),
+                                "GICP 总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，继续使用初值",
+                                elapsed, gicp_total_timeout_sec_);
+                }
                 return;
             }
         }
@@ -622,10 +663,13 @@ private:
         if (enable_gicp_total_timeout_) {
             const double elapsed = (this->now() - gicp_start_time_).seconds();
             if (gicp_started_ && elapsed > gicp_total_timeout_sec_) {
-                gicp_timeout_reached_ = true;
-                RCLCPP_WARN(this->get_logger(),
-                            "GICP worker 检测到总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，继续使用初值",
-                            elapsed, gicp_total_timeout_sec_);
+                if (!gicp_timeout_reached_) {
+                    gicp_timeout_reached_ = true;
+                    publishLocalizationStatus(LocalizationStatus::INIT_ONLY);
+                    RCLCPP_WARN(this->get_logger(),
+                                "GICP worker 检测到总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，继续使用初值",
+                                elapsed, gicp_total_timeout_sec_);
+                }
                 gicp_running_ = false;
                 return;
             }
@@ -654,6 +698,8 @@ private:
                 final_transform_ = gicp->getFinalTransformation();
                 has_aligned_ = true;
             }
+
+            publishLocalizationStatus(LocalizationStatus::PRIOR_SUCCESS);
 
             RCLCPP_INFO(this->get_logger(), "✅ 配准成功! 位姿已锁定。");
             printTransformInfo("最终结合位姿 (Result):", final_transform_);
@@ -739,6 +785,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr filter_publisher_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr filter_rm_publisher_;
+    rclcpp::Publisher<std_msgs::msg::UInt8>::SharedPtr status_publisher_;
+    LocalizationStatus current_status_{LocalizationStatus::LOCALIZING};
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr subscription_;
     rclcpp::TimerBase::SharedPtr timer_;
     rclcpp::TimerBase::SharedPtr tf_timer_;

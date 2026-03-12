@@ -27,6 +27,10 @@ LaserAimControllerNode::LaserAimControllerNode(const rclcpp::NodeOptions& option
     rough_command_topic_, rclcpp::QoS(10),
     std::bind(&LaserAimControllerNode::roughCommandCallback, this, std::placeholders::_1));
 
+  manual_cmd_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
+    manual_command_topic_, rclcpp::QoS(10),
+    std::bind(&LaserAimControllerNode::manualCommandCallback, this, std::placeholders::_1));
+
   cmd_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(command_topic_, 10);
 
   RCLCPP_INFO(this->get_logger(), "laser_aim_controller_node started.");
@@ -34,6 +38,7 @@ LaserAimControllerNode::LaserAimControllerNode(const rclcpp::NodeOptions& option
   RCLCPP_INFO(this->get_logger(), "gimbal_angles_topic: %s", gimbal_angles_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "gimbal_quaternion_topic: %s", gimbal_quaternion_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "rough_command_topic: %s", rough_command_topic_.c_str());
+  RCLCPP_INFO(this->get_logger(), "manual_command_topic: %s", manual_command_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "command_topic: %s", command_topic_.c_str());
   RCLCPP_INFO(this->get_logger(), "output_mode: %s", output_mode_.c_str());
   RCLCPP_INFO(this->get_logger(), "fallback_to_rough_when_no_target: %s",
@@ -46,6 +51,7 @@ void LaserAimControllerNode::declareAndLoadParameters()
   this->declare_parameter<std::string>("gimbal_angles_topic", "/gimbal/angles");
   this->declare_parameter<std::string>("gimbal_quaternion_topic", "/gimbal/quaternion");
   this->declare_parameter<std::string>("rough_command_topic", "/gimbal/rough_command_angles");
+  this->declare_parameter<std::string>("manual_command_topic", "/gimbal/command_angle_manual");
   this->declare_parameter<std::string>("command_topic", "/gimbal/command_angles");
 
   this->declare_parameter<std::string>("gimbal_angle_order", "pitch_yaw");
@@ -72,6 +78,7 @@ void LaserAimControllerNode::declareAndLoadParameters()
   gimbal_angles_topic_ = this->get_parameter("gimbal_angles_topic").as_string();
   gimbal_quaternion_topic_ = this->get_parameter("gimbal_quaternion_topic").as_string();
   rough_command_topic_ = this->get_parameter("rough_command_topic").as_string();
+  manual_command_topic_ = this->get_parameter("manual_command_topic").as_string();
   command_topic_ = this->get_parameter("command_topic").as_string();
 
   gimbal_angle_order_ = this->get_parameter("gimbal_angle_order").as_string();
@@ -150,8 +157,37 @@ void LaserAimControllerNode::roughCommandCallback(
   has_rough_cmd_ = std::isfinite(rough_yaw_deg_) && std::isfinite(rough_pitch_deg_);
 }
 
+void LaserAimControllerNode::manualCommandCallback(
+  const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+{
+  if (msg->data.size() < 2) {
+    return;
+  }
+
+  manual_yaw_deg_ = msg->data[0];
+  manual_pitch_deg_ = msg->data[1];
+  has_manual_cmd_ = std::isfinite(manual_yaw_deg_) && std::isfinite(manual_pitch_deg_);
+
+  if (!has_manual_cmd_) {
+    manual_yaw_deg_ = 0.0;
+    manual_pitch_deg_ = 0.0;
+  }
+}
+
+void LaserAimControllerNode::applyManualOffset(double& yaw_deg, double& pitch_deg) const
+{
+  if (!has_manual_cmd_) {
+    return;
+  }
+
+  yaw_deg += manual_yaw_deg_;
+  pitch_deg += manual_pitch_deg_;
+}
+
 void LaserAimControllerNode::publishCommand(double yaw_deg, double pitch_deg)
 {
+  applyManualOffset(yaw_deg, pitch_deg);
+
   std_msgs::msg::Float64MultiArray msg;
   msg.data.resize(2);
   msg.data[0] = yaw_deg;
@@ -169,13 +205,20 @@ void LaserAimControllerNode::publishRoughIfAvailable()
     return;
   }
 
+  double out_yaw = rough_yaw_deg_;
+  double out_pitch = rough_pitch_deg_;
+  applyManualOffset(out_yaw, out_pitch);
   publishCommand(rough_yaw_deg_, rough_pitch_deg_);
 
   if (publish_debug_) {
     RCLCPP_INFO_THROTTLE(
       this->get_logger(), *this->get_clock(), 500,
-      "no valid fine target, fallback to rough command: yaw=%.2f pitch=%.2f",
-      rough_yaw_deg_, rough_pitch_deg_);
+      "no valid fine target, fallback to rough command: base=(yaw=%.2f pitch=%.2f), "
+      "manual=(yaw=%.2f pitch=%.2f), final=(yaw=%.2f pitch=%.2f)",
+      rough_yaw_deg_, rough_pitch_deg_,
+      has_manual_cmd_ ? manual_yaw_deg_ : 0.0,
+      has_manual_cmd_ ? manual_pitch_deg_ : 0.0,
+      out_yaw, out_pitch);
   }
 }
 
@@ -239,16 +282,24 @@ void LaserAimControllerNode::targetCallback(
     out_pitch = last_pitch_out_deg_;
   }
 
-  publishCommand(out_yaw, out_pitch);
+  const double base_yaw = out_yaw;
+  const double base_pitch = out_pitch;
+
+  applyManualOffset(out_yaw, out_pitch);
+  publishCommand(base_yaw, base_pitch);
 
   if (publish_debug_) {
     RCLCPP_INFO_THROTTLE(
       this->get_logger(), *this->get_clock(), 100,
       "fine target: target_cam=(%.3f, %.3f, %.3f), target_from_laser=(%.3f, %.3f, %.3f), "
-      "inc=(yaw=%.2f, pitch=%.2f), out=(yaw=%.2f, pitch=%.2f)",
+      "inc=(yaw=%.2f, pitch=%.2f), base=(yaw=%.2f, pitch=%.2f), "
+      "manual=(yaw=%.2f, pitch=%.2f), final=(yaw=%.2f, pitch=%.2f)",
       msg->tx, msg->ty, msg->tz,
       target_from_laser.x(), target_from_laser.y(), target_from_laser.z(),
       inc.yaw_deg, inc.pitch_deg,
+      base_yaw, base_pitch,
+      has_manual_cmd_ ? manual_yaw_deg_ : 0.0,
+      has_manual_cmd_ ? manual_pitch_deg_ : 0.0,
       out_yaw, out_pitch);
   }
 }

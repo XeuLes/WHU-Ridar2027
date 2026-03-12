@@ -25,9 +25,9 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
 
     this->declare_parameter<bool>("is_test", false);
 
-    this->declare_parameter<double>("uav_default_out_x", 26.37);
-    this->declare_parameter<double>("uav_default_out_y", 5.0);
-    this->declare_parameter<double>("uav_default_out_z", 1.2);
+    this->declare_parameter<double>("uav_default_out_x", 23.92);
+    this->declare_parameter<double>("uav_default_out_y", 6.28);
+    this->declare_parameter<double>("uav_default_out_z", 1.80);
 
     // minimap path (optional)
     this->declare_parameter<std::string>("minimap_path", "config/RM2025.png");

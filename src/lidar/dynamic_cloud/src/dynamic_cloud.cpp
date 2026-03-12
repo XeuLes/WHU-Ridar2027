@@ -4,8 +4,11 @@
 #include <pcl/point_cloud.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <rclcpp/time.hpp>
+#include <std_msgs/msg/u_int8.hpp>
+#include <mutex>
 
 namespace tdt_radar {  // 自定义命名空间
+
 
 DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     : rclcpp::Node("dynamic_cloud_node", node_options),
@@ -17,9 +20,17 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     // === 参数声明 ===
     this->declare_parameter<std::string>(
         "map_pcd_path", "/home/user/code/T-DT_Radar-main/src/lidar/localization/config/基础制造_rm_frame.pcd");
+    this->declare_parameter<int>("actual_map_min_frames", 30);
+    this->declare_parameter<int>("actual_map_min_stable_voxels", 400);
+    this->declare_parameter<double>("actual_map_voxel_size", 0.10);
+    this->declare_parameter<double>("actual_map_min_observe_ratio", 0.20);
 
     std::string map_pcd_path;
     this->get_parameter("map_pcd_path", map_pcd_path);
+    this->get_parameter("actual_map_min_frames", actual_map_min_frames_);
+    this->get_parameter("actual_map_min_stable_voxels", actual_map_min_stable_voxels_);
+    this->get_parameter("actual_map_voxel_size", actual_map_voxel_size_);
+    this->get_parameter("actual_map_min_observe_ratio", actual_map_min_observe_ratio_);
 
     // === 加载地图点云 ===
     pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -34,15 +45,18 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     sor.setLeafSize(0.2f, 0.2f, 0.2f);
     auto result = pcl::PointCloud<pcl::PointXYZ>::Ptr(new pcl::PointCloud<pcl::PointXYZ>);
     sor.filter(*result);
-    map_cloud = result;
-
-    // 构建KD-Tree
-    kd_Tree.setInputCloud(map_cloud);
+    prior_map_cloud_ = result;
+    kd_Tree.setInputCloud(prior_map_cloud_);
+    actual_map_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
 
     // 初始化订阅者和发布者
     sub_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
         "/livox/lidar_integrated", 10,
-        std::bind(&DynamicCloud::callback, this, std::placeholders::_1));
+    std::bind(&DynamicCloud::callback, this, std::placeholders::_1));
+
+    localization_status_sub_ = this->create_subscription<std_msgs::msg::UInt8>(
+    "/localization/status", 10,
+    std::bind(&DynamicCloud::localizationStatusCallback, this, std::placeholders::_1));
 
     pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_dynamic", 10);
     other_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/lidar_other", 10);
@@ -95,6 +109,229 @@ void DynamicCloud::GetDynamicCloud(
     }
 }
 
+void DynamicCloud::localizationStatusCallback(const std_msgs::msg::UInt8::SharedPtr msg)
+{
+    LocalizationStatus new_status = LocalizationStatus::LOCALIZING;
+
+    switch (msg->data) {
+        case 0:
+            new_status = LocalizationStatus::LOCALIZING;
+            break;
+        case 1:
+            new_status = LocalizationStatus::PRIOR_SUCCESS;
+            break;
+        case 2:
+            new_status = LocalizationStatus::INIT_ONLY;
+            break;
+        default:
+            RCLCPP_WARN(this->get_logger(),
+                        "收到未知 localization status=%u，忽略", msg->data);
+            return;
+    }
+
+    LocalizationStatus old_status;
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        old_status = localization_status_;
+        localization_status_ = new_status;
+    }
+
+    // 状态迁移逻辑
+    if (new_status == LocalizationStatus::LOCALIZING &&
+        old_status != LocalizationStatus::LOCALIZING) {
+        resetActualMapBuildState();
+        {
+            std::lock_guard<std::mutex> lock(actual_map_mutex_);
+            actual_map_building_ = true;
+        }
+        RCLCPP_INFO(this->get_logger(), "进入 LOCALIZING，开始累计 actual map");
+    }
+
+    if (new_status == LocalizationStatus::PRIOR_SUCCESS) {
+        resetActualMapBuildState();
+        RCLCPP_INFO(this->get_logger(), "进入 PRIOR_SUCCESS，放弃本轮 actual map，继续使用先验地图");
+    }
+
+    if (new_status == LocalizationStatus::INIT_ONLY &&
+        old_status != LocalizationStatus::INIT_ONLY) {
+        const bool ok = finalizeActualMap();
+        RCLCPP_INFO(this->get_logger(),
+                    "进入 INIT_ONLY，actual map finalize result = %s",
+                    ok ? "READY" : "NOT_READY");
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        refreshRuntimeMapMode();
+        RCLCPP_INFO(this->get_logger(),
+                    "Localization status updated -> %s, runtime map mode -> %s",
+                    localizationStatusToString(localization_status_),
+                    mapModeToString(runtime_map_mode_));
+    }
+}
+
+void DynamicCloud::resetActualMapBuildState()
+{
+    std::lock_guard<std::mutex> lock(actual_map_mutex_);
+
+    actual_voxel_hit_count_.clear();
+    actual_voxel_sum_.clear();
+
+    actual_map_accumulated_frames_ = 0;
+    actual_map_ready_ = false;
+    actual_map_building_ = false;
+    actual_map_finalized_once_ = false;
+
+    actual_map_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
+}
+
+std::string DynamicCloud::makeVoxelKey(const pcl::PointXYZ& pt) const
+{
+    const int ix = static_cast<int>(std::floor(pt.x / actual_map_voxel_size_));
+    const int iy = static_cast<int>(std::floor(pt.y / actual_map_voxel_size_));
+    const int iz = static_cast<int>(std::floor(pt.z / actual_map_voxel_size_));
+    return std::to_string(ix) + "_" + std::to_string(iy) + "_" + std::to_string(iz);
+}
+
+void DynamicCloud::updateActualMapAccumulator(const pcl::PointCloud<pcl::PointXYZ>& roi_cloud)
+{
+    std::lock_guard<std::mutex> lock(actual_map_mutex_);
+
+    actual_map_building_ = true;
+    actual_map_accumulated_frames_++;
+
+    std::unordered_map<std::string, bool> frame_seen;
+
+    for (const auto& pt : roi_cloud.points) {
+        const std::string key = makeVoxelKey(pt);
+
+        if (frame_seen.find(key) != frame_seen.end()) {
+            continue;
+        }
+        frame_seen[key] = true;
+
+        actual_voxel_hit_count_[key] += 1;
+        actual_voxel_sum_[key] += Eigen::Vector3f(pt.x, pt.y, pt.z);
+    }
+}
+
+bool DynamicCloud::finalizeActualMap()
+{
+    std::lock_guard<std::mutex> lock(actual_map_mutex_);
+
+    if (actual_map_finalized_once_) {
+        return actual_map_ready_;
+    }
+    actual_map_finalized_once_ = true;
+    actual_map_building_ = false;
+
+    if (actual_map_accumulated_frames_ < actual_map_min_frames_) {
+        RCLCPP_WARN(this->get_logger(),
+                    "actual map 构建失败：累计帧数不足，frames=%d < min_frames=%d",
+                    actual_map_accumulated_frames_, actual_map_min_frames_);
+        actual_map_ready_ = false;
+        return false;
+    }
+
+    const int min_hit_count = std::max(
+        1,
+        static_cast<int>(std::ceil(actual_map_accumulated_frames_ * actual_map_min_observe_ratio_)));
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr built_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+
+    for (const auto& kv : actual_voxel_hit_count_) {
+        const std::string& key = kv.first;
+        const int hit_count = kv.second;
+
+        if (hit_count < min_hit_count) {
+            continue;
+        }
+
+        auto it_sum = actual_voxel_sum_.find(key);
+        if (it_sum == actual_voxel_sum_.end()) {
+            continue;
+        }
+
+        const Eigen::Vector3f mean = it_sum->second / static_cast<float>(hit_count);
+
+        pcl::PointXYZ pt;
+        pt.x = mean.x();
+        pt.y = mean.y();
+        pt.z = mean.z();
+        built_cloud->push_back(pt);
+    }
+
+    if (static_cast<int>(built_cloud->size()) < actual_map_min_stable_voxels_) {
+        RCLCPP_WARN(this->get_logger(),
+                    "actual map 构建失败：稳定体素不足，stable_voxels=%zu < min_stable_voxels=%d",
+                    built_cloud->size(), actual_map_min_stable_voxels_);
+        actual_map_ready_ = false;
+        return false;
+    }
+
+    actual_map_cloud_ = built_cloud;
+    actual_map_ready_ = true;
+
+    RCLCPP_INFO(this->get_logger(),
+                "actual map 构建成功：frames=%d, min_hit=%d, stable_voxels=%zu",
+                actual_map_accumulated_frames_, min_hit_count, actual_map_cloud_->size());
+
+    return true;
+}
+
+void DynamicCloud::refreshRuntimeMapMode()
+{
+    switch (localization_status_) {
+        case LocalizationStatus::PRIOR_SUCCESS:
+            runtime_map_mode_ = RuntimeMapMode::PRIOR_MAP;
+            if (prior_map_cloud_ && !prior_map_cloud_->empty()) {
+                kd_Tree.setInputCloud(prior_map_cloud_);
+            }
+            break;
+
+        case LocalizationStatus::LOCALIZING:
+            // 这一阶段先仍然保留先验地图差分
+            runtime_map_mode_ = RuntimeMapMode::PRIOR_MAP;
+            if (prior_map_cloud_ && !prior_map_cloud_->empty()) {
+                kd_Tree.setInputCloud(prior_map_cloud_);
+            }
+            break;
+
+        case LocalizationStatus::INIT_ONLY:
+            if (actual_map_ready_ && actual_map_cloud_ && !actual_map_cloud_->empty()) {
+                runtime_map_mode_ = RuntimeMapMode::ACTUAL_MAP;
+                kd_Tree.setInputCloud(actual_map_cloud_);
+            } else {
+                runtime_map_mode_ = RuntimeMapMode::NO_VALID_MAP;
+            }
+            break;
+
+        default:
+            runtime_map_mode_ = RuntimeMapMode::NO_VALID_MAP;
+            break;
+    }
+}
+
+const char* DynamicCloud::mapModeToString(RuntimeMapMode mode) const
+{
+    switch (mode) {
+        case RuntimeMapMode::PRIOR_MAP: return "PRIOR_MAP";
+        case RuntimeMapMode::ACTUAL_MAP: return "ACTUAL_MAP";
+        case RuntimeMapMode::NO_VALID_MAP: return "NO_VALID_MAP";
+        default: return "UNKNOWN_MAP_MODE";
+    }
+}
+
+const char* DynamicCloud::localizationStatusToString(LocalizationStatus status) const
+{
+    switch (status) {
+        case LocalizationStatus::LOCALIZING: return "LOCALIZING";
+        case LocalizationStatus::PRIOR_SUCCESS: return "PRIOR_SUCCESS";
+        case LocalizationStatus::INIT_ONLY: return "INIT_ONLY";
+        default: return "UNKNOWN_LOCALIZATION_STATUS";
+    }
+}
+
 // TransformCloud 函数保持不变 (略去以节省篇幅，逻辑与之前一致)
 void TransformCloud(
     pcl::PointCloud<pcl::PointXYZ>& input_cloud,
@@ -140,6 +377,14 @@ void TransformCloud(
 void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
     vision_interface::msg::RadarWarn lidar_detect;
+
+    RuntimeMapMode current_mode;
+    LocalizationStatus current_status;
+    {
+        std::lock_guard<std::mutex> lock(status_mutex_);
+        current_mode = runtime_map_mode_;
+        current_status = localization_status_;
+    }
 
     // === 定义区域过滤器 ===
     auto dart_cloud_filter = [](pcl::PointXYZ& point) {
@@ -248,9 +493,28 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         roi_pub_->publish(roi_msg); // 话题: /livox/roi_cloud
     }
 
+    if (current_status == LocalizationStatus::LOCALIZING) {
+    updateActualMapAccumulator(filtered_cloud);
+
+    int actual_frames = 0;
+    {
+        std::lock_guard<std::mutex> lock(actual_map_mutex_);
+        actual_frames = actual_map_accumulated_frames_;
+    }
+    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                        "actual map 累计中... frames=%d",
+                        actual_frames);
+    }
+
     // 5. 提取动态点云 (对比静态地图)
     pcl::PointCloud<pcl::PointXYZ> dynamic_pointcloud;
-    GetDynamicCloud(filtered_cloud, dynamic_pointcloud, 0.03, 12);
+
+    if (current_mode == RuntimeMapMode::NO_VALID_MAP) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                            "当前无有效差分地图，跳过动态差分");
+    } else {
+        GetDynamicCloud(filtered_cloud, dynamic_pointcloud, 0.03, 12);
+    }
     
     // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
     //                      "【阶段5】动态检测后点数：%zu",
@@ -293,6 +557,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     output.header.stamp = msg->header.stamp;
     other_pub_->publish(output);
 
+    if (current_status == LocalizationStatus::PRIOR_SUCCESS) {
+    // 原来的飞镖 / 飞机检测逻辑
     // 8. 飞镖检测逻辑
     pcl::PointCloud<pcl::PointXYZ> dart_cloud;
     for (size_t i = 0; i < other_accumulated_cloud.size(); i++) {
@@ -321,6 +587,13 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 
     // 10. 发布检测警告
     detect_pub_->publish(lidar_detect);
+
+    } else {
+        lidar_detect.dart_state = 0;
+        lidar_detect.fly_state = 0;
+    }
+
+    
 }
 
 }  // namespace tdt_radar

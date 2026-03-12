@@ -4,6 +4,7 @@
 #include <string>
 
 #include <Eigen/Core>
+#include <Eigen/Dense>
 #include <std_msgs/msg/bool.hpp>
 
 #include <geometry_msgs/msg/pose_array.hpp>
@@ -35,6 +36,11 @@ private:
   bool isFinitePoint(const Eigen::Vector3d& p) const;
 
   void publishTargetAngles(double yaw_deg, double pitch_deg) const;
+
+
+
+  // 新增私有函数声明
+  Eigen::Matrix3d rotationFromSolvedYawPitchDeg(double yaw_deg, double pitch_deg) const;
 
 private:
   int red_pose_index_{0};
@@ -75,7 +81,9 @@ private:
   double output_filter_alpha_{0.2};
   mutable bool has_last_output_{false};
   mutable double last_output_yaw_deg_{0.0};
-  mutable double last_output_pitch_deg_{0.0};
+  mutable double last_output_pitch_deg_{0.0}; 
+  // 新增成员变量
+  Eigen::Vector3d laser_offset_xyz_{0.0, 0.0, 0.0};
 };
 
 }  // namespace gimbal_aim_solver

@@ -34,6 +34,22 @@ private:
   bool isFinite3(double x, double y, double z) const;
 
 private:
+
+  // 新增函数声明
+  void manualCommandCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+  void applyManualOffset(double& yaw_deg, double& pitch_deg) const;
+
+  // 新增订阅器
+  rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr manual_cmd_sub_;
+
+  // 新增topic
+  std::string manual_command_topic_;
+
+  // 新增状态
+  double manual_yaw_deg_{0.0};
+  double manual_pitch_deg_{0.0};
+  bool has_manual_cmd_{false};
+
   rclcpp::Subscription<auto_aim_fast::msg::AimTarget>::SharedPtr target_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr gimbal_angles_sub_;
   rclcpp::Subscription<geometry_msgs::msg::QuaternionStamped>::SharedPtr quaternion_sub_;
