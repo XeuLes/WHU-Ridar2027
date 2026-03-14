@@ -1,8 +1,8 @@
 laser_aim_controller_node:
   ros__parameters:
     target_topic: "/auto_aim/target"
-    gimbal_angles_topic: "/gimbal/angles"
-    gimbal_quaternion_topic: "/gimbal/quaternion"
+    gimbal_angles_topic: "/gimbal/angles_true"
+    gimbal_quaternion_topic: "/gimbal/quaternion_true"
     rough_command_topic: "/gimbal/rough_command_angles"
     command_topic: "/gimbal/command_angles"
 
@@ -18,7 +18,7 @@ laser_aim_controller_node:
     camera_offset_xyz: [0.0, -0.021, 0.0]
     laser_offset_xyz: [0.0, -0.056, 0.0]
 
-    yaw_inc_min_deg: -50.0
-    yaw_inc_max_deg: 50.0
-    pitch_inc_min_deg: -40.0
+    yaw_inc_min_deg: -500.0
+    yaw_inc_max_deg: 500.0
+    pitch_inc_min_deg: -60.0
     pitch_inc_max_deg: 40.0

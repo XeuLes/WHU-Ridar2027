@@ -8,7 +8,10 @@ public:
     struct Params {
         // 预处理参数
         int binary_thresh = 150;
-        
+        bool use_sigma_thresh = true;
+        float sigma_k = 2.5f;
+        int min_dynamic_thresh = 80;
+        int max_dynamic_thresh = 220;
         // 灯条筛选参数
         double min_area = 10;
         double max_area = 10000;
@@ -38,32 +41,70 @@ public:
         // 显示参数
         bool show_contours = false;
         bool show_pairs = true;
+
+        bool use_spot_pattern = true;
+        
+        //点阵参数
+        double spot_min_area = 3.0;
+        double spot_max_area = 300.0;
+        double spot_min_ratio = 0.3;
+        double spot_max_ratio = 1.0;
+
+        int min_row_spots = 2;
+        double row_center_x_tol_ratio = 0.35;
+        double row_height_tol_ratio = 0.5;
+        double row_width_similarity_ratio = 0.5;
+
+        double pattern_min_aspect = 0.6;
+        double pattern_max_aspect = 4.0;
+
+
     };
 
-    struct Light {
-        cv::RotatedRect rect; // 最小外接矩形
-        cv::Point2f center;   // 中心点
-        float width;          // 短边 (灯条宽度)
-        float length;         // 长边 (灯条长度)
-        float angle;          // 角度 (相对于水平线，[0, 90))
-        float area;           // 面积
-        cv::Point2f top;      // 上端点
-        cv::Point2f bottom;   // 下端点
-        int color;            // 颜色 (0: Red, 1: Blue, -1: Unknown)
+    // struct Light {
+    //     cv::RotatedRect rect; // 最小外接矩形
+    //     cv::Point2f center;   // 中心点
+    //     float width;          // 短边 (灯条宽度)
+    //     float length;         // 长边 (灯条长度)
+    //     float angle;          // 角度 (相对于水平线，[0, 90))
+    //     float area;           // 面积
+    //     cv::Point2f top;      // 上端点
+    //     cv::Point2f bottom;   // 下端点
+    //     int color;            // 颜色 (0: Red, 1: Blue, -1: Unknown)
 
-        Light(const cv::RotatedRect& r);
-        cv::Rect boundingRect() const; // 获取轴对齐包围盒
+    //     Light(const cv::RotatedRect& r);
+    //     cv::Rect boundingRect() const; // 获取轴对齐包围盒
+    // };
+
+    struct Spot {
+        cv::RotatedRect rect;
+        cv::Point2f center;
+        float width;
+        float height;
+        float area;
+        int color;
+
+        Spot() = default;
+        explicit Spot(const cv::RotatedRect& r)
+            : rect(r),
+            center(r.center),
+            width(std::min(r.size.width, r.size.height)),
+            height(std::max(r.size.width, r.size.height)),
+            area(r.size.width * r.size.height),
+            color(-1) {}
+
+        cv::Rect boundingRect() const { return rect.boundingRect(); }
     };
 
     struct PairResult {
-        cv::Point2f center;          // 配对中心点
-        cv::Point2f light1_center;   // 上侧/左侧灯条中心
-        cv::Point2f light2_center;   // 下侧/右侧灯条中心
-        float width;                 // 配对宽度
-        float height;                // 配对高度
-        float angle;                 // 配对角度
-        float confidence;            // 配对置信度
-        int pair_type;               // 配对类型：0=左右，1=上下
+        cv::Point2f center;         // 目标中心（最终目标中心）
+        cv::Point2f light1_center;  // 上行中心
+        cv::Point2f light2_center;  // 下行中心
+        float width;                // 目标整体宽度（像素）
+        float height;               // 目标整体高度（像素）
+        float angle;                // 顶边方向角（弧度）
+        int pair_type;              // 可自定义一个 pattern type
+        float confidence;
     };
 
     // 静态颜色常量
@@ -91,7 +132,7 @@ public:
     void drawResults(cv::Mat& image, bool draw_lights = true, bool draw_centers = true);
 
     // 获取历史数据
-    const std::vector<Light>& getLastLights() const;
+    const std::vector<Spot>& getLastSpots() const;
     const std::vector<PairResult>& getLastPairs() const;
 
     // 获取调试图像
@@ -102,23 +143,30 @@ private:
     Params params_;
 
     // 存储上一次检测的结果
-    std::vector<Light> last_lights_;
+    std::vector<Spot> last_spots_;
     std::vector<PairResult> last_pairs_;
     cv::Mat last_binary_;
     mutable cv::Mat last_debug_; // mutable 允许 const 函数修改它
 
     // 核心处理步骤
     cv::Mat preprocess(const cv::Mat& image) const;
-    std::vector<Light> detectLights(const cv::Mat& color_img, const cv::Mat& binary_img);
-    bool isValidLight(const Light& light) const;
-    int detectColor(const Light& light, const cv::Mat& color_img) const;
-    std::vector<PairResult> pairLights(const std::vector<Light>& lights);
-    bool canPair(const Light& l1, const Light& l2, float& center_dist, float& angle_diff) const;
-    float calculatePairConfidence(const Light& l1, const Light& l2, float center_dist, float angle_diff) const;
+
+    // 亮斑检测
+    std::vector<Spot> detectSpots(const cv::Mat& color_img, const cv::Mat& binary_img);
+    bool isValidSpot(const Spot& spot) const;
+    int detectColorFromRect(const cv::RotatedRect& rect, const cv::Mat& color_img) const;
+
+    // 亮斑分组为上下双行矩形目标
+    std::vector<PairResult> groupSpotsToPatterns(const std::vector<Spot>& spots);
+    float calculatePatternConfidence(const std::vector<Spot>& top,
+                                 const std::vector<Spot>& bottom,
+                                 float width_px,
+                                 float height_px) const;
+
+    // 调试图像
+    void createDebugImage(const cv::Mat& color_img, const cv::Mat& binary_img) const;
 
     // 辅助函数
-    // 注意：此函数现在是 const
-    void createDebugImage(const cv::Mat& color_img, const cv::Mat& binary_img) const;
     float distance(const cv::Point2f& p1, const cv::Point2f& p2) const;
     float angleDifference(float a1, float a2) const;
 };

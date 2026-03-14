@@ -112,20 +112,28 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::vector<double>>("camera.dist", std::vector<double>{0,0,0,0,0});
 
   // detector
-  this->declare_parameter<int>("detector.binary_thresh", 150);
-  this->declare_parameter<double>("detector.min_area", 10.0);
-  this->declare_parameter<double>("detector.max_area", 10000.0);
-  this->declare_parameter<double>("detector.min_ratio", 0.1);
-  this->declare_parameter<double>("detector.max_ratio", 0.4);
-  this->declare_parameter<double>("detector.max_angle", 90.0);
+  this->declare_parameter<int>("detector.binary_thresh", 255);
+  this->declare_parameter<bool>("detector.use_sigma_thresh", true);
+  this->declare_parameter<double>("detector.sigma_k", 2.5);
+  this->declare_parameter<int>("detector.min_dynamic_thresh", 80);
+  this->declare_parameter<int>("detector.max_dynamic_thresh", 220);
+
+  this->declare_parameter<double>("detector.spot_min_area", 3.0);
+  this->declare_parameter<double>("detector.spot_max_area", 1200.0);
+  this->declare_parameter<double>("detector.spot_min_ratio", 0.3);
+  this->declare_parameter<double>("detector.spot_max_ratio", 1.01);
+
+  this->declare_parameter<int>("detector.min_row_spots", 2);
+  this->declare_parameter<double>("detector.row_center_x_tol_ratio", 0.6);
+  this->declare_parameter<double>("detector.row_width_similarity_ratio", 0.8);
+  this->declare_parameter<double>("detector.pattern_min_aspect", 0.6);
+  this->declare_parameter<double>("detector.pattern_max_aspect", 4.0);
 
   this->declare_parameter<int>("detector.target_color", 0);
   this->declare_parameter<int>("detector.color_threshold", 30);
 
-  this->declare_parameter<double>("detector.min_light_ratio", 0.6);
-  this->declare_parameter<double>("detector.min_center_dist", 1.0);
-  this->declare_parameter<double>("detector.max_center_dist", 5.0);
-  this->declare_parameter<double>("detector.max_pair_angle", 10.0);
+  this->declare_parameter<bool>("detector.show_contours", false);
+  this->declare_parameter<bool>("detector.show_pairs", true);
   
   // 配对模式参数
   this->declare_parameter<int>("detector.pair_mode", 1);
@@ -136,8 +144,6 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<double>("detector.min_connect_angle", 60.0);
   this->declare_parameter<double>("detector.max_connect_angle", 120.0);
 
-  this->declare_parameter<bool>("detector.show_contours", false);
-  this->declare_parameter<bool>("detector.show_pairs", true);
 
   const auto image_topic = this->get_parameter("image_topic").as_string();
   const auto info_topic = this->get_parameter("camera_info_topic").as_string();
@@ -156,29 +162,46 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   // detector inject
   SimpleLightDetector::Params dp;
   dp.binary_thresh = this->get_parameter("detector.binary_thresh").as_int();
-  dp.min_area = this->get_parameter("detector.min_area").as_double();
-  dp.max_area = this->get_parameter("detector.max_area").as_double();
-  dp.min_ratio = static_cast<float>(this->get_parameter("detector.min_ratio").as_double());
-  dp.max_ratio = static_cast<float>(this->get_parameter("detector.max_ratio").as_double());
-  dp.max_angle = static_cast<float>(this->get_parameter("detector.max_angle").as_double());
-  dp.target_color = this->get_parameter("detector.target_color").as_int();
-  dp.color_threshold = this->get_parameter("detector.color_threshold").as_int();
-  dp.min_light_ratio = static_cast<float>(this->get_parameter("detector.min_light_ratio").as_double());
-  dp.min_center_dist = static_cast<float>(this->get_parameter("detector.min_center_dist").as_double());
-  dp.max_center_dist = static_cast<float>(this->get_parameter("detector.max_center_dist").as_double());
-  dp.max_pair_angle = static_cast<float>(this->get_parameter("detector.max_pair_angle").as_double());
-  
-  // 配对模式参数
-  dp.pair_mode = this->get_parameter("detector.pair_mode").as_int();
-  dp.max_x_diff_ratio = static_cast<float>(this->get_parameter("detector.max_x_diff_ratio").as_double());
-  dp.max_y_diff_ratio = static_cast<float>(this->get_parameter("detector.max_y_diff_ratio").as_double());
-  dp.min_vertical_dist = static_cast<float>(this->get_parameter("detector.min_vertical_dist").as_double());
-  dp.max_vertical_dist = static_cast<float>(this->get_parameter("detector.max_vertical_dist").as_double());
-  dp.min_connect_angle = static_cast<float>(this->get_parameter("detector.min_connect_angle").as_double());
-  dp.max_connect_angle = static_cast<float>(this->get_parameter("detector.max_connect_angle").as_double());
-  
-  dp.show_contours = this->get_parameter("detector.show_contours").as_bool();
-  dp.show_pairs = this->get_parameter("detector.show_pairs").as_bool();
+
+  dp.use_sigma_thresh =
+      this->get_parameter("detector.use_sigma_thresh").as_bool();
+  dp.sigma_k =
+      static_cast<float>(this->get_parameter("detector.sigma_k").as_double());
+  dp.min_dynamic_thresh =
+      this->get_parameter("detector.min_dynamic_thresh").as_int();
+  dp.max_dynamic_thresh =
+      this->get_parameter("detector.max_dynamic_thresh").as_int();
+
+  dp.spot_min_area =
+      this->get_parameter("detector.spot_min_area").as_double();
+  dp.spot_max_area =
+      this->get_parameter("detector.spot_max_area").as_double();
+  dp.spot_min_ratio =
+      static_cast<float>(this->get_parameter("detector.spot_min_ratio").as_double());
+  dp.spot_max_ratio =
+      static_cast<float>(this->get_parameter("detector.spot_max_ratio").as_double());
+
+  dp.min_row_spots =
+      this->get_parameter("detector.min_row_spots").as_int();
+  dp.row_center_x_tol_ratio =
+      static_cast<float>(this->get_parameter("detector.row_center_x_tol_ratio").as_double());
+  dp.row_width_similarity_ratio =
+      static_cast<float>(this->get_parameter("detector.row_width_similarity_ratio").as_double());
+  dp.pattern_min_aspect =
+      static_cast<float>(this->get_parameter("detector.pattern_min_aspect").as_double());
+  dp.pattern_max_aspect =
+      static_cast<float>(this->get_parameter("detector.pattern_max_aspect").as_double());
+
+  dp.target_color =
+      this->get_parameter("detector.target_color").as_int();
+  dp.color_threshold =
+      this->get_parameter("detector.color_threshold").as_int();
+
+  dp.show_contours =
+      this->get_parameter("detector.show_contours").as_bool();
+  dp.show_pairs =
+      this->get_parameter("detector.show_pairs").as_bool();
+
   pipeline_.setDetectorParams(dp);
 
   // camera fallback

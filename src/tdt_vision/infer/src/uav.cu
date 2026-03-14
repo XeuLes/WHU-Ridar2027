@@ -223,7 +223,7 @@ public:
         if (num_image == 0) return {};
         cudaStream_t stream_ = (cudaStream_t)stream;
 
-        printf(DBG_LBL "Starting forwards. Batch size: %d\n", num_image); fflush(stdout);
+        // printf(DBG_LBL "Starting forwards. Batch size: %d\n", num_image); fflush(stdout);
 
         // 1. 适配批次大小 (动态维度核心修复)
         // 使用 yolo.cu 中的 set_run_dims 接口
@@ -354,7 +354,7 @@ public:
         }
         
         if (!res.empty()) {
-            printf(DBG_SUC "UAV Final Post-processed: %zu boxes\n", res[0].size());
+            // printf(DBG_SUC "UAV Final Post-processed: %zu boxes\n", res[0].size());
         }
         return res;
     }   

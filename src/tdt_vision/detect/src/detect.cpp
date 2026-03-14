@@ -258,7 +258,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Classifier loaded");
     
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading armor_yolo model...");
-    this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.4f, 0.45f);
+    this->armor_yolo = yolo::load(armor_path, yolo::Type::V8, 0.3f, 0.45f);
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Armor YOLO loaded");
     
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading main yolo model...");
@@ -279,7 +279,7 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
     }
 
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading UAV detector from: %s", uav_path.c_str());
-    auto tmp_uav = uav::load(uav_path, 0.3f, 0.45f);
+    auto tmp_uav = uav::load(uav_path, 0.6f, 0.65f);
     if (tmp_uav != nullptr) {
         this->uav_detector = tmp_uav;
         RCLCPP_INFO(this->get_logger(), "[INIT] ✓ UAV detector loaded successfully! conf=0.5, nms=0.45");
@@ -329,16 +329,16 @@ void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
 {
     
     try {
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-        "[IMG] msg: %ux%u step=%u enc=%s data=%zu",
-        msg->width, msg->height, msg->step, msg->encoding.c_str(), msg->data.size());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //     "[IMG] msg: %ux%u step=%u enc=%s data=%zu",
+    //     msg->width, msg->height, msg->step, msg->encoding.c_str(), msg->data.size());
 
     auto cv_ptr = cv_bridge::toCvCopy(msg, msg->encoding);  // 先按原编码拿
     cv::Mat raw = cv_ptr->image;
 
-    RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-        "[IMG] mat: empty=%d size=%dx%d type=%d ch=%d depth=%d",
-        raw.empty(), raw.cols, raw.rows, raw.type(), raw.channels(), raw.depth());
+    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+    //     "[IMG] mat: empty=%d size=%dx%d type=%d ch=%d depth=%d",
+    //     raw.empty(), raw.cols, raw.rows, raw.type(), raw.channels(), raw.depth());
 
     static int dump = 0;
     if (dump++ % 60 == 0 && !raw.empty()) {

@@ -48,8 +48,8 @@ LaserAimControllerNode::LaserAimControllerNode(const rclcpp::NodeOptions& option
 void LaserAimControllerNode::declareAndLoadParameters()
 {
   this->declare_parameter<std::string>("target_topic", "/auto_aim/target");
-  this->declare_parameter<std::string>("gimbal_angles_topic", "/gimbal/angles");
-  this->declare_parameter<std::string>("gimbal_quaternion_topic", "/gimbal/quaternion");
+  this->declare_parameter<std::string>("gimbal_angles_topic", "/gimbal/angles_true");
+  this->declare_parameter<std::string>("gimbal_quaternion_topic", "/gimbal/quaternion_true");
   this->declare_parameter<std::string>("rough_command_topic", "/gimbal/rough_command_angles");
   this->declare_parameter<std::string>("manual_command_topic", "/gimbal/command_angle_manual");
   this->declare_parameter<std::string>("command_topic", "/gimbal/command_angles");
@@ -74,6 +74,8 @@ void LaserAimControllerNode::declareAndLoadParameters()
   this->declare_parameter<double>("pitch_inc_min_deg", -10.0);
   this->declare_parameter<double>("pitch_inc_max_deg", 10.0);
 
+  this->declare_parameter<double>("fine_stack_max_abs_deg", 0.5);
+
   target_topic_ = this->get_parameter("target_topic").as_string();
   gimbal_angles_topic_ = this->get_parameter("gimbal_angles_topic").as_string();
   gimbal_quaternion_topic_ = this->get_parameter("gimbal_quaternion_topic").as_string();
@@ -94,6 +96,8 @@ void LaserAimControllerNode::declareAndLoadParameters()
 
   const auto cam_offset = this->get_parameter("camera_offset_xyz").as_double_array();
   const auto laser_offset = this->get_parameter("laser_offset_xyz").as_double_array();
+
+  fine_stack_max_abs_deg_ = this->get_parameter("fine_stack_max_abs_deg").as_double();
 
   if (cam_offset.size() != 3 || laser_offset.size() != 3) {
     throw std::runtime_error("camera_offset_xyz and laser_offset_xyz must both have size 3");
@@ -205,9 +209,10 @@ void LaserAimControllerNode::publishRoughIfAvailable()
     return;
   }
 
-  double out_yaw = rough_yaw_deg_;
-  double out_pitch = rough_pitch_deg_;
-  applyManualOffset(out_yaw, out_pitch);
+  double final_yaw = rough_yaw_deg_;
+  double final_pitch = rough_pitch_deg_;
+  applyManualOffset(final_yaw, final_pitch);
+
   publishCommand(rough_yaw_deg_, rough_pitch_deg_);
 
   if (publish_debug_) {
@@ -218,10 +223,9 @@ void LaserAimControllerNode::publishRoughIfAvailable()
       rough_yaw_deg_, rough_pitch_deg_,
       has_manual_cmd_ ? manual_yaw_deg_ : 0.0,
       has_manual_cmd_ ? manual_pitch_deg_ : 0.0,
-      out_yaw, out_pitch);
+      final_yaw, final_pitch);
   }
 }
-
 void LaserAimControllerNode::targetCallback(
   const auto_aim_fast::msg::AimTarget::SharedPtr msg)
 {
@@ -249,58 +253,88 @@ void LaserAimControllerNode::targetCallback(
     return;
   }
 
-  double out_yaw = inc.yaw_deg;
-  double out_pitch = inc.pitch_deg;
+  double base_yaw = 0.0;
+  double base_pitch = 0.0;
 
-  if (output_mode_ == "absolute") {
-    if (!current_gimbal_.valid) {
-      publishRoughIfAvailable();
-      return;
+  bool fine_within_stack_limit =
+    std::abs(inc.yaw_deg) <= fine_stack_max_abs_deg_ &&
+    std::abs(inc.pitch_deg) <= fine_stack_max_abs_deg_;
+
+  bool stacked_fine_on_rough = false;
+
+  // 规则：
+  // 1) 有粗瞄时，只有细瞄两个轴都不超过阈值，才叠加到粗瞄上
+  // 2) 只要任一轴超过阈值，就不叠加细瞄，直接用粗瞄
+  // 3) 没有粗瞄时，退化为原先细瞄输出
+  if (has_rough_cmd_) {
+    base_yaw = rough_yaw_deg_;
+    base_pitch = rough_pitch_deg_;
+
+    if (fine_within_stack_limit) {
+      base_yaw += inc.yaw_deg;
+      base_pitch += inc.pitch_deg;
+      stacked_fine_on_rough = true;
     }
-    out_yaw = current_gimbal_.yaw_deg + inc.yaw_deg;
-    out_pitch = current_gimbal_.pitch_deg + inc.pitch_deg;
-  } else if (output_mode_ != "increment") {
-    RCLCPP_WARN_THROTTLE(
-      this->get_logger(), *this->get_clock(), 2000,
-      "Invalid output_mode: %s, expected 'increment' or 'absolute'. Using increment.",
-      output_mode_.c_str());
+  } else {
+    // 没有粗瞄时，保留原有细瞄独立输出逻辑
+    base_yaw = inc.yaw_deg;
+    base_pitch = inc.pitch_deg;
+
+    if (output_mode_ == "absolute") {
+      if (!current_gimbal_.valid) {
+        publishRoughIfAvailable();
+        return;
+      }
+      base_yaw = current_gimbal_.yaw_deg + inc.yaw_deg;
+      base_pitch = current_gimbal_.pitch_deg + inc.pitch_deg;
+    } else if (output_mode_ != "increment") {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(), *this->get_clock(), 2000,
+        "Invalid output_mode: %s, expected 'increment' or 'absolute'. Using increment.",
+        output_mode_.c_str());
+    }
   }
 
   if (enable_output_filter_) {
     const double a = output_filter_alpha_;
 
     if (!has_last_output_) {
-      last_yaw_out_deg_ = out_yaw;
-      last_pitch_out_deg_ = out_pitch;
+      last_yaw_out_deg_ = base_yaw;
+      last_pitch_out_deg_ = base_pitch;
       has_last_output_ = true;
     } else {
-      last_yaw_out_deg_ = a * out_yaw + (1.0 - a) * last_yaw_out_deg_;
-      last_pitch_out_deg_ = a * out_pitch + (1.0 - a) * last_pitch_out_deg_;
+      last_yaw_out_deg_ = a * base_yaw + (1.0 - a) * last_yaw_out_deg_;
+      last_pitch_out_deg_ = a * base_pitch + (1.0 - a) * last_pitch_out_deg_;
     }
 
-    out_yaw = last_yaw_out_deg_;
-    out_pitch = last_pitch_out_deg_;
+    base_yaw = last_yaw_out_deg_;
+    base_pitch = last_pitch_out_deg_;
   }
 
-  const double base_yaw = out_yaw;
-  const double base_pitch = out_pitch;
+  double final_yaw = base_yaw;
+  double final_pitch = base_pitch;
+  applyManualOffset(final_yaw, final_pitch);
 
-  applyManualOffset(out_yaw, out_pitch);
   publishCommand(base_yaw, base_pitch);
 
   if (publish_debug_) {
     RCLCPP_INFO_THROTTLE(
       this->get_logger(), *this->get_clock(), 100,
       "fine target: target_cam=(%.3f, %.3f, %.3f), target_from_laser=(%.3f, %.3f, %.3f), "
-      "inc=(yaw=%.2f, pitch=%.2f), base=(yaw=%.2f, pitch=%.2f), "
+      "inc=(yaw=%.2f, pitch=%.2f), rough=(yaw=%.2f, pitch=%.2f), "
+      "stack_limit=%.2f, stacked=%s, base=(yaw=%.2f, pitch=%.2f), "
       "manual=(yaw=%.2f, pitch=%.2f), final=(yaw=%.2f, pitch=%.2f)",
       msg->tx, msg->ty, msg->tz,
       target_from_laser.x(), target_from_laser.y(), target_from_laser.z(),
       inc.yaw_deg, inc.pitch_deg,
+      has_rough_cmd_ ? rough_yaw_deg_ : 0.0,
+      has_rough_cmd_ ? rough_pitch_deg_ : 0.0,
+      fine_stack_max_abs_deg_,
+      stacked_fine_on_rough ? "true" : "false",
       base_yaw, base_pitch,
       has_manual_cmd_ ? manual_yaw_deg_ : 0.0,
       has_manual_cmd_ ? manual_pitch_deg_ : 0.0,
-      out_yaw, out_pitch);
+      final_yaw, final_pitch);
   }
 }
 

@@ -317,9 +317,9 @@ static __global__ void decode_kernel_v26_fp32_nxc(
     const float* invert_affine_matrix, float* parray, int MAX_IMAGE_BOXES
 ){
     if (blockIdx.x == 0 && threadIdx.x == 0) {
-        printf("\n=== [DEBUG V26 FP32 NXC] ===\n");
-        printf("f[0]=%f f[4]=%f\n", predict[0], predict[4]);
-        printf("===========================\n");
+        // printf("\n=== [DEBUG V26 FP32 NXC] ===\n");
+        // printf("f[0]=%f f[4]=%f\n", predict[0], predict[4]);
+        // printf("===========================\n");
     }
 
     int position = blockDim.x * blockIdx.x + threadIdx.x;
@@ -906,9 +906,9 @@ public:
         checkRuntime(cudaMemcpyAsync(host_check, bbox_output_device, sizeof(host_check),
                                     cudaMemcpyDeviceToHost, stream_));
         checkRuntime(cudaStreamSynchronize(stream_));
-        printf("[POST-FWD] first floats: %f %f %f %f %f %f %f %f\n",
-            host_check[0],host_check[1],host_check[2],host_check[3],
-            host_check[4],host_check[5],host_check[6],host_check[7]);
+        // printf("[POST-FWD] first floats: %f %f %f %f %f %f %f %f\n",
+        //     host_check[0],host_check[1],host_check[2],host_check[3],
+        //     host_check[4],host_check[5],host_check[6],host_check[7]);
 
 
         if (type_ == Type::V26 && !v26_dtype_checked_) {

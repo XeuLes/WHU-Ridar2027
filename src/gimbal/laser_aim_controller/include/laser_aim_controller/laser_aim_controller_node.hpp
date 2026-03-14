@@ -83,6 +83,8 @@ private:
   bool has_rough_cmd_{false};
   double rough_yaw_deg_{0.0};
   double rough_pitch_deg_{0.0};
+
+  double fine_stack_max_abs_deg_{0.5};
 };
 
 }  // namespace laser_aim_controller

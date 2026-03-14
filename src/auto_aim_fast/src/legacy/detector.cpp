@@ -43,41 +43,6 @@ const cv::Scalar SimpleLightDetector::BLUE_COLOR = cv::Scalar(255, 0, 0);
 const cv::Scalar SimpleLightDetector::GREEN_COLOR = cv::Scalar(0, 255, 0);
 const cv::Scalar SimpleLightDetector::YELLOW_COLOR = cv::Scalar(0, 255, 255);
 
-// ==================== Light 结构体方法实现 ====================
-
-SimpleLightDetector::Light::Light(const cv::RotatedRect& r)
-    : rect(r),
-      center(r.center),
-      width(std::min(r.size.width, r.size.height)),
-      length(std::max(r.size.width, r.size.height)),
-      area(r.size.width * r.size.height) {
-
-    // 计算角度（确保角度在[0, 90)范围内）
-    angle = r.size.width < r.size.height ? r.angle : r.angle - 90;
-    if (angle < -90) angle += 180;
-    if (angle < 0) angle = -angle;
-
-    // 计算上下端点
-    cv::Point2f vertices[4];
-    r.points(vertices);
-
-    // 找到y值最小和最大的点
-    int min_idx = 0, max_idx = 0;
-    for (int i = 1; i < 4; i++) {
-        if (vertices[i].y < vertices[min_idx].y) min_idx = i;
-        if (vertices[i].y > vertices[max_idx].y) max_idx = i;
-    }
-
-    top = vertices[min_idx];
-    bottom = vertices[max_idx];
-
-    // 初始颜色设为未知
-    color = -1;
-}
-
-cv::Rect SimpleLightDetector::Light::boundingRect() const {
-    return rect.boundingRect();
-}
 
 // ==================== SimpleLightDetector 方法实现 ====================
 
@@ -102,44 +67,37 @@ SimpleLightDetector::Params SimpleLightDetector::getParams() const {
 
 // 主检测函数
 std::vector<cv::Point2f> SimpleLightDetector::detect(const cv::Mat& image) {
-    // 清空上一帧的数据
-    last_lights_.clear();
+    last_spots_.clear();
     last_pairs_.clear();
 
-    #ifdef AUTO_AIM_FAST_USE_CUDA
-  if (!image.empty() && image.type() == CV_8UC3 && cv::cuda::getCudaEnabledDeviceCount() > 0) {
-    g_cuda_frame.valid = true;
-    g_cuda_frame.w = image.cols;
-    g_cuda_frame.h = image.rows;
-    g_cuda_frame.d_bgr.upload(image, g_cuda_frame.stream);
-  } else {
-    g_cuda_frame.valid = false;
-  }
+#ifdef AUTO_AIM_FAST_USE_CUDA
+    if (!image.empty() && image.type() == CV_8UC3 &&
+        cv::cuda::getCudaEnabledDeviceCount() > 0) {
+        g_cuda_frame.valid = true;
+        g_cuda_frame.w = image.cols;
+        g_cuda_frame.h = image.rows;
+        g_cuda_frame.d_bgr.upload(image, g_cuda_frame.stream);
+    } else {
+        g_cuda_frame.valid = false;
+    }
 #endif
 
-    // 预处理
     last_binary_ = preprocess(image);
+    last_spots_ = detectSpots(image, last_binary_);
+    last_pairs_ = groupSpotsToPatterns(last_spots_);
 
-    // 检测灯条
-    last_lights_ = detectLights(image, last_binary_);
-
-    // 灯条配对
-    last_pairs_ = pairLights(last_lights_);
-
-    // 提取中心点
     std::vector<cv::Point2f> centers;
     centers.reserve(last_pairs_.size());
     for (const auto& pair : last_pairs_) {
         centers.push_back(pair.center);
     }
 
-    #ifdef AUTO_AIM_FAST_USE_CUDA
-  g_cuda_frame.valid = false;
+#ifdef AUTO_AIM_FAST_USE_CUDA
+    g_cuda_frame.valid = false;
 #endif
 
     return centers;
 }
-
 // 扩展检测函数
 std::vector<SimpleLightDetector::PairResult> SimpleLightDetector::detectDetailed(const cv::Mat& image) {
     // 先执行普通检测
@@ -169,11 +127,9 @@ bool SimpleLightDetector::detectSingle(const cv::Mat& image, cv::Point2f& center
 // 绘制结果
 // 注意：移除了 const 限定符
 void SimpleLightDetector::drawResults(cv::Mat& image, bool draw_lights, bool draw_centers) {
-    // 创建调试图像
-    createDebugImage(image, last_binary_); // 现在调用的是 const 版本
+    createDebugImage(image, last_binary_);
 
     if (params_.show_contours) {
-        // 绘制二值图像轮廓
         cv::Mat contours_img = image.clone();
         std::vector<std::vector<cv::Point>> contours;
         cv::findContours(last_binary_, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
@@ -181,64 +137,67 @@ void SimpleLightDetector::drawResults(cv::Mat& image, bool draw_lights, bool dra
         cv::imshow("Contours", contours_img);
     }
 
-    // 绘制灯条
+    // 画 spot
     if (draw_lights) {
-        for (const auto& light : last_lights_) {
-            cv::Scalar color = (light.color == 0) ? RED_COLOR : BLUE_COLOR;
+        for (const auto& spot : last_spots_) {
+            cv::Scalar color = (spot.color == 0) ? RED_COLOR : BLUE_COLOR;
 
-            // 绘制旋转矩形
             cv::Point2f vertices[4];
-            light.rect.points(vertices);
+            spot.rect.points(vertices);
             for (int j = 0; j < 4; j++) {
                 cv::line(image, vertices[j], vertices[(j + 1) % 4], color, 1);
             }
 
-            // 绘制上下端点
-            cv::circle(image, light.top, 3, GREEN_COLOR, -1);
-            cv::circle(image, light.bottom, 3, GREEN_COLOR, -1);
-
-            // 绘制中心点
-            cv::circle(image, light.center, 2, YELLOW_COLOR, -1);
+            cv::circle(image, spot.center, 2, YELLOW_COLOR, -1);
         }
     }
 
-    // 绘制配对结果
+    // 画 pattern
     if (draw_centers && params_.show_pairs) {
         for (const auto& pair : last_pairs_) {
-            // 绘制配对中心点
             cv::circle(image, pair.center, 6, YELLOW_COLOR, 2);
-
-            // 绘制连线
             cv::line(image, pair.light1_center, pair.light2_center, GREEN_COLOR, 2);
 
-            // 绘制配对矩形
-            // 注意：cv::Rect(左上角, Size(宽度, 高度))
-            // pair.width 是配对的实际宽度，pair.height 是配对的实际高度
-            cv::Rect bounding_box(cv::Point(pair.center.x - pair.width/2, pair.center.y - pair.height/2),
-                                  cv::Size(pair.width, pair.height));
-            cv::rectangle(image, bounding_box, YELLOW_COLOR, 1);
+            const float half_w = pair.width * 0.5f;
+            const float half_h = pair.height * 0.5f;
+            const float c = std::cos(pair.angle);
+            const float s = std::sin(pair.angle);
 
-            // 显示置信度
+            auto rot = [&](float x, float y) -> cv::Point2f {
+                return cv::Point2f(pair.center.x + c * x - s * y,
+                                   pair.center.y + s * x + c * y);
+            };
+
+            cv::Point2f lt = rot(-half_w, -half_h);
+            cv::Point2f rt = rot( half_w, -half_h);
+            cv::Point2f rb = rot( half_w,  half_h);
+            cv::Point2f lb = rot(-half_w,  half_h);
+
+            cv::line(image, lt, rt, YELLOW_COLOR, 1);
+            cv::line(image, rt, rb, YELLOW_COLOR, 1);
+            cv::line(image, rb, lb, YELLOW_COLOR, 1);
+            cv::line(image, lb, lt, YELLOW_COLOR, 1);
+
+            cv::circle(image, pair.light1_center, 4, GREEN_COLOR, -1);  // 上行中心
+            cv::circle(image, pair.light2_center, 4, BLUE_COLOR, -1);   // 下行中心
+
             std::string conf_text = "C:" + std::to_string(int(pair.confidence * 100)) + "%";
-            cv::putText(image, conf_text, pair.center + cv::Point2f(0,pair.width/4),
-                       cv::FONT_HERSHEY_SIMPLEX, 0.5, YELLOW_COLOR, 1);
+            cv::putText(image, conf_text, pair.center + cv::Point2f(0, pair.height * 0.25f),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.5, YELLOW_COLOR, 1);
         }
     }
 
-    // 显示灯条数量
-    std::string light_text = "Lights: " + std::to_string(last_lights_.size());
-    cv::putText(image, light_text, cv::Point(10, 30),
-               cv::FONT_HERSHEY_SIMPLEX, 0.8, GREEN_COLOR, 2);
+    std::string spot_text = "Spots: " + std::to_string(last_spots_.size());
+    cv::putText(image, spot_text, cv::Point(10, 30),
+                cv::FONT_HERSHEY_SIMPLEX, 0.8, GREEN_COLOR, 2);
 
-    // 显示配对数量
-    std::string pair_text = "Pairs: " + std::to_string(last_pairs_.size());
+    std::string pair_text = "Patterns: " + std::to_string(last_pairs_.size());
     cv::putText(image, pair_text, cv::Point(10, 60),
-               cv::FONT_HERSHEY_SIMPLEX, 0.8, YELLOW_COLOR, 2);
+                cv::FONT_HERSHEY_SIMPLEX, 0.8, YELLOW_COLOR, 2);
 }
-
-// 获取最后检测到的灯条
-const std::vector<SimpleLightDetector::Light>& SimpleLightDetector::getLastLights() const {
-    return last_lights_;
+// 获取最后检测到的亮斑
+const std::vector<SimpleLightDetector::Spot>& SimpleLightDetector::getLastSpots() const {
+    return last_spots_;
 }
 
 // 获取最后的配对结果
@@ -272,7 +231,7 @@ cv::Mat SimpleLightDetector::preprocess(const cv::Mat& image) const
         struct CudaCache {
             bool inited = false;
             cv::cuda::GpuMat d_bgr, d_gray, d_bin, d_tmp;
-            cv::Ptr<cv::cuda::Filter> close_f;
+            // cv::Ptr<cv::cuda::Filter> close_f;
             cv::Ptr<cv::cuda::Filter> open_f;
             cv::cuda::Stream stream;
         };
@@ -281,7 +240,7 @@ cv::Mat SimpleLightDetector::preprocess(const cv::Mat& image) const
         if (!cache.inited) {
             // kernel 与 CPU 版完全一致：3x3 MORPH_RECT
             cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-            cache.close_f = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, CV_8UC1, kernel);
+            // cache.close_f = cv::cuda::createMorphologyFilter(cv::MORPH_CLOSE, CV_8UC1, kernel);
             cache.open_f  = cv::cuda::createMorphologyFilter(cv::MORPH_OPEN,  CV_8UC1, kernel);
             cache.inited = true;
         }
@@ -291,16 +250,33 @@ cv::Mat SimpleLightDetector::preprocess(const cv::Mat& image) const
         cv::cuda::cvtColor(cache.d_bgr, cache.d_gray, cv::COLOR_BGR2GRAY, 0, cache.stream);
 
         // 阈值逻辑保持不变：THRESH_BINARY + params_.binary_thresh
+        double thr = params_.binary_thresh;
+
+        if (params_.use_sigma_thresh) {
+            cv::Mat gray_cpu;
+            cache.d_gray.download(gray_cpu, cache.stream);
+            cache.stream.waitForCompletion();
+
+            cv::Scalar mean_val, std_val;
+            cv::meanStdDev(gray_cpu, mean_val, std_val);
+
+            const double mu = mean_val[0];
+            const double sigma = std_val[0];
+
+            thr = mu + static_cast<double>(params_.sigma_k) * sigma;
+            thr = std::max<double>(params_.min_dynamic_thresh,
+                std::min<double>(thr, params_.max_dynamic_thresh));
+        }
+
         cv::cuda::threshold(
             cache.d_gray, cache.d_bin,
-            params_.binary_thresh, 255.0,
+            thr, 255.0,
             cv::THRESH_BINARY, cache.stream);
 
-        cache.close_f->apply(cache.d_bin, cache.d_tmp, cache.stream);
-        cache.open_f->apply(cache.d_tmp, cache.d_bin, cache.stream);
+        cache.open_f->apply(cache.d_bin, cache.d_tmp, cache.stream);
 
         cv::Mat binary;
-        cache.d_bin.download(binary, cache.stream);
+        cache.d_tmp.download(binary, cache.stream);
         cache.stream.waitForCompletion();
         return binary;
     }
@@ -308,83 +284,116 @@ cv::Mat SimpleLightDetector::preprocess(const cv::Mat& image) const
 
     // ========= CPU fallback（保持你原来的逻辑不变）=========
     cv::Mat gray, binary;
-
     cv::cvtColor(image, gray, cv::COLOR_BGR2GRAY);
-    cv::threshold(gray, binary, params_.binary_thresh, 255, cv::THRESH_BINARY);
 
+    double thr = params_.binary_thresh;
+
+    if (params_.use_sigma_thresh) {
+        cv::Scalar mean_val, std_val;
+        cv::meanStdDev(gray, mean_val, std_val);
+
+        const double mu = mean_val[0];
+        const double sigma = std_val[0];
+
+        thr = mu + static_cast<double>(params_.sigma_k) * sigma;
+
+        // 钳制到合理范围
+        thr = std::max<double>(params_.min_dynamic_thresh,
+            std::min<double>(thr, params_.max_dynamic_thresh));
+    }
+
+    cv::threshold(gray, binary, thr, 255, cv::THRESH_BINARY);
+
+    cv::medianBlur(binary, binary, 3);
     cv::Mat kernel = cv::getStructuringElement(cv::MORPH_RECT, cv::Size(3, 3));
-    cv::morphologyEx(binary, binary, cv::MORPH_CLOSE, kernel);
     cv::morphologyEx(binary, binary, cv::MORPH_OPEN, kernel);
 
     return binary;
 }
 
-// 检测灯条
-std::vector<SimpleLightDetector::Light> SimpleLightDetector::detectLights(
-    const cv::Mat& color_img, const cv::Mat& binary_img) {
-
-    std::vector<Light> lights;
+std::vector<SimpleLightDetector::Spot>
+SimpleLightDetector::detectSpots(const cv::Mat& color_img, const cv::Mat& binary_img)
+{
+    std::vector<Spot> spots;
     std::vector<std::vector<cv::Point>> contours;
 
-    // 查找轮廓
     cv::findContours(binary_img, contours, cv::RETR_EXTERNAL, cv::CHAIN_APPROX_SIMPLE);
 
+    int pass_area = 0;
+    int pass_shape = 0;
+    int pass_color = 0;
+
+    std::cout << "[detectSpots] contours=" << contours.size() << std::endl;
+
     for (const auto& contour : contours) {
-        if (contour.size() < 5) continue;
+        if (contour.size() < 3) continue;
 
-        // 计算轮廓面积
-        double area = cv::contourArea(contour);
-        if (area < params_.min_area || area > params_.max_area) continue;
+        const double area = cv::contourArea(contour);
+        // if (area < params_.spot_min_area || area > params_.spot_max_area) {
+        //     continue;
+        // }
+        pass_area++;
 
-        // 最小外接矩形
         cv::RotatedRect rect = cv::minAreaRect(contour);
-        Light light(rect);
+        Spot spot(rect);
 
-        // 检查是否为有效灯条
-        if (isValidLight(light)) {
-            // 检测颜色
-            light.color = detectColor(light, color_img);
-
-            // 只保留目标颜色的灯条
-            if (light.color == params_.target_color) {
-                lights.push_back(light);
-            }
+        if (spot.width < 1.0f || spot.height < 1.0f) {
+            continue;
         }
+
+        if (!isValidSpot(spot)) {
+            std::cout << "[detectSpots] reject shape:"
+                      << " area=" << spot.area
+                      << " w=" << spot.width
+                      << " h=" << spot.height
+                      << " ratio=" << (std::min(spot.width, spot.height) / std::max(spot.width, spot.height))
+                      << std::endl;
+            continue;
+        }
+        pass_shape++;
+
+        spot.color = detectColorFromRect(spot.rect, color_img);
+
+        std::cout << "[detectSpots] color check:"
+                  << " area=" << spot.area
+                  << " center=(" << spot.center.x << "," << spot.center.y << ")"
+                  << " color=" << spot.color
+                  << " target=" << params_.target_color
+                  << std::endl;
+
+        if (spot.color != params_.target_color) {
+            continue;
+        }
+        pass_color++;
+
+        spots.push_back(spot);
     }
 
-    // ✅ 输出检测结果统计
-    // printf("[Detection] Total contours: %zu, Valid lights: %zu, Target color: %d\n", 
-    //        contours.size(), lights.size(), params_.target_color);
-    fflush(stdout);
+    std::cout << "[detectSpots] pass_area=" << pass_area
+              << " pass_shape=" << pass_shape
+              << " pass_color=" << pass_color
+              << " final_spots=" << spots.size()
+              << std::endl;
 
-    return lights;
+    return spots;
 }
 
 // 判断是否为有效灯条
-bool SimpleLightDetector::isValidLight(const Light& light) const {
-    // 长宽比过滤
-    float ratio = light.width / light.length;
-    if (ratio < params_.min_ratio || ratio > params_.max_ratio) {
-        return false;
-    }
-
-    // 面积过滤 (虽然在detectLights里也做了，这里再确认一遍)
-    if (light.area < params_.min_area || light.area > params_.max_area) {
-        return false;
-    }
-
-    // 角度过滤
-    if (light.angle > params_.max_angle) {
-        return false;
-    }
-
+bool SimpleLightDetector::isValidSpot(const Spot& spot) const {
+    std::cout << "[isValidSpot FORCE PASS] "
+              << "area=" << spot.area
+              << " w=" << spot.width
+              << " h=" << spot.height
+              << std::endl;
     return true;
 }
 
+
 // 检测灯条颜色
-int SimpleLightDetector::detectColor(const Light& light, const cv::Mat& color_img) const
+int SimpleLightDetector::detectColorFromRect(const cv::RotatedRect& rect_r,
+                                             const cv::Mat& color_img) const
 {
-    cv::Rect rect = light.boundingRect();
+    cv::Rect rect = rect_r.boundingRect();
 
     rect.x = std::max(0, rect.x);
     rect.y = std::max(0, rect.y);
@@ -396,23 +405,22 @@ int SimpleLightDetector::detectColor(const Light& light, const cv::Mat& color_im
     }
 
 #ifdef AUTO_AIM_FAST_USE_CUDA
-    // GPU 分支：等价实现（采样步长=2，点在旋转矩形内判断，累加 R/B）
     if (g_cuda_frame.valid && !g_cuda_frame.d_bgr.empty() &&
-        g_cuda_frame.d_bgr.cols == color_img.cols && g_cuda_frame.d_bgr.rows == color_img.rows &&
+        g_cuda_frame.d_bgr.cols == color_img.cols &&
+        g_cuda_frame.d_bgr.rows == color_img.rows &&
         cv::cuda::getCudaEnabledDeviceCount() > 0)
     {
-        // 旋转矩形四点（绝对坐标）
         std::vector<cv::Point2f> pts(4);
-        light.rect.points(pts.data());
+        rect_r.points(pts.data());
 
         Float2 fpts[4] = {
-          {pts[0].x, pts[0].y},
-          {pts[1].x, pts[1].y},
-          {pts[2].x, pts[2].y},
-          {pts[3].x, pts[3].y}
+            {pts[0].x, pts[0].y},
+            {pts[1].x, pts[1].y},
+            {pts[2].x, pts[2].y},
+            {pts[3].x, pts[3].y}
         };
 
-        int red_sum=0, blue_sum=0, pixel_count=0;
+        int red_sum = 0, blue_sum = 0, pixel_count = 0;
         const int sample_step = 2;
 
         cudaStream_t s = cv::cuda::StreamAccessor::getStream(g_cuda_frame.stream);
@@ -424,7 +432,6 @@ int SimpleLightDetector::detectColor(const Light& light, const cv::Mat& color_im
             &red_sum, &blue_sum, &pixel_count,
             s);
 
-        // 等待本次 light 的结果 ready（确保 host sum 可用）
         g_cuda_frame.stream.waitForCompletion();
 
         if (ok && pixel_count > 0) {
@@ -432,18 +439,16 @@ int SimpleLightDetector::detectColor(const Light& light, const cv::Mat& color_im
             if (blue_sum > red_sum + params_.color_threshold) return 1;
             return -1;
         }
-        // 否则 fallback 到 CPU（不影响稳定性）
     }
 #endif
 
-    // ========= CPU fallback：你原来的逻辑完全保留 =========
     cv::Mat roi = color_img(rect);
 
     int red_sum = 0, blue_sum = 0;
     int pixel_count = 0;
 
     std::vector<cv::Point2f> rect_points(4);
-    light.rect.points(rect_points.data());
+    rect_r.points(rect_points.data());
     std::vector<cv::Point> polygon_points(rect_points.begin(), rect_points.end());
 
     for (int i = 0; i < roi.rows; i += 2) {
@@ -452,7 +457,7 @@ int SimpleLightDetector::detectColor(const Light& light, const cv::Mat& color_im
             cv::Point abs_pt(j + rect.x, i + rect.y);
             double test_result = cv::pointPolygonTest(polygon_points, abs_pt, false);
             if (test_result >= 0) {
-                red_sum  += row[j][2];
+                red_sum += row[j][2];
                 blue_sum += row[j][0];
                 pixel_count++;
             }
@@ -466,198 +471,306 @@ int SimpleLightDetector::detectColor(const Light& light, const cv::Mat& color_im
     return -1;
 }
 
-// 灯条配对
-std::vector<SimpleLightDetector::PairResult> SimpleLightDetector::pairLights(
-    const std::vector<Light>& lights) {
-
-    std::vector<PairResult> pairs;
-
-    // ✅ 输出灯条数量
-    // printf("[Pairing] Total lights detected: %zu\n", lights.size());
-    fflush(stdout);
-
-    if (lights.size() < 2) {
-        // printf("[Pairing] ❌ Not enough lights for pairing (need >= 2)\n");
-        fflush(stdout);
-        return pairs;
+float SimpleLightDetector::calculatePatternConfidence(const std::vector<Spot>& top,
+                                                      const std::vector<Spot>& bottom,
+                                                      float width_px,
+                                                      float height_px) const
+{
+    if (top.empty() || bottom.empty() || width_px <= 1.f || height_px <= 1.f) {
+        return 0.0f;
     }
 
-    // 遍历所有灯条对
-    for (size_t i = 0; i < lights.size(); i++) {
-        for (size_t j = i + 1; j < lights.size(); j++) {
-            const Light& l1 = lights[i];
-            const Light& l2 = lights[j];
+    auto mean_center = [](const std::vector<Spot>& row) {
+        cv::Point2f c(0.f, 0.f);
+        for (const auto& s : row) c += s.center;
+        c *= (1.f / std::max<size_t>(1, row.size()));
+        return c;
+    };
 
-            float center_dist, angle_diff;
-            if (canPair(l1, l2, center_dist, angle_diff)) {
-                PairResult pair_result;
+    const cv::Point2f top_center = mean_center(top);
+    const cv::Point2f bottom_center = mean_center(bottom);
 
-                // 计算配对中心点
-                pair_result.center = (l1.center + l2.center) * 0.5f;
-                
-                // 根据配对模式设置灯条顺序
-                if (params_.pair_mode == 1) {
-                    // 上下配对：按y坐标排序，y小的在上
-                    if (l1.center.y < l2.center.y) {
-                        pair_result.light1_center = l1.center;  // 上侧
-                        pair_result.light2_center = l2.center;  // 下侧
-                    } else {
-                        pair_result.light1_center = l2.center;  // 上侧
-                        pair_result.light2_center = l1.center;  // 下侧
-                    }
-                } else {
-                    // 左右配对：按x坐标排序，x小的在左
-                    if (l1.center.x < l2.center.x) {
-                        pair_result.light1_center = l1.center;  // 左侧
-                        pair_result.light2_center = l2.center;  // 右侧
-                    } else {
-                        pair_result.light1_center = l2.center;  // 左侧
-                        pair_result.light2_center = l1.center;  // 右侧
-                    }
-                }
+    float count_score = 1.0f;
+    const int nt = static_cast<int>(top.size());
+    const int nb = static_cast<int>(bottom.size());
+    if (nt < params_.min_row_spots || nb < params_.min_row_spots) {
+        return 0.0f;
+    }
+    if (nt != nb) {
+        count_score *= 0.85f;
+    }
+    if ((nt != 3 && nt != 4) || (nb != 3 && nb != 4)) {
+        count_score *= 0.85f;
+    }
 
-                // 计算配对尺寸
-                if (params_.pair_mode == 1) {
-                    // 上下配对：宽度=灯条长度，高度=垂直距离+灯条宽度
-                    pair_result.width = std::max(l1.length, l2.length);
-                    pair_result.height = std::abs(l2.center.y - l1.center.y) + (l1.width + l2.width) * 0.5f;
-                } else {
-                    // 左右配对：宽度=水平距离+灯条宽度，高度=灯条长度
-                    pair_result.width = std::abs(l2.center.x - l1.center.x) + (l1.width + l2.width) * 0.5f;
-                    pair_result.height = std::max(l1.length, l2.length) * 1.2f;
-                }
+    const float center_x_offset = std::abs(top_center.x - bottom_center.x);
+    const float align_den =
+        std::max(1.0f, width_px * static_cast<float>(params_.row_center_x_tol_ratio));
+    float align_score = 1.0f - center_x_offset / align_den;
+    align_score = std::max(0.0f, std::min(1.0f, align_score));
 
-                // 计算配对角度
-                pair_result.angle = std::atan2(l2.center.y - l1.center.y,
-                                              l2.center.x - l1.center.x) * 180.0f / CV_PI;
+    const float top_width = top.back().center.x - top.front().center.x;
+    const float bottom_width = bottom.back().center.x - bottom.front().center.x;
+    const float width_diff = std::abs(top_width - bottom_width);
 
-                // 设置配对类型
-                pair_result.pair_type = params_.pair_mode;
+    const float width_den =
+        std::max(1.0f, width_px * static_cast<float>(params_.row_width_similarity_ratio));
+    float width_score = 1.0f - width_diff / width_den;
+    width_score = std::max(0.0f, std::min(1.0f, width_score));
 
-                // 计算置信度
-                pair_result.confidence = calculatePairConfidence(l1, l2, center_dist, angle_diff);
+    const float aspect = width_px / std::max(1.0f, height_px);
+    const float aspect_mid =
+        0.5f * (static_cast<float>(params_.pattern_min_aspect) +
+                static_cast<float>(params_.pattern_max_aspect));
+    const float aspect_half =
+        0.5f * (static_cast<float>(params_.pattern_max_aspect) -
+                static_cast<float>(params_.pattern_min_aspect));
 
-                pairs.push_back(pair_result);
-            }
+    float aspect_score = 1.0f;
+    if (aspect_half > 1e-6f) {
+        aspect_score = 1.0f - std::abs(aspect - aspect_mid) / aspect_half;
+        aspect_score = std::max(0.0f, std::min(1.0f, aspect_score));
+    }
+
+    auto row_angle_abs = [](const std::vector<Spot>& row) {
+        if (row.size() < 2) return 0.0f;
+        cv::Point2f d = row.back().center - row.front().center;
+        return std::abs(std::atan2(d.y, d.x));
+    };
+
+    const float top_angle = row_angle_abs(top);
+    const float bottom_angle = row_angle_abs(bottom);
+    const float mean_angle = 0.5f * (top_angle + bottom_angle);
+
+    const float max_angle = 20.0f * static_cast<float>(CV_PI) / 180.0f;
+    float angle_score = 1.0f - mean_angle / std::max(1e-6f, max_angle);
+    angle_score = std::max(0.0f, std::min(1.0f, angle_score));
+
+    float confidence =
+        count_score *
+        align_score *
+        width_score *
+        aspect_score *
+        angle_score;
+
+    confidence = std::max(0.0f, std::min(1.0f, confidence));
+    return confidence;
+}
+
+std::vector<SimpleLightDetector::PairResult>
+SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
+{
+    std::vector<PairResult> out;
+
+    if (spots.size() < 4) {
+        std::cout << "[pattern] reject: spots.size()=" << spots.size() << " < 4" << std::endl;
+        return out;
+    }
+
+    std::vector<Spot> sorted = spots;
+    std::sort(sorted.begin(), sorted.end(),
+              [](const Spot& a, const Spot& b) {
+                  return a.center.y < b.center.y;
+              });
+
+    std::cout << "[pattern] input spots=" << sorted.size() << std::endl;
+    for (size_t i = 0; i < sorted.size(); ++i) {
+        std::cout << "  [pattern] spot[" << i << "]"
+                  << " center=(" << sorted[i].center.x << "," << sorted[i].center.y << ")"
+                  << " area=" << sorted[i].area
+                  << " w=" << sorted[i].width
+                  << " h=" << sorted[i].height
+                  << " color=" << sorted[i].color
+                  << std::endl;
+    }
+
+    // 按 y 排序后，找最大相邻间隔作为上下两排分界
+    int split_idx = -1;
+    float max_gap = -1.0f;
+    for (int i = 0; i + 1 < static_cast<int>(sorted.size()); ++i) {
+        const float gap = sorted[i + 1].center.y - sorted[i].center.y;
+        std::cout << "[pattern] gap[" << i << "->" << (i + 1) << "]=" << gap << std::endl;
+        if (gap > max_gap) {
+            max_gap = gap;
+            split_idx = i;
         }
     }
 
-    return pairs;
+    if (split_idx < 0) {
+        std::cout << "[pattern] reject: split_idx < 0" << std::endl;
+        return out;
+    }
+
+    std::vector<Spot> top, bottom;
+    for (int i = 0; i <= split_idx; ++i) top.push_back(sorted[i]);
+    for (int i = split_idx + 1; i < static_cast<int>(sorted.size()); ++i) bottom.push_back(sorted[i]);
+
+    std::cout << "[pattern] split_idx=" << split_idx
+              << " max_gap=" << max_gap
+              << " top.size=" << top.size()
+              << " bottom.size=" << bottom.size()
+              << std::endl;
+
+    if (static_cast<int>(top.size()) < params_.min_row_spots ||
+        static_cast<int>(bottom.size()) < params_.min_row_spots) {
+        std::cout << "[pattern] reject: row spot count too small, "
+                  << "top=" << top.size()
+                  << " bottom=" << bottom.size()
+                  << " min_row_spots=" << params_.min_row_spots
+                  << std::endl;
+        return out;
+    }
+
+    auto sort_x = [](const Spot& a, const Spot& b) {
+        return a.center.x < b.center.x;
+    };
+    std::sort(top.begin(), top.end(), sort_x);
+    std::sort(bottom.begin(), bottom.end(), sort_x);
+
+    std::cout << "[pattern] top row after sort_x:" << std::endl;
+    for (size_t i = 0; i < top.size(); ++i) {
+        std::cout << "  top[" << i << "] center=("
+                  << top[i].center.x << "," << top[i].center.y << ")" << std::endl;
+    }
+    std::cout << "[pattern] bottom row after sort_x:" << std::endl;
+    for (size_t i = 0; i < bottom.size(); ++i) {
+        std::cout << "  bottom[" << i << "] center=("
+                  << bottom[i].center.x << "," << bottom[i].center.y << ")" << std::endl;
+    }
+
+    auto mean_center = [](const std::vector<Spot>& row) {
+        cv::Point2f c(0.f, 0.f);
+        for (const auto& s : row) c += s.center;
+        c *= (1.f / std::max<size_t>(1, row.size()));
+        return c;
+    };
+
+    const cv::Point2f top_center = mean_center(top);
+    const cv::Point2f bottom_center = mean_center(bottom);
+    const cv::Point2f target_center = 0.5f * (top_center + bottom_center);
+
+    const float top_width = top.back().center.x - top.front().center.x;
+    const float bottom_width = bottom.back().center.x - bottom.front().center.x;
+    const float width_px = 0.5f * (top_width + bottom_width);
+    const float height_px = std::abs(bottom_center.y - top_center.y);
+
+    std::cout << "[pattern] centers:"
+              << " top_center=(" << top_center.x << "," << top_center.y << ")"
+              << " bottom_center=(" << bottom_center.x << "," << bottom_center.y << ")"
+              << " target_center=(" << target_center.x << "," << target_center.y << ")"
+              << std::endl;
+
+    std::cout << "[pattern] sizes:"
+              << " top_width=" << top_width
+              << " bottom_width=" << bottom_width
+              << " width_px=" << width_px
+              << " height_px=" << height_px
+              << std::endl;
+
+    if (width_px <= 1.f || height_px <= 1.f) {
+        std::cout << "[pattern] reject: width_px<=1 or height_px<=1" << std::endl;
+        return out;
+    }
+
+    auto row_y_span = [](const std::vector<Spot>& row) {
+        float y_min = row.front().center.y;
+        float y_max = row.front().center.y;
+        for (const auto& s : row) {
+            y_min = std::min(y_min, s.center.y);
+            y_max = std::max(y_max, s.center.y);
+        }
+        return y_max - y_min;
+    };
+
+    const float top_y_span = row_y_span(top);
+    const float bottom_y_span = row_y_span(bottom);
+
+    // 方案 A：一排缺边缘点时，允许行内离散稍大一点
+    float y_span_limit = height_px * 0.35f;
+    if (top.size() != bottom.size()) {
+        y_span_limit *= 1.5f;
+    }
+
+    std::cout << "[pattern] y_span:"
+              << " top_y_span=" << top_y_span
+              << " bottom_y_span=" << bottom_y_span
+              << " limit=" << y_span_limit
+              << std::endl;
+
+    if (top_y_span > y_span_limit || bottom_y_span > y_span_limit) {
+        std::cout << "[pattern] reject: row_y_span too large" << std::endl;
+        return out;
+    }
+
+    const float aspect = width_px / height_px;
+    std::cout << "[pattern] aspect=" << aspect
+              << " range=[" << params_.pattern_min_aspect
+              << ", " << params_.pattern_max_aspect << "]"
+              << std::endl;
+
+    if (aspect < params_.pattern_min_aspect ||
+        aspect > params_.pattern_max_aspect) {
+        std::cout << "[pattern] reject: aspect out of range" << std::endl;
+        return out;
+    }
+
+    // 方案 A：当上下两排点数不等时，放宽中心 x 偏移约束
+    const float center_x_offset = std::abs(top_center.x - bottom_center.x);
+    float center_x_limit = width_px * params_.row_center_x_tol_ratio;
+    if (top.size() != bottom.size()) {
+        center_x_limit *= 1.8f;
+    }
+
+    std::cout << "[pattern] center_x_offset=" << center_x_offset
+              << " limit=" << center_x_limit
+              << std::endl;
+
+    if (center_x_offset > center_x_limit) {
+        std::cout << "[pattern] reject: center_x_offset too large" << std::endl;
+        return out;
+    }
+
+    // 方案 A：当上下两排点数不等时，弱化宽度一致性约束
+    const float width_diff = std::abs(top_width - bottom_width);
+    float width_diff_limit = width_px * params_.row_width_similarity_ratio;
+    if (top.size() != bottom.size()) {
+        width_diff_limit *= 2.0f;
+    }
+
+    std::cout << "[pattern] width_diff=" << width_diff
+              << " limit=" << width_diff_limit
+              << std::endl;
+
+    if (width_diff > width_diff_limit) {
+        std::cout << "[pattern] reject: width_diff too large" << std::endl;
+        return out;
+    }
+
+    // 目标顶边方向角（弧度）
+    cv::Point2f top_dir = top.back().center - top.front().center;
+    const float angle = std::atan2(top_dir.y, top_dir.x);
+
+    PairResult pr;
+    pr.center = target_center;         // 目标整体中心
+    pr.light1_center = top_center;     // 上排中心
+    pr.light2_center = bottom_center;  // 下排中心
+    pr.width = width_px;
+    pr.height = height_px;
+    pr.angle = angle;
+    pr.pair_type = 100;
+    pr.confidence = calculatePatternConfidence(top, bottom, width_px, height_px);
+
+    std::cout << "[pattern] ACCEPT:"
+              << " center=(" << pr.center.x << "," << pr.center.y << ")"
+              << " width=" << pr.width
+              << " height=" << pr.height
+              << " angle=" << pr.angle
+              << " conf=" << pr.confidence
+              << std::endl;
+
+    out.push_back(pr);
+    return out;
 }
-
-// 判断两个灯条是否可以配对
-bool SimpleLightDetector::canPair(const Light& l1, const Light& l2,
-                                 float& center_dist, float& angle_diff) const {
-
-    // printf("[canPair] Testing L1(%.1f,%.1f) vs L2(%.1f,%.1f)\n", 
-    //        l1.center.x, l1.center.y, l2.center.x, l2.center.y);
-
-    // 1. 长度比例检查 - 两个灯条长度应该相似
-    float length_ratio = std::min(l1.length, l2.length) / std::max(l1.length, l2.length);
-    // printf("  [Step1] length_ratio=%.3f (min=%.3f)\n", length_ratio, params_.min_light_ratio);
-    if (length_ratio < params_.min_light_ratio) {
-        // printf("  ❌ Step1 FAILED: length_ratio too small\n");
-        return false;
-    }
-
-    // 2. 角度差检查 - 两个灯条应该平行
-    angle_diff = angleDifference(l1.angle, l2.angle);
-    // printf("  [Step2] angle_diff=%.2f° (max=%.2f°)\n", angle_diff, params_.max_pair_angle);
-    if (angle_diff > params_.max_pair_angle) {
-        // printf("  ❌ Step2 FAILED: angle_diff too large\n");
-        return false;
-    }
-
-    float avg_length = (l1.length + l2.length) * 0.5f;
-    float dx = std::abs(l2.center.x - l1.center.x);
-    float dy = std::abs(l2.center.y - l1.center.y);
-    
-    // ========== 上下配对模式(立方体上边/下边在图像中上下分布) ==========
-    
-    // 3. X坐标差异检查 - 两个灯条应该在同一垂直线上（图像中）
-    float x_diff_ratio = dx / avg_length;
-    // printf("  [Step3] x_diff_ratio=%.3f (max=%.3f), dx=%.2f, avg_length=%.2f\n", 
-    //        x_diff_ratio, params_.max_x_diff_ratio, dx, avg_length);
-    if (x_diff_ratio > params_.max_x_diff_ratio) {
-        // printf("  ❌ Step3 FAILED: x_diff_ratio too large\n");
-        return false;
-    }
-    
-    // 4. 垂直距离检查 - 上下距离应该在合理范围内
-    float vertical_dist = dy / avg_length;
-    // printf("  [Step4] vertical_dist=%.3f (range=[%.3f, %.3f]), dy=%.2f\n", 
-    //        vertical_dist, params_.min_vertical_dist, params_.max_vertical_dist, dy);
-    if (vertical_dist < params_.min_vertical_dist || vertical_dist > params_.max_vertical_dist) {
-        // printf("  ❌ Step4 FAILED: vertical_dist out of range\n");
-        return false;
-    }
-    
-    // 5. 中心连线垂直度检查 - 两灯条中心连线应该接近垂直
-    // Step 5: 连线角度范围检查 - 过滤水平配对，保留接近垂直的配对
-    float connect_angle = std::atan2(dy, dx) * 180.0f / CV_PI;
-    
-    // printf("  Step5: connect_angle=%.2f° (range: [%.2f°, %.2f°]), dx=%.2f, dy=%.2f\n",
-    //        connect_angle, params_.min_connect_angle, params_.max_connect_angle, dx, dy);
-    fflush(stdout);
-    
-    if (connect_angle < params_.min_connect_angle || connect_angle > params_.max_connect_angle) {
-        // printf("  ❌ Step5 FAILED: angle %.2f° not in valid range [%.2f°, %.2f°] (L1=(%.1f,%.1f), L2=(%.1f,%.1f))\n",
-        //        connect_angle, params_.min_connect_angle, params_.max_connect_angle,
-        //        l1.center.x, l1.center.y, l2.center.x, l2.center.y);
-        fflush(stdout);
-        return false;
-    }
-    
-    // printf("  ✅ Step5 PASSED: angle %.2f° in valid range\n", connect_angle);
-    fflush(stdout);
-    
-    center_dist = vertical_dist;  // 返回垂直距离作为中心距
-
-    return true;
-}
-
-// 计算配对置信度
-float SimpleLightDetector::calculatePairConfidence(const Light& l1, const Light& l2,
-                                                   float center_dist, float angle_diff) const {
-    float confidence = 1.0f;
-
-    // 1. 长度比例相似度
-    float length_ratio = std::min(l1.length, l2.length) / std::max(l1.length, l2.length);
-    confidence *= length_ratio;  // 比例越接近1，置信度越高
-
-    // 2. 角度差相似度
-    float angle_similarity = 1.0f - (angle_diff / params_.max_pair_angle);
-    // --- 修改开始 ---
-    // 使用 std::max 确保非负，替代 C++17 的 std::clamp
-    confidence *= std::max(0.0f, angle_similarity);
-    // --- 修改结束 ---
-
-    // 3. 中心距适中度（在中间位置最好）
-    float ideal_dist = (params_.min_center_dist + params_.max_center_dist) * 0.5f;
-    float dist_deviation = std::abs(center_dist - ideal_dist);
-    float max_deviation = (params_.max_center_dist - params_.min_center_dist) * 0.5f;
-    float dist_ratio = 1.0f - (dist_deviation / max_deviation);
-    // --- 修改开始 ---
-    // 使用 std::max 确保非负
-    confidence *= std::max(0.0f, dist_ratio);
-    // --- 修改结束 ---
-
-    // 4. 面积相似度
-    float area_ratio = std::min(l1.area, l2.area) / std::max(l1.area, l2.area);
-    confidence *= area_ratio;
-
-    // --- 修改开始 ---
-    // 手动实现 clamp 效果，确保最终置信度在 [0, 1] 范围内
-    // 先确保不超过 1.0
-    confidence = std::min(confidence, 1.0f);
-    // 再确保不低于 0.0
-    confidence = std::max(confidence, 0.0f);
-    // --- 修改结束 ---
-
-    return confidence; // 返回最终置信度
-}
-
-
 // 创建调试图像
 // 注意：添加了 const 限定符
 void SimpleLightDetector::createDebugImage(const cv::Mat& color_img, const cv::Mat& binary_img) const {
