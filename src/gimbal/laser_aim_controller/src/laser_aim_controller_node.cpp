@@ -76,6 +76,17 @@ void LaserAimControllerNode::declareAndLoadParameters()
 
   this->declare_parameter<double>("fine_stack_max_abs_deg", 0.5);
 
+  // 增量选择与像素法配置
+  this->declare_parameter<std::string>("increment_mode", "auto"); // auto | pnp | pixel
+  this->declare_parameter<double>("pnp_exceed_threshold_deg", 5.0);
+
+  this->declare_parameter<double>("camera_fx", 1.0);
+  this->declare_parameter<double>("camera_fy", 1.0);
+  this->declare_parameter<double>("camera_cx", 0.0);
+  this->declare_parameter<double>("camera_cy", 0.0);
+
+  this->declare_parameter<std::vector<double>>("laser_pixel_uv", std::vector<double>{0.0, 0.0});
+
   target_topic_ = this->get_parameter("target_topic").as_string();
   gimbal_angles_topic_ = this->get_parameter("gimbal_angles_topic").as_string();
   gimbal_quaternion_topic_ = this->get_parameter("gimbal_quaternion_topic").as_string();
@@ -99,12 +110,31 @@ void LaserAimControllerNode::declareAndLoadParameters()
 
   fine_stack_max_abs_deg_ = this->get_parameter("fine_stack_max_abs_deg").as_double();
 
+  increment_mode_ = this->get_parameter("increment_mode").as_string();
+  pnp_exceed_threshold_deg_ = this->get_parameter("pnp_exceed_threshold_deg").as_double();
+
+  camera_fx_ = this->get_parameter("camera_fx").as_double();
+  camera_fy_ = this->get_parameter("camera_fy").as_double();
+  camera_cx_ = this->get_parameter("camera_cx").as_double();
+  camera_cy_ = this->get_parameter("camera_cy").as_double();
+
+  const auto laser_uv = this->get_parameter("laser_pixel_uv").as_double_array();
+  if (laser_uv.size() >= 2) {
+    laser_pixel_u_ = laser_uv[0];
+    laser_pixel_v_ = laser_uv[1];
+  }
+
   if (cam_offset.size() != 3 || laser_offset.size() != 3) {
     throw std::runtime_error("camera_offset_xyz and laser_offset_xyz must both have size 3");
   }
 
   laser_geometry_.setCameraOffset(Eigen::Vector3d(cam_offset[0], cam_offset[1], cam_offset[2]));
   laser_geometry_.setLaserOffset(Eigen::Vector3d(laser_offset[0], laser_offset[1], laser_offset[2]));
+
+  // 保存激光物理偏移到成员变量，供像素法按帧投影使用
+  laser_offset_x_ = laser_offset[0];
+  laser_offset_y_ = laser_offset[1];
+  laser_offset_z_ = laser_offset[2];
 
   angle_solver_.setLimits(
     this->get_parameter("yaw_inc_min_deg").as_double(),
@@ -247,18 +277,94 @@ void LaserAimControllerNode::targetCallback(
   const Eigen::Vector3d target_cam(msg->tx, msg->ty, msg->tz);
   const Eigen::Vector3d target_from_laser = laser_geometry_.targetFromLaser(target_cam);
 
-  CommandAngles inc = angle_solver_.solveIncrement(target_from_laser);
-  if (!inc.valid) {
-    publishRoughIfAvailable();
-    return;
+  // 先用 PnP 计算增量
+  CommandAngles inc_pnp = angle_solver_.solveIncrement(target_from_laser);
+
+  // 像素法计算增量（基于激光点像素与灯条中心像素距离）
+  auto computePixelIncrement = [&](CommandAngles & out_inc) -> bool {
+    // 像素法优先使用 PnP 的相机坐标 (tx,ty,tz) 投影为图像像素作为灯条中心，回退到 ROI 中心
+    double target_u = 0.0, target_v = 0.0;
+    bool have_target_pixel = false;
+    if (msg->has_pose && msg->tz != 0.0) {
+      // 使用相机坐标通过内参投影到像素平面（首选）
+      if (camera_fx_ <= 0.0 || camera_fy_ <= 0.0) return false;
+      target_u = camera_fx_ * static_cast<double>(msg->tx) / static_cast<double>(msg->tz) + camera_cx_;
+      target_v = camera_fy_ * static_cast<double>(msg->ty) / static_cast<double>(msg->tz) + camera_cy_;
+      have_target_pixel = true;
+    } else if (msg->roi_w > 0 && msg->roi_h > 0) {
+      // 回退：使用 ROI 中心作为灯条中心像素
+      target_u = static_cast<double>(msg->roi_x) + static_cast<double>(msg->roi_w) * 0.5;
+      target_v = static_cast<double>(msg->roi_y) + static_cast<double>(msg->roi_h) * 0.5;
+      have_target_pixel = true;
+    }
+
+    if (!have_target_pixel) return false;
+    if (camera_fx_ == 0.0 || camera_fy_ == 0.0) return false;
+
+    // 优先使用基于实际深度的激光像素投影 (深度视差)
+    double laser_u = laser_pixel_u_;
+    double laser_v = laser_pixel_v_;
+    if (msg->tz > min_valid_z_m_) {
+      // laser_offset_x_/y_ 是激光相对于相机的物理偏移 (米)
+      laser_u = camera_cx_ + camera_fx_ * (laser_offset_x_ / static_cast<double>(msg->tz));
+      laser_v = camera_cy_ + camera_fy_ * (laser_offset_y_ / static_cast<double>(msg->tz));
+    }
+
+    const double du = target_u - laser_u;
+    const double dv = target_v - laser_v;
+    const double rad2deg = 57.29577951308232;
+
+    out_inc.valid = true;
+    out_inc.yaw_deg = std::atan2(du, camera_fx_) * rad2deg;
+    out_inc.pitch_deg = std::atan2(dv, camera_fy_) * rad2deg;
+    return true;
+  };
+
+  // 根据参数选择使用哪种方式
+  CommandAngles inc_used;
+  bool used_pixel_method = false;
+  if (increment_mode_ == "pnp") {
+    if (!inc_pnp.valid) {
+      publishRoughIfAvailable();
+      return;
+    }
+    inc_used = inc_pnp;
+  } else if (increment_mode_ == "pixel") {
+    CommandAngles inc_pixel;
+    if (!computePixelIncrement(inc_pixel)) {
+      publishRoughIfAvailable();
+      return;
+    }
+    inc_used = inc_pixel;
+    used_pixel_method = true;
+  } else { // auto
+    bool pnp_exceeds = !inc_pnp.valid ||
+      (std::abs(inc_pnp.yaw_deg) > pnp_exceed_threshold_deg_) ||
+      (std::abs(inc_pnp.pitch_deg) > pnp_exceed_threshold_deg_);
+
+    if (pnp_exceeds) {
+      CommandAngles inc_pixel;
+      if (computePixelIncrement(inc_pixel)) {
+        inc_used = inc_pixel;
+        used_pixel_method = true;
+      } else if (inc_pnp.valid) {
+        inc_used = inc_pnp; // 回退到 PnP
+      } else {
+        publishRoughIfAvailable();
+        return;
+      }
+    } else {
+      // 使用 PnP
+      inc_used = inc_pnp;
+    }
   }
 
   double base_yaw = 0.0;
   double base_pitch = 0.0;
 
   bool fine_within_stack_limit =
-    std::abs(inc.yaw_deg) <= fine_stack_max_abs_deg_ &&
-    std::abs(inc.pitch_deg) <= fine_stack_max_abs_deg_;
+    std::abs(inc_used.yaw_deg) <= fine_stack_max_abs_deg_ &&
+    std::abs(inc_used.pitch_deg) <= fine_stack_max_abs_deg_;
 
   bool stacked_fine_on_rough = false;
 
@@ -271,22 +377,22 @@ void LaserAimControllerNode::targetCallback(
     base_pitch = rough_pitch_deg_;
 
     if (fine_within_stack_limit) {
-      base_yaw += inc.yaw_deg;
-      base_pitch += inc.pitch_deg;
+      base_yaw += inc_used.yaw_deg;
+      base_pitch += inc_used.pitch_deg;
       stacked_fine_on_rough = true;
     }
   } else {
     // 没有粗瞄时，保留原有细瞄独立输出逻辑
-    base_yaw = inc.yaw_deg;
-    base_pitch = inc.pitch_deg;
+    base_yaw = inc_used.yaw_deg;
+    base_pitch = inc_used.pitch_deg;
 
     if (output_mode_ == "absolute") {
       if (!current_gimbal_.valid) {
         publishRoughIfAvailable();
         return;
       }
-      base_yaw = current_gimbal_.yaw_deg + inc.yaw_deg;
-      base_pitch = current_gimbal_.pitch_deg + inc.pitch_deg;
+  base_yaw = current_gimbal_.yaw_deg + inc_used.yaw_deg;
+  base_pitch = current_gimbal_.pitch_deg + inc_used.pitch_deg;
     } else if (output_mode_ != "increment") {
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 2000,
@@ -326,7 +432,7 @@ void LaserAimControllerNode::targetCallback(
       "manual=(yaw=%.2f, pitch=%.2f), final=(yaw=%.2f, pitch=%.2f)",
       msg->tx, msg->ty, msg->tz,
       target_from_laser.x(), target_from_laser.y(), target_from_laser.z(),
-      inc.yaw_deg, inc.pitch_deg,
+  inc_used.yaw_deg, inc_used.pitch_deg,
       has_rough_cmd_ ? rough_yaw_deg_ : 0.0,
       has_rough_cmd_ ? rough_pitch_deg_ : 0.0,
       fine_stack_max_abs_deg_,
@@ -335,6 +441,13 @@ void LaserAimControllerNode::targetCallback(
       has_manual_cmd_ ? manual_yaw_deg_ : 0.0,
       has_manual_cmd_ ? manual_pitch_deg_ : 0.0,
       final_yaw, final_pitch);
+
+    if (publish_debug_) {
+      RCLCPP_INFO_THROTTLE(
+        this->get_logger(), *this->get_clock(), 100,
+        "increment source: %s",
+        used_pixel_method ? "pixel" : "pnp");
+    }
   }
 }
 

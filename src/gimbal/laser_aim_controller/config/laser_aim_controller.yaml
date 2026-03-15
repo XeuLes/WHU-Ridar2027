@@ -22,3 +22,17 @@ laser_aim_controller_node:
     yaw_inc_max_deg: 500.0
     pitch_inc_min_deg: -60.0
     pitch_inc_max_deg: 40.0
+    # 相机内参（建议与 auto_aim_fast 的 camera.yaml 保持一致）
+    # 优先从文件加载：camera_info_file 指向 auto_aim_fast 的 camera.yaml
+    camera_info_file: "src/auto_aim_fast/config/camera.yaml"
+    # 作为回退/默认值，仍保留 fx/fy/cx/cy（可删除以完全依赖文件）
+    camera_fx: 31210.0
+    camera_fy: 31200.0
+    camera_cx: 837.89
+    camera_cy: 625.51
+
+    # 激光点像素坐标的初始估计 (基于 laser_offset_xyz 和参考深度 15m)
+    # 计算: u = cx + fx * (laser_offset_x / ref_z)
+    #       v = cy + fy * (laser_offset_y / ref_z)
+    # 对于 laser_offset [0.0, -0.056, 0.0] 和 ref_z=15 -> u ~= 837.89, v ~= 509.04
+    laser_pixel_uv: [837.89, 509.04]

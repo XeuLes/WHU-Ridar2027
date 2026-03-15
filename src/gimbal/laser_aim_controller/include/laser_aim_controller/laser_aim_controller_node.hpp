@@ -76,6 +76,25 @@ private:
   AngleSolver angle_solver_;
   GimbalState current_gimbal_;
 
+  // 增量计算模式: "auto" | "pnp" | "pixel"
+  std::string increment_mode_{"auto"};
+  // 当使用 auto 模式时, 如果 PnP 计算的增量任一轴绝对值超过该阈值(度), 则改用像素距离法
+  double pnp_exceed_threshold_deg_{5.0};
+
+  // 相机内参 (用于像素->角度 近似计算)
+  double camera_fx_{0.0};
+  double camera_fy_{0.0};
+  double camera_cx_{0.0};
+  double camera_cy_{0.0};
+
+  // 激光点在图像中的像素坐标 (由标定或配置提供)
+  double laser_pixel_u_{0.0};
+  double laser_pixel_v_{0.0};
+  // 激光相对相机的物理偏移 (米)，用于按帧深度投影计算激光像素
+  double laser_offset_x_{0.0};
+  double laser_offset_y_{0.0};
+  double laser_offset_z_{0.0};
+
   bool has_last_output_{false};
   double last_yaw_out_deg_{0.0};
   double last_pitch_out_deg_{0.0};
