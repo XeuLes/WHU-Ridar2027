@@ -20,6 +20,9 @@ float32 tx
 float32 ty
 float32 tz
 
+float32 u
+float32 v
+
 int64 latency_ns
 
 # optional extra latency configured by user (e.g., actuator delay)
@@ -34,3 +37,5 @@ int32 roi_h
 uint64 pushed_frames
 uint64 processed_frames
 uint64 dropped_frames
+
+

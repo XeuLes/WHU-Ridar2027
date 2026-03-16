@@ -43,7 +43,7 @@ void GimbalAimSolverNode::declareAndLoadParameters()
   this->declare_parameter<std::string>("target_angles_topic", "/gimbal/rough_command_angles");
 
   this->declare_parameter<std::string>("target_side", "red");
-  this->declare_parameter<std::string>("gimbal_angle_order", "pitch_yaw");
+  this->declare_parameter<std::string>("gimbal_angle_order", "yaw_pitch");
 
   this->declare_parameter<bool>("publish_debug", true);
   this->declare_parameter<bool>("use_increment_output", false);

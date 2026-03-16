@@ -67,6 +67,11 @@ struct PipelineOutput
   uint64_t pushed_frames{0};
   uint64_t processed_frames{0};
   uint64_t dropped_frames{0};
+
+  bool has_target_center{false};
+  float target_u{0.0f};
+  float target_v{0.0f};
+
 };
 
 class Pipeline

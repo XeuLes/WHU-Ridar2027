@@ -73,7 +73,7 @@ def generate_launch_description():
         DeclareLaunchArgument("yaw_sweep_add_to_cmd", default_value="false"),
         DeclareLaunchArgument("yaw_sweep_center", default_value="0.0"),
         DeclareLaunchArgument("yaw_sweep_amplitude", default_value="30"),
-        DeclareLaunchArgument("yaw_sweep_period", default_value="1.0"),
+        DeclareLaunchArgument("yaw_sweep_period", default_value="5.0"),
         DeclareLaunchArgument("yaw_sweep_phase01", default_value="0.0"),
         # wave: sine / triangle / step
         DeclareLaunchArgument("yaw_sweep_wave", default_value="sine"),
@@ -86,7 +86,7 @@ def generate_launch_description():
         DeclareLaunchArgument("pitch_sweep_add_to_cmd", default_value="false"),
         DeclareLaunchArgument("pitch_sweep_center", default_value="0.0"),
         DeclareLaunchArgument("pitch_sweep_amplitude", default_value="30"),
-        DeclareLaunchArgument("pitch_sweep_period", default_value="2.0"),
+        DeclareLaunchArgument("pitch_sweep_period", default_value="5.0"),
         DeclareLaunchArgument("pitch_sweep_phase01", default_value="0.25"),
         DeclareLaunchArgument("pitch_sweep_wave", default_value="sine"),
         DeclareLaunchArgument("pitch_step_dt", default_value="1.0"),

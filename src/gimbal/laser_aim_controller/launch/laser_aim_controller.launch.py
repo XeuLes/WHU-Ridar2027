@@ -6,7 +6,7 @@ from launch_ros.actions import Node
 
 # 直接在此处修改 MODE 为 'auto', 'pnp' 或 'pixel' 即可切换增量来源模式，
 # 无需在命令行传参。例如：MODE = 'pixel'
-MODE = 'auto'
+MODE = 'pixel'
 
 
 def generate_launch_description():

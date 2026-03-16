@@ -227,6 +227,10 @@ PipelineOutput Pipeline::processFrame(const Frame & f)
       impl_->last_state = trk.state;
       impl_->last_roi = ROI{trk.roi.x, trk.roi.y, trk.roi.w, trk.roi.h, trk.roi.valid};
     }
+
+    out.has_target_center = false;
+    out.target_u = 0.0f;
+    out.target_v = 0.0f;
     return out;
   }
 
@@ -237,6 +241,10 @@ PipelineOutput Pipeline::processFrame(const Frame & f)
   timer.tic();
   auto pose3d = impl_->pnp.solve(best2d);
   out.stats.pnp_ns = timer.tocNs();
+
+  out.has_target_center = true;
+  out.target_u = best2d.center.x;
+  out.target_v = best2d.center.y;
 
   pose3d.score = impl_->pose_quality.confidence(pose3d);
 

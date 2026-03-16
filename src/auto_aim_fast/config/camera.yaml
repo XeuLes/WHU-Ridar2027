@@ -1,7 +1,7 @@
 auto_aim_node:
   ros__parameters:
-    camera.fx: 31210.0
-    camera.fy: 31200.0
-    camera.cx: 837.89
-    camera.cy: 625.51
-    camera.dist: [3.177409, 0.048404, 0.011796, 0.028905, 0.000000]
+    camera.fx: 15389.868272
+    camera.fy: 15116.554824
+    camera.cx: 841.988257
+    camera.cy: 675.935439
+    camera.dist: [3.359013 ,-580.598952 ,-0.015105 ,0.028953 ,0.000000]

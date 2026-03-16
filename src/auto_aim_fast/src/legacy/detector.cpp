@@ -2,7 +2,6 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric> // For std::accumulate if needed
-#include <iostream> // For std::cout debug logging
 
 // detector.cpp 顶部追加
 #ifdef AUTO_AIM_FAST_USE_CUDA
@@ -323,7 +322,7 @@ SimpleLightDetector::detectSpots(const cv::Mat& color_img, const cv::Mat& binary
     int pass_shape = 0;
     int pass_color = 0;
 
-    std::cout << "[detectSpots] contours=" << contours.size() << std::endl;
+    // std::cout << "[detectSpots] contours=" << contours.size() << std::endl;
 
     for (const auto& contour : contours) {
         if (contour.size() < 3) continue;
@@ -342,24 +341,24 @@ SimpleLightDetector::detectSpots(const cv::Mat& color_img, const cv::Mat& binary
         }
 
         if (!isValidSpot(spot)) {
-            std::cout << "[detectSpots] reject shape:"
-                      << " area=" << spot.area
-                      << " w=" << spot.width
-                      << " h=" << spot.height
-                      << " ratio=" << (std::min(spot.width, spot.height) / std::max(spot.width, spot.height))
-                      << std::endl;
+            // std::cout << "[detectSpots] reject shape:"
+            //           << " area=" << spot.area
+            //           << " w=" << spot.width
+            //           << " h=" << spot.height
+            //           << " ratio=" << (std::min(spot.width, spot.height) / std::max(spot.width, spot.height))
+            //           << std::endl;
             continue;
         }
         pass_shape++;
 
         spot.color = detectColorFromRect(spot.rect, color_img);
 
-        std::cout << "[detectSpots] color check:"
-                  << " area=" << spot.area
-                  << " center=(" << spot.center.x << "," << spot.center.y << ")"
-                  << " color=" << spot.color
-                  << " target=" << params_.target_color
-                  << std::endl;
+        // std::cout << "[detectSpots] color check:"
+        //           << " area=" << spot.area
+        //           << " center=(" << spot.center.x << "," << spot.center.y << ")"
+        //           << " color=" << spot.color
+        //           << " target=" << params_.target_color
+        //           << std::endl;
 
         if (spot.color != params_.target_color) {
             continue;
@@ -369,22 +368,22 @@ SimpleLightDetector::detectSpots(const cv::Mat& color_img, const cv::Mat& binary
         spots.push_back(spot);
     }
 
-    std::cout << "[detectSpots] pass_area=" << pass_area
-              << " pass_shape=" << pass_shape
-              << " pass_color=" << pass_color
-              << " final_spots=" << spots.size()
-              << std::endl;
+    // std::cout << "[detectSpots] pass_area=" << pass_area
+    //           << " pass_shape=" << pass_shape
+    //           << " pass_color=" << pass_color
+    //           << " final_spots=" << spots.size()
+    //           << std::endl;
 
     return spots;
 }
 
 // 判断是否为有效灯条
 bool SimpleLightDetector::isValidSpot(const Spot& spot) const {
-    std::cout << "[isValidSpot FORCE PASS] "
-              << "area=" << spot.area
-              << " w=" << spot.width
-              << " h=" << spot.height
-              << std::endl;
+    // std::cout << "[isValidSpot FORCE PASS] "
+    //           << "area=" << spot.area
+    //           << " w=" << spot.width
+    //           << " h=" << spot.height
+    //           << std::endl;
     return true;
 }
 
@@ -563,7 +562,7 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
     std::vector<PairResult> out;
 
     if (spots.size() < 4) {
-        std::cout << "[pattern] reject: spots.size()=" << spots.size() << " < 4" << std::endl;
+        // std::cout << "[pattern] reject: spots.size()=" << spots.size() << " < 4" << std::endl;
         return out;
     }
 
@@ -573,23 +572,23 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
                   return a.center.y < b.center.y;
               });
 
-    std::cout << "[pattern] input spots=" << sorted.size() << std::endl;
-    for (size_t i = 0; i < sorted.size(); ++i) {
-        std::cout << "  [pattern] spot[" << i << "]"
-                  << " center=(" << sorted[i].center.x << "," << sorted[i].center.y << ")"
-                  << " area=" << sorted[i].area
-                  << " w=" << sorted[i].width
-                  << " h=" << sorted[i].height
-                  << " color=" << sorted[i].color
-                  << std::endl;
-    }
+    // std::cout << "[pattern] input spots=" << sorted.size() << std::endl;
+    // for (size_t i = 0; i < sorted.size(); ++i) {
+    //     std::cout << "  [pattern] spot[" << i << "]"
+    //               << " center=(" << sorted[i].center.x << "," << sorted[i].center.y << ")"
+    //               << " area=" << sorted[i].area
+    //               << " w=" << sorted[i].width
+    //               << " h=" << sorted[i].height
+    //               << " color=" << sorted[i].color
+    //               << std::endl;
+    // }
 
     // 按 y 排序后，找最大相邻间隔作为上下两排分界
     int split_idx = -1;
     float max_gap = -1.0f;
     for (int i = 0; i + 1 < static_cast<int>(sorted.size()); ++i) {
         const float gap = sorted[i + 1].center.y - sorted[i].center.y;
-        std::cout << "[pattern] gap[" << i << "->" << (i + 1) << "]=" << gap << std::endl;
+        // std::cout << "[pattern] gap[" << i << "->" << (i + 1) << "]=" << gap << std::endl;
         if (gap > max_gap) {
             max_gap = gap;
             split_idx = i;
@@ -597,7 +596,7 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
     }
 
     if (split_idx < 0) {
-        std::cout << "[pattern] reject: split_idx < 0" << std::endl;
+        // std::cout << "[pattern] reject: split_idx < 0" << std::endl;
         return out;
     }
 
@@ -605,19 +604,19 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
     for (int i = 0; i <= split_idx; ++i) top.push_back(sorted[i]);
     for (int i = split_idx + 1; i < static_cast<int>(sorted.size()); ++i) bottom.push_back(sorted[i]);
 
-    std::cout << "[pattern] split_idx=" << split_idx
-              << " max_gap=" << max_gap
-              << " top.size=" << top.size()
-              << " bottom.size=" << bottom.size()
-              << std::endl;
+    // std::cout << "[pattern] split_idx=" << split_idx
+    //           << " max_gap=" << max_gap
+    //           << " top.size=" << top.size()
+    //           << " bottom.size=" << bottom.size()
+    //           << std::endl;
 
     if (static_cast<int>(top.size()) < params_.min_row_spots ||
         static_cast<int>(bottom.size()) < params_.min_row_spots) {
-        std::cout << "[pattern] reject: row spot count too small, "
-                  << "top=" << top.size()
-                  << " bottom=" << bottom.size()
-                  << " min_row_spots=" << params_.min_row_spots
-                  << std::endl;
+        // std::cout << "[pattern] reject: row spot count too small, "
+        //           << "top=" << top.size()
+        //           << " bottom=" << bottom.size()
+        //           << " min_row_spots=" << params_.min_row_spots
+        //           << std::endl;
         return out;
     }
 
@@ -627,16 +626,16 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
     std::sort(top.begin(), top.end(), sort_x);
     std::sort(bottom.begin(), bottom.end(), sort_x);
 
-    std::cout << "[pattern] top row after sort_x:" << std::endl;
-    for (size_t i = 0; i < top.size(); ++i) {
-        std::cout << "  top[" << i << "] center=("
-                  << top[i].center.x << "," << top[i].center.y << ")" << std::endl;
-    }
-    std::cout << "[pattern] bottom row after sort_x:" << std::endl;
-    for (size_t i = 0; i < bottom.size(); ++i) {
-        std::cout << "  bottom[" << i << "] center=("
-                  << bottom[i].center.x << "," << bottom[i].center.y << ")" << std::endl;
-    }
+    // std::cout << "[pattern] top row after sort_x:" << std::endl;
+    // for (size_t i = 0; i < top.size(); ++i) {
+    //     std::cout << "  top[" << i << "] center=("
+    //               << top[i].center.x << "," << top[i].center.y << ")" << std::endl;
+    // }
+    // std::cout << "[pattern] bottom row after sort_x:" << std::endl;
+    // for (size_t i = 0; i < bottom.size(); ++i) {
+    //     std::cout << "  bottom[" << i << "] center=("
+    //               << bottom[i].center.x << "," << bottom[i].center.y << ")" << std::endl;
+    // }
 
     auto mean_center = [](const std::vector<Spot>& row) {
         cv::Point2f c(0.f, 0.f);
@@ -654,21 +653,21 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
     const float width_px = 0.5f * (top_width + bottom_width);
     const float height_px = std::abs(bottom_center.y - top_center.y);
 
-    std::cout << "[pattern] centers:"
-              << " top_center=(" << top_center.x << "," << top_center.y << ")"
-              << " bottom_center=(" << bottom_center.x << "," << bottom_center.y << ")"
-              << " target_center=(" << target_center.x << "," << target_center.y << ")"
-              << std::endl;
+    // std::cout << "[pattern] centers:"
+    //           << " top_center=(" << top_center.x << "," << top_center.y << ")"
+    //           << " bottom_center=(" << bottom_center.x << "," << bottom_center.y << ")"
+    //           << " target_center=(" << target_center.x << "," << target_center.y << ")"
+    //           << std::endl;
 
-    std::cout << "[pattern] sizes:"
-              << " top_width=" << top_width
-              << " bottom_width=" << bottom_width
-              << " width_px=" << width_px
-              << " height_px=" << height_px
-              << std::endl;
+    // std::cout << "[pattern] sizes:"
+    //           << " top_width=" << top_width
+    //           << " bottom_width=" << bottom_width
+    //           << " width_px=" << width_px
+    //           << " height_px=" << height_px
+    //           << std::endl;
 
     if (width_px <= 1.f || height_px <= 1.f) {
-        std::cout << "[pattern] reject: width_px<=1 or height_px<=1" << std::endl;
+        // std::cout << "[pattern] reject: width_px<=1 or height_px<=1" << std::endl;
         return out;
     }
 
@@ -691,26 +690,26 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
         y_span_limit *= 1.5f;
     }
 
-    std::cout << "[pattern] y_span:"
-              << " top_y_span=" << top_y_span
-              << " bottom_y_span=" << bottom_y_span
-              << " limit=" << y_span_limit
-              << std::endl;
+    // std::cout << "[pattern] y_span:"
+    //           << " top_y_span=" << top_y_span
+    //           << " bottom_y_span=" << bottom_y_span
+    //           << " limit=" << y_span_limit
+    //           << std::endl;
 
     if (top_y_span > y_span_limit || bottom_y_span > y_span_limit) {
-        std::cout << "[pattern] reject: row_y_span too large" << std::endl;
+        // std::cout << "[pattern] reject: row_y_span too large" << std::endl;
         return out;
     }
 
     const float aspect = width_px / height_px;
-    std::cout << "[pattern] aspect=" << aspect
-              << " range=[" << params_.pattern_min_aspect
-              << ", " << params_.pattern_max_aspect << "]"
-              << std::endl;
+    // std::cout << "[pattern] aspect=" << aspect
+    //           << " range=[" << params_.pattern_min_aspect
+    //           << ", " << params_.pattern_max_aspect << "]"
+    //           << std::endl;
 
     if (aspect < params_.pattern_min_aspect ||
         aspect > params_.pattern_max_aspect) {
-        std::cout << "[pattern] reject: aspect out of range" << std::endl;
+        // std::cout << "[pattern] reject: aspect out of range" << std::endl;
         return out;
     }
 
@@ -721,12 +720,12 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
         center_x_limit *= 1.8f;
     }
 
-    std::cout << "[pattern] center_x_offset=" << center_x_offset
-              << " limit=" << center_x_limit
-              << std::endl;
+    // std::cout << "[pattern] center_x_offset=" << center_x_offset
+    //           << " limit=" << center_x_limit
+    //           << std::endl;
 
     if (center_x_offset > center_x_limit) {
-        std::cout << "[pattern] reject: center_x_offset too large" << std::endl;
+        // std::cout << "[pattern] reject: center_x_offset too large" << std::endl;
         return out;
     }
 
@@ -737,12 +736,12 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
         width_diff_limit *= 2.0f;
     }
 
-    std::cout << "[pattern] width_diff=" << width_diff
-              << " limit=" << width_diff_limit
-              << std::endl;
+    // std::cout << "[pattern] width_diff=" << width_diff
+    //           << " limit=" << width_diff_limit
+    //           << std::endl;
 
     if (width_diff > width_diff_limit) {
-        std::cout << "[pattern] reject: width_diff too large" << std::endl;
+        // std::cout << "[pattern] reject: width_diff too large" << std::endl;
         return out;
     }
 
@@ -760,13 +759,13 @@ SimpleLightDetector::groupSpotsToPatterns(const std::vector<Spot>& spots)
     pr.pair_type = 100;
     pr.confidence = calculatePatternConfidence(top, bottom, width_px, height_px);
 
-    std::cout << "[pattern] ACCEPT:"
-              << " center=(" << pr.center.x << "," << pr.center.y << ")"
-              << " width=" << pr.width
-              << " height=" << pr.height
-              << " angle=" << pr.angle
-              << " conf=" << pr.confidence
-              << std::endl;
+    // std::cout << "[pattern] ACCEPT:"
+    //           << " center=(" << pr.center.x << "," << pr.center.y << ")"
+    //           << " width=" << pr.width
+    //           << " height=" << pr.height
+    //           << " angle=" << pr.angle
+    //           << " conf=" << pr.confidence
+    //           << std::endl;
 
     out.push_back(pr);
     return out;

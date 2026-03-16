@@ -10,7 +10,7 @@ gimbal_aim_solver_node:
     # /gimbal/angles 的顺序:
     # "pitch_yaw" 表示 data[0]=pitch, data[1]=yaw
     # "yaw_pitch" 表示 data[0]=yaw, data[1]=pitch
-    gimbal_angle_order: "pitch_yaw"
+    gimbal_angle_order: "yaw_pitch"
 
     # false: 发布绝对目标角
     # true: 发布相对当前角度的增量

@@ -7,6 +7,7 @@
 #include <opencv2/core.hpp>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 // cv_bridge for publishing debug images
 #include <cv_bridge/cv_bridge.h>
@@ -410,6 +411,14 @@ void AutoAimNode::onPublish()
   tgt.roi_y = out.roi_dbg.y;
   tgt.roi_w = out.roi_dbg.w;
   tgt.roi_h = out.roi_dbg.h;
+
+  if (out.has_target_center) {
+    tgt.u = out.target_u;
+    tgt.v = out.target_v;
+  } else {
+    tgt.u = std::numeric_limits<float>::quiet_NaN();
+    tgt.v = std::numeric_limits<float>::quiet_NaN();
+  }
 
   tgt.pushed_frames = out.pushed_frames;
   tgt.processed_frames = out.processed_frames;

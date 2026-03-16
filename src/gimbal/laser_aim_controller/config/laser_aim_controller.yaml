@@ -6,8 +6,9 @@ laser_aim_controller_node:
     rough_command_topic: "/gimbal/rough_command_angles"
     command_topic: "/gimbal/command_angles"
 
-    gimbal_angle_order: "pitch_yaw"
+    gimbal_angle_order: "yaw_pitch"
     output_mode: "increment"
+    increment_mode: "pixel"
 
     publish_debug: true
     enable_output_filter: true
@@ -35,4 +36,4 @@ laser_aim_controller_node:
     # 计算: u = cx + fx * (laser_offset_x / ref_z)
     #       v = cy + fy * (laser_offset_y / ref_z)
     # 对于 laser_offset [0.0, -0.056, 0.0] 和 ref_z=15 -> u ~= 837.89, v ~= 509.04
-    laser_pixel_uv: [837.89, 509.04]
+    laser_pixel_uv: [803.0, 137.0]
