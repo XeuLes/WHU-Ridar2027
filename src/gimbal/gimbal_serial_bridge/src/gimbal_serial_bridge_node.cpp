@@ -239,8 +239,9 @@ public:
 
         RCLCPP_INFO(
             this->get_logger(),
-            "Started. baud=%d cmd_topic=%s enable_topic=%s yaw_drift_rate=%.9f",
-            baud_, cmd_topic_.c_str(), enable_topic_.c_str(), yaw_drift_rate_);
+            "Started. baud=%d cmd_topic=%s enable_topic=%s yaw_drift_rate=%.9f pitch_protocol_bias_deg=%.6f",
+            baud_, cmd_topic_.c_str(), enable_topic_.c_str(),
+            yaw_drift_rate_, pitch_protocol_bias_deg_);
         RCLCPP_INFO(
             this->get_logger(),
             "Publish topics: angles_raw=%s angles_true=%s quaternion_raw=%s quaternion_true=%s mode=%s",
@@ -292,6 +293,10 @@ private:
 
         // same unit as yaw per second
         this->declare_parameter<double>("yaw_drift_rate", 0.05);
+        // pitch protocol/frame bias:
+        // tx to MCU   : pitch_hw   = pitch_ctrl + bias
+        // rx to ctrl  : pitch_ctrl = pitch_hw   - bias
+        this->declare_parameter<double>("pitch_protocol_bias_deg", 0.0);
     }
 
     void loadParams()
@@ -317,6 +322,7 @@ private:
 
         enable_.store(this->get_parameter("default_enable").as_bool());
         yaw_drift_rate_ = this->get_parameter("yaw_drift_rate").as_double();
+        pitch_protocol_bias_deg_ = this->get_parameter("pitch_protocol_bias_deg").as_double();
     }
 
     void closeFd()
@@ -420,18 +426,21 @@ private:
         double yaw_true,
         const QuatWXYZ& q_true)
     {
-        // raw angles
+        // raw angles (MCU/raw protocol frame)
         std_msgs::msg::Float64MultiArray angles_raw;
         angles_raw.data.resize(2);
         angles_raw.data[0] = static_cast<double>(rx.yaw);
         angles_raw.data[1] = static_cast<double>(rx.pitch);
         pub_angles_raw_->publish(angles_raw);
 
-        // true angles
+        // true/control angles
+        const double pitch_true =
+            static_cast<double>(rx.pitch) - pitch_protocol_bias_deg_;
+
         std_msgs::msg::Float64MultiArray angles_true;
         angles_true.data.resize(2);
         angles_true.data[0] = yaw_true;
-        angles_true.data[1] = static_cast<double>(rx.pitch);
+        angles_true.data[1] = pitch_true;
         pub_angles_true_->publish(angles_true);
 
         // raw quaternion
@@ -454,7 +463,6 @@ private:
         qmsg_true.quaternion.z = q_true.z;
         pub_quaternion_true_->publish(qmsg_true);
     }
-
     void rxLoop()
     {
         std::vector<uint8_t> rxbuf;
@@ -548,7 +556,8 @@ private:
                 // 如果协议中真正可信的双轴角度来源是 rx.yaw / rx.pitch，
                 // 那 true quaternion 应直接由补偿后的 yaw_true 和 rx.pitch 重建
                 const double roll_true = 0.0;
-                const double pitch_true = static_cast<double>(rx.pitch);
+                const double pitch_true =
+                    static_cast<double>(rx.pitch) - pitch_protocol_bias_deg_;
                 QuatWXYZ q_true = quat_from_euler(roll_true, pitch_true, yaw_true);
 
                 publishRawAndTrue(rx, yaw_true, q_true);
@@ -617,7 +626,9 @@ private:
             }
 
             const float base_yaw_true = has_cmd ? cmd_yaw_true : 0.0f;
-            const float base_pitch = has_cmd ? cmd_pitch : 0.0f;
+            const float base_pitch_ctrl = has_cmd ? cmd_pitch : 0.0f;
+            const float base_pitch_hw =
+                base_pitch_ctrl + static_cast<float>(pitch_protocol_bias_deg_);
 
             // host true yaw -> drifted yaw for MCU
             const double t_total_sec = computeTxDriftSeconds();
@@ -626,7 +637,7 @@ private:
 
             if (tx.mode == 1) {
                 tx.yaw = base_yaw_true + yaw_drift;
-                tx.pitch = base_pitch;
+                tx.pitch = base_pitch_hw;;
             } else {
                 tx.yaw = 0.0f;
                 tx.pitch = 0.0f;
@@ -708,6 +719,11 @@ private:
 
     // same unit as yaw per second
     double yaw_drift_rate_{0.0};
+
+    // protocol/frame pitch bias:
+    // tx to MCU   : pitch_hw   = pitch_ctrl + bias
+    // rx to ctrl  : pitch_ctrl = pitch_hw   - bias
+    double pitch_protocol_bias_deg_{0.0};
 
     // ROS publishers/subscribers
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_angles_raw_;
