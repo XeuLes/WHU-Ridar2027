@@ -96,6 +96,25 @@ install(TARGETS
   DESTINATION lib/${PROJECT_NAME}
 )
 
+## 生成图像存储节点可执行文件
+add_executable(image_saver_node
+  src/image_saver_node.cpp
+)
+
+## 链接图像存储节点依赖库（ROS 2 + OpenCV）
+ament_target_dependencies(image_saver_node
+  rclcpp
+  sensor_msgs
+  cv_bridge
+  OpenCV
+)
+
+## 安装图像存储节点
+install(TARGETS
+  image_saver_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ###########################################################################
 # 6. 测试配置
 ###########################################################################

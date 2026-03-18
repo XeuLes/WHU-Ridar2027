@@ -24,7 +24,7 @@ public:
         : Node("manual_angle_cmd_node", options)
     {
         // 改为手动累计量输出话题，不再直发最终控制话题
-        declare_parameter<std::string>("cmd_topic", "/gimbal/command_angle_manual");
+        declare_parameter<std::string>("cmd_topic", "/gimbal/command_angles");
         declare_parameter<std::string>("enable_topic", "/gimbal/enable");
 
         declare_parameter<double>("yaw_deg", 0.0);

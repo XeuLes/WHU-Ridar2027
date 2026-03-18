@@ -1,21 +1,73 @@
 laser_aim_controller_node:
   ros__parameters:
+    # ==================== topics ====================
     target_topic: "/auto_aim/target"
     gimbal_angles_topic: "/gimbal/angles_true"
     gimbal_quaternion_topic: "/gimbal/quaternion_true"
     rough_command_topic: "/gimbal/rough_command_angles"
+    manual_command_topic: "/gimbal/command_angle_manual"
     command_topic: "/gimbal/command_angles"
 
+    # ==================== basic mode ====================
     gimbal_angle_order: "yaw_pitch"
-    output_mode: "increment"
     increment_mode: "pixel"
 
     publish_debug: true
-    enable_output_filter: true
     fallback_to_rough_when_no_target: true
-    output_filter_alpha: 0.3
-    min_valid_z_m: 0.05
+    enable_pnp_assist: false
+    enable_output_filter: true
 
+    output_filter_alpha: 0.30
+
+    min_valid_z_m: 0.05
+    control_rate_hz: 100.0
+    target_timeout_s: 0.12
+    feedback_snap_deg: 0.5
+
+    # ==================== search / recover ====================
+    search_stage_mode: "scan"
+    scan_window_half_yaw_deg: 1.5
+    scan_window_half_pitch_deg: 1.5
+    scan_period_s: 4.0
+    scan_phase_x_rad: 0.0
+    scan_phase_y_rad: 1.57079632679
+
+    recover_max_vel_deg_s: 160.0
+    recover_max_acc_deg_s2: 3000.0
+    stop_error_deg: 0.08
+
+    recover_output_filter_alpha: 0.25
+    hold_output_filter_alpha: 0.20
+    scan_output_filter_alpha: 1.00
+
+    recover_rough_timeout_s: 0.25
+    recover_rough_measurement_alpha: 0.30
+    recover_rough_velocity_alpha: 0.18
+    recover_rough_prediction_delay_s: 0.05
+    recover_rough_prediction_max_lead_deg: 2.0
+
+    recover_scan_center_max_vel_deg_s: 25.0
+    recover_scan_center_max_acc_deg_s2: 300.0
+
+    recover_scan_yaw_envelope_full_on_err_deg: 0.20
+    recover_scan_yaw_envelope_full_off_err_deg: 0.80
+    recover_scan_pitch_envelope_full_on_err_deg: 0.35
+    recover_scan_pitch_envelope_full_off_err_deg: 1.20
+
+    recover_scan_envelope_rise_s: 0.60
+    recover_scan_envelope_fall_s: 0.20
+
+    recover_scan_yaw_freq_scale: 0.45
+    recover_scan_pitch_freq_scale: 0.90
+
+    recover_scan_yaw_amp_scale: 0.20
+    recover_scan_yaw_env_max: 0.35
+
+    recover_scan_pitch_amp_up_scale: 1.00
+    recover_scan_pitch_amp_down_scale: 0.35
+    recover_scan_pitch_up_bias_deg: 0.30
+
+    # ==================== geometry ====================
     camera_offset_xyz: [0.0, -0.021, 0.0]
     laser_offset_xyz: [0.0, -0.056, 0.0]
 
@@ -23,17 +75,88 @@ laser_aim_controller_node:
     yaw_inc_max_deg: 500.0
     pitch_inc_min_deg: -60.0
     pitch_inc_max_deg: 40.0
-    # 相机内参（建议与 auto_aim_fast 的 camera.yaml 保持一致）
-    # 优先从文件加载：camera_info_file 指向 auto_aim_fast 的 camera.yaml
-    camera_info_file: "src/auto_aim_fast/config/camera.yaml"
-    # 作为回退/默认值，仍保留 fx/fy/cx/cy（可删除以完全依赖文件）
+    fine_single_step_max_abs_deg: 2.0
+
+    # ==================== camera intrinsics ====================
     camera_fx: 31210.0
     camera_fy: 31200.0
     camera_cx: 837.89
     camera_cy: 625.51
 
-    # 激光点像素坐标的初始估计 (基于 laser_offset_xyz 和参考深度 15m)
-    # 计算: u = cx + fx * (laser_offset_x / ref_z)
-    #       v = cy + fy * (laser_offset_y / ref_z)
-    # 对于 laser_offset [0.0, -0.056, 0.0] 和 ref_z=15 -> u ~= 837.89, v ~= 509.04
     laser_pixel_uv: [803.0, 137.0]
+
+    # ==================== pixel zone ====================
+    pixel_far_error_px: 300.0
+    pixel_near_error_px: 100.0
+    pixel_very_near_error_px: 80.0
+    pixel_ultra_near_error_px: 40.0
+
+    pixel_far_avg_frames: 4
+    pixel_mid_avg_frames: 3
+    pixel_near_avg_frames: 2
+    pixel_very_near_avg_frames: 2
+    pixel_ultra_near_avg_frames: 2
+
+    pixel_far_cmd_interval_ms: 0
+    pixel_mid_cmd_interval_ms: 40
+    pixel_near_cmd_interval_ms: 100
+    pixel_very_near_cmd_interval_ms: 160
+    pixel_ultra_near_cmd_interval_ms: 260
+
+    pixel_far_scale: 1.00
+    pixel_mid_scale: 0.65
+    pixel_near_scale: 0.35
+    pixel_very_near_scale: 0.20
+    pixel_ultra_near_scale: 0.12
+
+    pixel_far_step_max_deg: 2.00
+    pixel_mid_step_max_deg: 1.00
+    pixel_near_step_max_deg: 0.90
+    pixel_very_near_step_max_deg: 0.80
+    pixel_ultra_near_step_max_deg: 0.50
+
+    pixel_deadzone_deg: 0.003
+    pixel_tolerance_yaw_deg: 0.01
+    pixel_tolerance_pitch_deg: 0.01
+
+    pixel_direction_excite_enable: false
+    pixel_direction_excite_trigger_frames: 3
+    pixel_direction_excite_boost_hold_frames: 3
+    pixel_direction_excite_cmd_min_effective_deg: 0.03
+    pixel_direction_excite_feedback_min_effective_deg: 0.005
+    pixel_direction_excite_corr_min_deg: 0.05
+    pixel_direction_excite_ratio: 0.45
+    pixel_direction_excite_min_deg: 0.08
+    pixel_direction_excite_max_deg: 0.30
+    pixel_direction_reverse_clear_frames: 2
+    pixel_direction_reverse_clear_vel_deg_s: 0.02
+
+    # ==================== PnP assist ====================
+    pnp_exceed_threshold_deg: 5.0
+    pnp_assist_gain: 0.06
+    pnp_assist_max_deg: 0.02
+    pnp_assist_lpf_alpha: 0.10
+    pnp_assist_valid_inc_deg: 1.0
+
+    pnp_only_output_filter_alpha: 0.60
+
+    # ==================== track planner ====================
+    track_output_filter_alpha: 0.85
+
+    track_low_speed_delay_s: 0.006
+    track_high_speed_delay_s: 0.012
+    track_speed_threshold_deg_s: 12.0
+    track_prediction_max_lead_deg: 0.08
+
+    track_measurement_alpha: 0.22
+    track_velocity_alpha: 0.04
+
+    track_pnp_consistency_deg: 0.35
+    track_pnp_reject_deg: 1.20
+    track_pnp_blend_weight: 0.10
+
+    track_feedback_reset_deg: 1.0
+    manual_always_add: true
+
+    fine_track_max_vel_deg_s: 8.0
+    fine_track_max_acc_deg_s2: 80.0

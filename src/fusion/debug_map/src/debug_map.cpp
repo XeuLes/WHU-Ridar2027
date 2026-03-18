@@ -234,30 +234,30 @@ public:
             }
         }
 
-        // =========================
-        // UAV 绘制（改为只根据最终融合 /uav_positions）
-        // =========================
-        // poses[0]=蓝UAV
-        if ((uav_point[0].x != 0.0f || uav_point[0].y != 0.0f) &&
-            (time - uav_update[0] < 0.5)) {
-            cv::Point2f point(clone_map.cols * uav_point[0].x / 28,
-                              clone_map.rows * (15 - uav_point[0].y) / 15);
-            cv::circle(clone_map, point, 12, cv::Scalar(200, 0, 0), -1);
-            cv::putText(
-                clone_map, "UAV-B", cv::Point(point.x - 20, point.y + 5),
-                cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255));
-        }
+        // // =========================
+        // // UAV 绘制（改为只根据最终融合 /uav_positions）
+        // // =========================
+        // // poses[0]=蓝UAV
+        // if ((uav_point[0].x != 0.0f || uav_point[0].y != 0.0f) &&
+        //     (time - uav_update[0] < 0.5)) {
+        //     cv::Point2f point(clone_map.cols * uav_point[0].x / 28,
+        //                       clone_map.rows * (15 - uav_point[0].y) / 15);
+        //     cv::circle(clone_map, point, 12, cv::Scalar(200, 0, 0), -1);
+        //     cv::putText(
+        //         clone_map, "UAV-B", cv::Point(point.x - 20, point.y + 5),
+        //         cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255));
+        // }
 
-        // poses[1]=红UAV
-        if ((uav_point[1].x != 0.0f || uav_point[1].y != 0.0f) &&
-            (time - uav_update[1] < 0.5)) {
-            cv::Point2f point(clone_map.cols * uav_point[1].x / 28,
-                              clone_map.rows * (15 - uav_point[1].y) / 15);
-            cv::circle(clone_map, point, 12, cv::Scalar(0, 0, 200), -1);
-            cv::putText(
-                clone_map, "UAV-R", cv::Point(point.x - 20, point.y + 5),
-                cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255));
-        }
+        // // poses[1]=红UAV
+        // if ((uav_point[1].x != 0.0f || uav_point[1].y != 0.0f) &&
+        //     (time - uav_update[1] < 0.5)) {
+        //     cv::Point2f point(clone_map.cols * uav_point[1].x / 28,
+        //                       clone_map.rows * (15 - uav_point[1].y) / 15);
+        //     cv::circle(clone_map, point, 12, cv::Scalar(0, 0, 200), -1);
+        //     cv::putText(
+        //         clone_map, "UAV-R", cv::Point(point.x - 20, point.y + 5),
+        //         cv::FONT_HERSHEY_SIMPLEX, 0.4, cv::Scalar(255, 255, 255));
+        // }
 
         // 发布地图图像
         std_msgs::msg::Header header;

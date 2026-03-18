@@ -688,8 +688,8 @@ void buildHomographyLocked()
         drawVehicleLocked(canvas, false, i);
       }
 
-      drawUavLocked(canvas, 0);
-      drawUavLocked(canvas, 1);
+      // drawUavLocked(canvas, 0);
+      // drawUavLocked(canvas, 1);
 
       std_msgs::msg::Header header;
       header.stamp = now();
