@@ -13,7 +13,6 @@
 #include "MvCameraControl.h"
 
 #include "camera_info_manager/camera_info_manager.hpp"
-#include "image_transport/image_transport.hpp"
 #include "rcl_interfaces/msg/parameter_descriptor.hpp"
 #include "rclcpp/logging.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -59,9 +58,9 @@ struct CameraContext {
     MV_IMAGE_BASIC_INFO       img_info{};
     MV_CC_PIXEL_CONVERT_PARAM convert_param{};
 
-    image_transport::CameraPublisher                        pub;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr  image_pub;
+    rclcpp::Publisher<sensor_msgs::msg::CameraInfo>::SharedPtr camera_info_pub;
     std::unique_ptr<camera_info_manager::CameraInfoManager> info_mgr;
-    sensor_msgs::msg::Image                                 publish_msg;
     sensor_msgs::msg::CameraInfo                            camera_info_msg;
 
     std::string camera_name;
@@ -567,12 +566,29 @@ private:
                     cam.prefix.c_str());
     }
 
+    static std::string deriveCameraInfoTopic(const std::string& image_topic)
+    {
+        const std::string suffix = "/image";
+        const std::string suffix_raw = "/image_raw";
+        if (image_topic.size() >= suffix_raw.size() &&
+            image_topic.compare(image_topic.size() - suffix_raw.size(), suffix_raw.size(), suffix_raw) == 0) {
+            return image_topic.substr(0, image_topic.size() - suffix_raw.size()) + "/camera_info";
+        }
+        if (image_topic.size() >= suffix.size() &&
+            image_topic.compare(image_topic.size() - suffix.size(), suffix.size(), suffix) == 0) {
+            return image_topic.substr(0, image_topic.size() - suffix.size()) + "/camera_info";
+        }
+        return image_topic + "/camera_info";
+    }
+
     void startCamera(CameraContext& cam)
     {
-        auto qos = use_sensor_data_qos_ ? rmw_qos_profile_sensor_data
-                                        : rmw_qos_profile_default;
+        auto image_qos = use_sensor_data_qos_ ? rclcpp::SensorDataQoS()
+                                             : rclcpp::QoS(rclcpp::KeepLast(10));
 
-        cam.pub = image_transport::create_camera_publisher(this, cam.topic, qos);
+        cam.image_pub = this->create_publisher<sensor_msgs::msg::Image>(cam.topic, image_qos);
+        cam.camera_info_pub = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+            deriveCameraInfoTopic(cam.topic), image_qos);
 
         MV_CC_SetEnumValueByString(cam.handle, "AcquisitionMode", "Continuous");
         MV_CC_SetEnumValueByString(cam.handle, "TriggerMode", "Off");
@@ -626,11 +642,6 @@ private:
             slot.data.resize(static_cast<size_t>(cam.img_info.nWidthValue) *
                              static_cast<size_t>(cam.img_info.nHeightValue) * 3U);
         }
-
-        cam.publish_msg.header.frame_id = cam.frame_id;
-        cam.publish_msg.encoding = "rgb8";
-        cam.publish_msg.data.resize(static_cast<size_t>(cam.img_info.nWidthValue) *
-                                    static_cast<size_t>(cam.img_info.nHeightValue) * 3U);
 
         if (use_hardware_timestamp_) {
             tryConfigureTimestampFrequency(cam);
@@ -890,19 +901,19 @@ private:
                 continue;
             }
 
-            cam->publish_msg.header.stamp = slot.stamp;
-            cam->publish_msg.header.frame_id = cam->frame_id;
-            cam->publish_msg.height = slot.height;
-            cam->publish_msg.width = slot.width;
-            cam->publish_msg.step = slot.width * 3U;
-            cam->publish_msg.encoding = "rgb8";
+            auto image_msg = std::make_unique<sensor_msgs::msg::Image>();
+            image_msg->header.stamp = slot.stamp;
+            image_msg->header.frame_id = cam->frame_id;
+            image_msg->height = slot.height;
+            image_msg->width = slot.width;
+            image_msg->step = slot.width * 3U;
+            image_msg->encoding = "rgb8";
 
-            cam->publish_msg.data.swap(slot.data);
+            image_msg->data.swap(slot.data);
 
-            cam->camera_info_msg.header = cam->publish_msg.header;
-            cam->pub.publish(cam->publish_msg, cam->camera_info_msg);
-
-            cam->publish_msg.data.swap(slot.data);
+            cam->camera_info_msg.header = image_msg->header;
+            cam->camera_info_pub->publish(cam->camera_info_msg);
+            cam->image_pub->publish(std::move(image_msg));
 
             cam->read_seq.store(read_seq + 1, std::memory_order_release);
         }

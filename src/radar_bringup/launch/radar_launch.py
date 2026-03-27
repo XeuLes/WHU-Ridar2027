@@ -94,14 +94,15 @@ def generate_launch_description():
     # -----------------------------
     # 普通 Node
     # -----------------------------
-    def get_hik_camera_node():
-        return Node(
-            name="hik_camera_ros2_driver",
-            package="hik_camera_ros2_driver",
-            executable="hik_camera_ros2_driver_node",
+    def get_hik_camera_component():
+        return ComposableNode(
+            package='hik_camera_ros2_driver',
+            plugin='hik_camera_ros2_driver::HikCameraRos2DriverNode',
+            name='hik_camera_ros2_driver',
             parameters=[hik_params_file],
-            arguments=["--ros-args", "--log-level", "info"],
-            output="screen",
+            extra_arguments=[
+                {'use_intra_process_comms': True}
+            ]
         )
 
     def get_auto_aim_node():
@@ -336,9 +337,23 @@ def generate_launch_description():
             get_localization_node(),
             get_dynamic_cloud_node(),
             get_cluster_node(),
-            get_detect_node(),
             get_resolve_node(),
             get_kalman_filter_node(),
+        ],
+        output='both',
+        emulate_tty=True,
+        on_exit=Shutdown()
+    )
+
+
+    hot_path_container = ComposableNodeContainer(
+        name='radar_hot_path_container',
+        namespace='',
+        package='rclcpp_components',
+        executable='component_container_mt',
+        composable_node_descriptions=[
+            get_hik_camera_component(),
+            get_detect_node(),
         ],
         output='both',
         emulate_tty=True,
@@ -389,7 +404,6 @@ def generate_launch_description():
         log_camera_to_lidar,
 
         # 普通节点
-        get_hik_camera_node(),
         get_auto_aim_node(),
         get_gimbal_rough_node(),
         get_laser_aim_node(),
@@ -399,6 +413,7 @@ def generate_launch_description():
         integrator,
 
         # 组件容器
+        hot_path_container,
         container,
 
         # 辅助

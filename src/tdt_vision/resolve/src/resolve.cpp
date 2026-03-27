@@ -17,7 +17,7 @@ static inline bool is_stamp_zero(const builtin_interfaces::msg::Time& t)
 
 Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     : Node("radar_resolve_node", node_options)
-{
+{ 
     // -------------------- parser config paths (ROS2 parameters) --------------------
     this->declare_parameter<std::string>("out_matrix_path", "config/out_matrix.yaml");
     this->declare_parameter<std::string>("camera_params_path", "config/camera_params.yaml");
@@ -25,9 +25,9 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
 
     this->declare_parameter<bool>("is_test", false);
 
-    this->declare_parameter<double>("uav_default_out_x", 16.6);
-    this->declare_parameter<double>("uav_default_out_y", 6.18);
-    this->declare_parameter<double>("uav_default_out_z", 1.58);
+    this->declare_parameter<double>("uav_default_out_x", 16.0);
+    this->declare_parameter<double>("uav_default_out_y", 5.78);
+    this->declare_parameter<double>("uav_default_out_z", 0.18);
 
     // minimap path (optional)
     this->declare_parameter<std::string>("minimap_path", "config/RM2025.png");
@@ -911,7 +911,7 @@ void Resolve::DetectCallback(
     if (x != 0.0f && y != 0.0f) {
         uav_out.poses[1].position.x = static_cast<double>(x);
         uav_out.poses[1].position.y = static_cast<double>(y);
-        uav_out.poses[1].position.z = 0.0;   // 地面车先给0高度
+        uav_out.poses[1].position.z = 0.30;   // 地面车先给0高度
 
         // 如需固定姿态，可打开下面4行
         // uav_out.poses[1].orientation.w = 1.0;

@@ -223,7 +223,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
 
     // 3. 加载配置文件（模型路径）
     cv::FileStorage fs;
-    fs.open("./config/detect_params.yaml", cv::FileStorage::READ);
+    fs.open("/home/user/code/T-DT_Radar-main/config/detect_params.yaml", cv::FileStorage::READ);
     if (!fs.isOpened()) {
         RCLCPP_ERROR(this->get_logger(), "[INIT] ❌ Failed to open config file: ./config/detect_params.yaml");
     }
@@ -262,7 +262,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Armor YOLO loaded");
     
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading main yolo model...");
-    this->yolo = yolo::load(yolo_path, yolo::Type::V26, 0.65f, 0.25f);
+    this->yolo = yolo::load(yolo_path, yolo::Type::V26, 0.45f, 0.35f);
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Main YOLO loaded");
 
 
@@ -325,36 +325,59 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
  *     - 绘制可视化结果
  *   阶段4: 发布检测结果 + 性能统计
  */
-void Detect::callback(const std::shared_ptr<sensor_msgs::msg::Image> msg)
+void Detect::callback(sensor_msgs::msg::Image::UniquePtr msg)
 {
-    
+    cv::Mat raw;
     try {
-    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-    //     "[IMG] msg: %ux%u step=%u enc=%s data=%zu",
-    //     msg->width, msg->height, msg->step, msg->encoding.c_str(), msg->data.size());
+        if (msg->encoding == "bgr8" || msg->encoding == "rgb8") {
+            raw = cv::Mat(
+                static_cast<int>(msg->height),
+                static_cast<int>(msg->width),
+                CV_8UC3,
+                msg->data.data(),
+                static_cast<size_t>(msg->step));
+        } else if (msg->encoding == "mono8") {
+            raw = cv::Mat(
+                static_cast<int>(msg->height),
+                static_cast<int>(msg->width),
+                CV_8UC1,
+                msg->data.data(),
+                static_cast<size_t>(msg->step));
+        } else {
+            auto shared_msg = std::make_shared<sensor_msgs::msg::Image>(*msg);
+            auto cv_ptr = cv_bridge::toCvCopy(shared_msg, msg->encoding);
+            raw = cv_ptr->image;
+        }
 
-    auto cv_ptr = cv_bridge::toCvCopy(msg, msg->encoding);  // 先按原编码拿
-    cv::Mat raw = cv_ptr->image;
-
-    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-    //     "[IMG] mat: empty=%d size=%dx%d type=%d ch=%d depth=%d",
-    //     raw.empty(), raw.cols, raw.rows, raw.type(), raw.channels(), raw.depth());
-
-    static int dump = 0;
-    if (dump++ % 60 == 0 && !raw.empty()) {
-        cv::imwrite("/tmp/cam_raw.jpg", raw);
+        static int dump = 0;
+        if (dump++ % 60 == 0 && !raw.empty()) {
+            cv::imwrite("/tmp/cam_raw.jpg", raw);
+        }
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "[IMG] cv_bridge exception: %s", e.what());
+        return;
     }
 
-} catch (const std::exception& e) {
-    RCLCPP_ERROR(this->get_logger(), "[IMG] cv_bridge exception: %s", e.what());
-    return;
-}
-
-    
     std::chrono::steady_clock::time_point begin = std::chrono::steady_clock::now();
-    
+
     // ==================== 阶段1: 图像预处理与异步推理 ====================
-    auto img = cv_bridge::toCvShare(msg, "bgr8")->image;
+    cv::Mat img;
+    if (msg->encoding == "bgr8") {
+        img = raw;
+    } else if (msg->encoding == "rgb8") {
+        cv::cvtColor(raw, img, cv::COLOR_RGB2BGR);
+    } else if (msg->encoding == "mono8") {
+        cv::cvtColor(raw, img, cv::COLOR_GRAY2BGR);
+    } else {
+        try {
+            auto shared_msg = std::make_shared<sensor_msgs::msg::Image>(*msg);
+            img = cv_bridge::toCvCopy(shared_msg, "bgr8")->image;
+        } catch (const std::exception& e) {
+            RCLCPP_ERROR(this->get_logger(), "[IMG] unsupported encoding %s: %s",
+                         msg->encoding.c_str(), e.what());
+            return;
+        }
+    }
     tdt_radar::Image image(img.data, img.cols, img.rows);
     
     // 1.1 准备UAV检测输入（RGB检测模式：直接resize到1280x1280）

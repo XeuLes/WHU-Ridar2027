@@ -4,6 +4,8 @@
 #include "auto_aim_fast/vision/preprocess.hpp"
 #include "auto_aim_fast/legacy/detector.hpp"
 
+#include <string>
+
 #include <array>
 #include <mutex>
 #include <vector>
@@ -11,8 +13,31 @@
 #include <opencv2/core.hpp>
 #include <opencv2/core/types.hpp>
 
+
+namespace auto_aim_fast { class YoloPoseTrtDetector; }
+
 namespace auto_aim_fast::vision
 {
+
+enum class DetectorMode : int
+{
+  LEGACY = 0,
+  YOLO = 1
+};
+
+struct YoloDetectorParams
+{
+  std::string engine_path;
+  int input_w{640};
+  int input_h{640};
+  int max_det{300};
+  int target_class_id{0};
+  float conf_thresh{0.45f};
+  float kpt_conf_thresh{0.35f};
+  bool require_outer_corners{true};
+  bool use_fp16_input{true};
+  std::array<int, 4> outer_corner_indices{{0, 4, 7, 3}};  // lt lb rb rt
+};
 
 enum class ArmorType : int
 {
@@ -39,9 +64,11 @@ class Pairing
 public:
   Pairing();
   void setLegacyParams(const SimpleLightDetector::Params & p);
+  void setDetectorMode(DetectorMode mode);
+  void setYoloParams(const YoloDetectorParams & p);
 
   std::vector<Armor2D> pair(const std::vector<LightBar> & lights,
-                            const PreprocessResult & pre) const;
+                            const PreprocessResult & pre);
 
   // Debug retrieval (thread-safe snapshots)
   bool getLastDebugBgr(cv::Mat & out_bgr) const;
@@ -49,6 +76,11 @@ public:
 
 private:
   std::shared_ptr<SimpleLightDetector> detector_;
+  std::shared_ptr<auto_aim_fast::YoloPoseTrtDetector> yolo_detector_;
+  DetectorMode mode_{DetectorMode::LEGACY};
+  YoloDetectorParams yolo_params_{};
+  bool yolo_init_ok_{false};
+  bool yolo_init_attempted_{false};
 
   // stored debug images
   mutable std::mutex dbg_m_;

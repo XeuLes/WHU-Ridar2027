@@ -27,3 +27,20 @@ auto_aim_node:
     # ========= 调试显示 =========
     detector.show_contours: false
     detector.show_pairs: true
+
+    # ========= YOLO / TensorRT Pose =========
+    detector.mode: "yolo"
+    detector.yolo.engine_path: "/home/user/code/T-DT_Radar-main/src/auto_aim_fast/model/best-fp16.engine"
+    detector.yolo.input_w: 640
+    detector.yolo.input_h: 640
+    detector.yolo.max_det: 300
+    detector.yolo.target_class_id: 0
+    detector.yolo.conf_thresh: 0.45
+    detector.yolo.kpt_conf_thresh: 0.35
+    detector.yolo.require_outer_corners: true
+    detector.yolo.use_fp16_input: true
+
+    # 关键点顺序为 8 点:
+    # top_1, top_2, top_3, top_4, bottom_1, bottom_2, bottom_3, bottom_4
+    # 用于外角点提取：左上、左下、右下、右上
+    detector.yolo.outer_corner_indices: [0, 4, 7, 3]

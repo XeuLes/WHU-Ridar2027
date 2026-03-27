@@ -16,12 +16,25 @@ def generate_launch_description():
     hik_params_file = LaunchConfiguration("hik_params_file")
     log_level = LaunchConfiguration("log_level")
 
-    # auto_aim params
+    # auto_aim params files
     tracker_file = LaunchConfiguration("tracker_params")
     camera_file = LaunchConfiguration("camera_params")
     detector_file = LaunchConfiguration("detector_params")
     qos_file = LaunchConfiguration("qos_params")
     info_file = LaunchConfiguration("camera_info_params")
+
+    # auto_aim runtime params
+    detector_mode = LaunchConfiguration("detector_mode")
+    yolo_engine_path = LaunchConfiguration("yolo_engine_path")
+    yolo_input_w = LaunchConfiguration("yolo_input_w")
+    yolo_input_h = LaunchConfiguration("yolo_input_h")
+    yolo_conf_thresh = LaunchConfiguration("yolo_conf_thresh")
+    yolo_kpt_conf_thresh = LaunchConfiguration("yolo_kpt_conf_thresh")
+    yolo_nms_iou_thresh = LaunchConfiguration("yolo_nms_iou_thresh")
+    yolo_max_det = LaunchConfiguration("yolo_max_det")
+    yolo_use_fp16 = LaunchConfiguration("yolo_use_fp16")
+    yolo_class_id = LaunchConfiguration("yolo_class_id")
+    yolo_debug_draw = LaunchConfiguration("yolo_debug_draw")
 
     # Environment
     stdout_linebuf_envvar = SetEnvironmentVariable("RCUTILS_LOGGING_BUFFERED_STREAM", "1")
@@ -66,7 +79,66 @@ def generate_launch_description():
         description="auto_aim camera_info usage params",
     )
 
-    # Directly launch Hik camera driver node
+    # detector mode
+    declare_detector_mode = DeclareLaunchArgument(
+        "detector_mode",
+        default_value="yolo",
+        description="detector mode: legacy or yolo",
+    )
+
+    # yolo runtime params
+    declare_yolo_engine_path = DeclareLaunchArgument(
+        "yolo_engine_path",
+        default_value=os.path.join(aim_share, "model", "best-fp16.engine"),
+        description="TensorRT engine path for YOLO pose detector",
+    )
+    declare_yolo_input_w = DeclareLaunchArgument(
+        "yolo_input_w",
+        default_value="640",
+        description="YOLO TensorRT input width",
+    )
+    declare_yolo_input_h = DeclareLaunchArgument(
+        "yolo_input_h",
+        default_value="640",
+        description="YOLO TensorRT input height",
+    )
+    declare_yolo_conf_thresh = DeclareLaunchArgument(
+        "yolo_conf_thresh",
+        default_value="0.35",
+        description="YOLO object confidence threshold",
+    )
+    declare_yolo_kpt_conf_thresh = DeclareLaunchArgument(
+        "yolo_kpt_conf_thresh",
+        default_value="0.35",
+        description="YOLO keypoint confidence threshold",
+    )
+    declare_yolo_nms_iou_thresh = DeclareLaunchArgument(
+        "yolo_nms_iou_thresh",
+        default_value="0.45",
+        description="YOLO NMS IoU threshold",
+    )
+    declare_yolo_max_det = DeclareLaunchArgument(
+        "yolo_max_det",
+        default_value="32",
+        description="YOLO max detections per frame",
+    )
+    declare_yolo_use_fp16 = DeclareLaunchArgument(
+        "yolo_use_fp16",
+        default_value="true",
+        description="Use FP16 TensorRT inference",
+    )
+    declare_yolo_class_id = DeclareLaunchArgument(
+        "yolo_class_id",
+        default_value="0",
+        description="Target class id for YOLO detector",
+    )
+    declare_yolo_debug_draw = DeclareLaunchArgument(
+        "yolo_debug_draw",
+        default_value="true",
+        description="Draw YOLO debug results on debug image",
+    )
+
+    # Hik camera node
     hik_camera_node = Node(
         package="hik_camera_ros2_driver",
         executable="hik_camera_ros2_driver_node",
@@ -82,7 +154,26 @@ def generate_launch_description():
         executable="auto_aim_node",
         name="auto_aim_node",
         output="screen",
-        parameters=[tracker_file, camera_file, detector_file, qos_file, info_file],
+        parameters=[
+            tracker_file,
+            camera_file,
+            detector_file,
+            qos_file,
+            info_file,
+            {
+                "detector_mode": detector_mode,
+                "yolo_engine_path": yolo_engine_path,
+                "yolo_input_w": yolo_input_w,
+                "yolo_input_h": yolo_input_h,
+                "yolo_conf_thresh": yolo_conf_thresh,
+                "yolo_kpt_conf_thresh": yolo_kpt_conf_thresh,
+                "yolo_nms_iou_thresh": yolo_nms_iou_thresh,
+                "yolo_max_det": yolo_max_det,
+                "yolo_use_fp16": yolo_use_fp16,
+                "yolo_class_id": yolo_class_id,
+                "yolo_debug_draw": yolo_debug_draw,
+            },
+        ],
         arguments=["--ros-args", "--log-level", log_level],
     )
 
@@ -98,6 +189,18 @@ def generate_launch_description():
     ld.add_action(declare_detector)
     ld.add_action(declare_qos)
     ld.add_action(declare_info)
+
+    ld.add_action(declare_detector_mode)
+    ld.add_action(declare_yolo_engine_path)
+    ld.add_action(declare_yolo_input_w)
+    ld.add_action(declare_yolo_input_h)
+    ld.add_action(declare_yolo_conf_thresh)
+    ld.add_action(declare_yolo_kpt_conf_thresh)
+    ld.add_action(declare_yolo_nms_iou_thresh)
+    ld.add_action(declare_yolo_max_det)
+    ld.add_action(declare_yolo_use_fp16)
+    ld.add_action(declare_yolo_class_id)
+    ld.add_action(declare_yolo_debug_draw)
 
     ld.add_action(hik_camera_node)
     ld.add_action(auto_aim_node)

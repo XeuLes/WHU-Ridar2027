@@ -2,28 +2,23 @@
 <package format="3">
   <name>auto_aim_fast</name>
   <version>0.0.0</version>
-  <description>High-FPS auto aim pipeline with legacy detector/pnp integration</description>
+  <description>High-FPS auto aim pipeline with legacy detector and optional YOLO TensorRT integration</description>
 
   <maintainer email="user@todo.todo">user</maintainer>
   <license>MIT</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
-
-  <!-- message generation -->
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
+
   <depend>builtin_interfaces</depend>
-
-  <!-- runtime for generated messages -->
-  <exec_depend>rosidl_default_runtime</exec_depend>
-
-  <!-- core deps -->
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>geometry_msgs</depend>
   <depend>std_msgs</depend>
   <depend>cv_bridge</depend>
 
-  <!-- allow other packages to depend on our msg -->
+  <exec_depend>rosidl_default_runtime</exec_depend>
+
   <member_of_group>rosidl_interface_packages</member_of_group>
 
   <test_depend>ament_lint_auto</test_depend>

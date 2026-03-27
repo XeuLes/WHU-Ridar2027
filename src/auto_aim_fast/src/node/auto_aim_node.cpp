@@ -135,7 +135,18 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
 
   this->declare_parameter<bool>("detector.show_contours", false);
   this->declare_parameter<bool>("detector.show_pairs", true);
-  
+  this->declare_parameter<std::string>("detector.mode", "legacy");
+  this->declare_parameter<std::string>("detector.yolo.engine_path", "");
+  this->declare_parameter<int>("detector.yolo.input_w", 640);
+  this->declare_parameter<int>("detector.yolo.input_h", 640);
+  this->declare_parameter<int>("detector.yolo.max_det", 300);
+  this->declare_parameter<int>("detector.yolo.target_class_id", 0);
+  this->declare_parameter<double>("detector.yolo.conf_thresh", 0.45);
+  this->declare_parameter<double>("detector.yolo.kpt_conf_thresh", 0.35);
+  this->declare_parameter<bool>("detector.yolo.require_outer_corners", true);
+  this->declare_parameter<bool>("detector.yolo.use_fp16_input", true);
+  this->declare_parameter<std::vector<int64_t>>("detector.yolo.outer_corner_indices", std::vector<int64_t>{0, 4, 7, 3});
+
   // 配对模式参数
   this->declare_parameter<int>("detector.pair_mode", 1);
   this->declare_parameter<double>("detector.max_x_diff_ratio", 0.5);
@@ -203,7 +214,56 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   dp.show_pairs =
       this->get_parameter("detector.show_pairs").as_bool();
 
+  dp.pair_mode =
+      this->get_parameter("detector.pair_mode").as_int();
+  dp.max_x_diff_ratio =
+      static_cast<float>(this->get_parameter("detector.max_x_diff_ratio").as_double());
+  dp.max_y_diff_ratio =
+      static_cast<float>(this->get_parameter("detector.max_y_diff_ratio").as_double());
+  dp.min_vertical_dist =
+      static_cast<float>(this->get_parameter("detector.min_vertical_dist").as_double());
+  dp.max_vertical_dist =
+      static_cast<float>(this->get_parameter("detector.max_vertical_dist").as_double());
+  dp.min_connect_angle =
+      static_cast<float>(this->get_parameter("detector.min_connect_angle").as_double());
+  dp.max_connect_angle =
+      static_cast<float>(this->get_parameter("detector.max_connect_angle").as_double());
+
   pipeline_.setDetectorParams(dp);
+
+  const auto detector_mode_str = this->get_parameter("detector.mode").as_string();
+  const auto detector_mode =
+    (detector_mode_str == "yolo" || detector_mode_str == "YOLO")
+      ? vision::DetectorMode::YOLO
+      : vision::DetectorMode::LEGACY;
+  pipeline_.setDetectorMode(detector_mode);
+
+  vision::YoloDetectorParams yp;
+  yp.engine_path = this->get_parameter("detector.yolo.engine_path").as_string();
+  yp.input_w = this->get_parameter("detector.yolo.input_w").as_int();
+  yp.input_h = this->get_parameter("detector.yolo.input_h").as_int();
+  yp.max_det = this->get_parameter("detector.yolo.max_det").as_int();
+  yp.target_class_id = this->get_parameter("detector.yolo.target_class_id").as_int();
+  yp.conf_thresh =
+      static_cast<float>(this->get_parameter("detector.yolo.conf_thresh").as_double());
+  yp.kpt_conf_thresh =
+      static_cast<float>(this->get_parameter("detector.yolo.kpt_conf_thresh").as_double());
+  yp.require_outer_corners =
+      this->get_parameter("detector.yolo.require_outer_corners").as_bool();
+  yp.use_fp16_input =
+      this->get_parameter("detector.yolo.use_fp16_input").as_bool();
+  {
+    const auto idx = this->get_parameter("detector.yolo.outer_corner_indices").as_integer_array();
+    if (idx.size() == 4) {
+      yp.outer_corner_indices = {
+        static_cast<int>(idx[0]),
+        static_cast<int>(idx[1]),
+        static_cast<int>(idx[2]),
+        static_cast<int>(idx[3])
+      };
+    }
+  }
+  pipeline_.setYoloDetectorParams(yp);
 
   // camera fallback
   if (!this->get_parameter("camera.use_camera_info").as_bool()) {
@@ -247,7 +307,8 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
     std::bind(&AutoAimNode::onReport, this));
 
   RCLCPP_INFO(this->get_logger(),
-              "auto_aim_node started. debug_pub=%d binary_pub=%d",
+              "auto_aim_node started. detector_mode=%s debug_pub=%d binary_pub=%d",
+              this->get_parameter("detector.mode").as_string().c_str(),
               this->get_parameter("debug.publish_debug_image").as_bool() ? 1 : 0,
               this->get_parameter("debug.publish_binary_image").as_bool() ? 1 : 0);
 }

@@ -1,9 +1,83 @@
+
 #include "auto_aim_fast/vision/pairing.hpp"
+#include "auto_aim_fast/legacy/yolo_trt_detector.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 namespace auto_aim_fast::vision
 {
+
+namespace
+{
+
+inline void pairResultToFallbackCorners(const SimpleLightDetector::PairResult & pr,
+                                        std::array<cv::Point2f, 4> & corners)
+{
+  const float half_w = pr.width * 0.5f;
+  const float half_h = pr.height * 0.5f;
+  const float c = std::cos(pr.angle);
+  const float s = std::sin(pr.angle);
+
+  auto rot = [&](float x, float y) -> cv::Point2f {
+    return cv::Point2f(pr.center.x + c * x - s * y,
+                       pr.center.y + s * x + c * y);
+  };
+
+  corners[0] = rot(-half_w, -half_h);  // LT
+  corners[1] = rot( half_w, -half_h);  // RT
+  corners[2] = rot( half_w,  half_h);  // RB
+  corners[3] = rot(-half_w,  half_h);  // LB
+}
+
+inline void applyOffset(SimpleLightDetector::PairResult & pr, float ox, float oy)
+{
+  const cv::Point2f d(ox, oy);
+  pr.center += d;
+  pr.light1_center += d;
+  pr.light2_center += d;
+
+  if (pr.has_precise_corners) {
+    pr.precise_left_top += d;
+    pr.precise_left_bottom += d;
+    pr.precise_right_top += d;
+    pr.precise_right_bottom += d;
+  }
+
+  if (pr.has_keypoints) {
+    for (auto & kp : pr.keypoints) {
+      kp += d;
+    }
+  }
+}
+
+inline Armor2D makeArmorFromPair(const SimpleLightDetector::PairResult & pr,
+                                 bool use_legacy_pair)
+{
+  Armor2D a;
+  a.center = pr.center;
+  a.score = pr.confidence;
+  a.valid = true;
+  a.type = ArmorType::SMALL;
+
+  if (pr.has_precise_corners) {
+    a.corners[0] = pr.precise_left_top;
+    a.corners[1] = pr.precise_right_top;
+    a.corners[2] = pr.precise_right_bottom;
+    a.corners[3] = pr.precise_left_bottom;
+  } else {
+    pairResultToFallbackCorners(pr, a.corners);
+  }
+
+  a.has_legacy_pair = use_legacy_pair;
+  if (use_legacy_pair) {
+    a.legacy_pair = pr;
+  }
+
+  return a;
+}
+
+}  // namespace
 
 Pairing::Pairing()
 : detector_(std::make_shared<SimpleLightDetector>())
@@ -15,8 +89,21 @@ void Pairing::setLegacyParams(const SimpleLightDetector::Params & p)
   detector_->setParams(p);
 }
 
+void Pairing::setDetectorMode(DetectorMode mode)
+{
+  mode_ = mode;
+}
+
+void Pairing::setYoloParams(const YoloDetectorParams & p)
+{
+  yolo_params_ = p;
+  yolo_init_ok_ = false;
+  yolo_init_attempted_ = false;
+  yolo_detector_.reset();
+}
+
 std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
-                                   const PreprocessResult & pre) const
+                                   const PreprocessResult & pre)
 {
   (void)lights;
 
@@ -24,65 +111,106 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
     return {};
   }
 
-  // 1) run legacy detector
-  const auto pairs = detector_->detectDetailed(pre.bgr);
+  std::vector<SimpleLightDetector::PairResult> pairs;
 
-  // 2) build debug images (降频，避免每帧 clone/draw)
-{
-  // 最小改法：先写死每10帧生成一次
-  // 如果效果好，后面再把这个值做成参数传下来
-  static uint64_t debug_build_counter = 0;
-  constexpr uint64_t kDebugDecimation = 3;
+  if (mode_ == DetectorMode::YOLO) {
+    if (!yolo_detector_) {
+      yolo_detector_ = std::make_shared<auto_aim_fast::YoloPoseTrtDetector>();
+    }
 
-  debug_build_counter++;
+    if (!yolo_init_attempted_) {
+      yolo_init_attempted_ = true;
+      auto_aim_fast::YoloPoseTrtDetector::Params yp;
+      yp.engine_path = yolo_params_.engine_path;
+      yp.input_w = yolo_params_.input_w;
+      yp.input_h = yolo_params_.input_h;
+      yp.max_det = yolo_params_.max_det;
+      yp.target_class_id = yolo_params_.target_class_id;
+      yp.conf_thresh = yolo_params_.conf_thresh;
+      yp.kpt_conf_thresh = yolo_params_.kpt_conf_thresh;
+      yp.require_outer_corners = yolo_params_.require_outer_corners;
+      yp.use_fp16_input = yolo_params_.use_fp16_input;
+      yp.outer_corner_indices = yolo_params_.outer_corner_indices;
+      yolo_init_ok_ = yolo_detector_->init(yp);
+    }
 
-  if ((debug_build_counter % kDebugDecimation) == 0) {
-    cv::Mat dbg = pre.bgr.clone();
-    detector_->drawResults(dbg, true, true);
+    if (yolo_init_ok_ && yolo_detector_->isReady()) {
+      pairs = yolo_detector_->detectDetailed(pre.bgr);
 
-    cv::Mat bin = detector_->getBinaryImage(); // usually MONO8
+      cv::Mat dbg = pre.bgr.clone();
+      for (const auto & pr : pairs) {
+        cv::Scalar box_color(0, 255, 255);
+        if (pr.has_precise_corners) {
+          cv::line(dbg, pr.precise_left_top, pr.precise_right_top, box_color, 2);
+          cv::line(dbg, pr.precise_right_top, pr.precise_right_bottom, box_color, 2);
+          cv::line(dbg, pr.precise_right_bottom, pr.precise_left_bottom, box_color, 2);
+          cv::line(dbg, pr.precise_left_bottom, pr.precise_left_top, box_color, 2);
+        } else {
+          std::array<cv::Point2f, 4> c{};
+          pairResultToFallbackCorners(pr, c);
+          for (int i = 0; i < 4; ++i) {
+            cv::line(dbg, c[i], c[(i + 1) % 4], box_color, 2);
+          }
+        }
 
-    std::lock_guard<std::mutex> lk(dbg_m_);
-    last_debug_bgr_ = dbg;
-    last_binary_ = bin.clone();
+        cv::circle(dbg, pr.center, 4, cv::Scalar(0, 0, 255), -1);
+
+        if (pr.has_keypoints) {
+          for (size_t i = 0; i < pr.keypoints.size(); ++i) {
+            const auto & kp = pr.keypoints[i];
+            const float ks = pr.keypoint_scores[i];
+            cv::circle(dbg, kp, 3, ks >= yolo_params_.kpt_conf_thresh ?
+              cv::Scalar(0, 255, 0) : cv::Scalar(255, 0, 0), -1);
+          }
+        }
+      }
+
+      cv::Mat bin(pre.bgr.rows, pre.bgr.cols, CV_8UC1, cv::Scalar(0));
+      {
+        std::lock_guard<std::mutex> lk(dbg_m_);
+        last_debug_bgr_ = dbg;
+        last_binary_ = bin;
+      }
+    }
   }
-}
+
+  if (pairs.empty() && mode_ == DetectorMode::LEGACY) {
+    pairs = detector_->detectDetailed(pre.bgr);
+
+    static uint64_t debug_build_counter = 0;
+    constexpr uint64_t kDebugDecimation = 3;
+    debug_build_counter++;
+
+    if ((debug_build_counter % kDebugDecimation) == 0) {
+      cv::Mat dbg = pre.bgr.clone();
+      detector_->drawResults(dbg, true, true);
+
+      cv::Mat bin = detector_->getBinaryImage();
+
+      std::lock_guard<std::mutex> lk(dbg_m_);
+      last_debug_bgr_ = dbg;
+      last_binary_ = bin.clone();
+    }
+  } else if (pairs.empty()) {
+    // YOLO mode failed or no result: keep debug image but fall back to empty result.
+  }
 
   if (pairs.empty()) {
     return {};
   }
 
-  // 3) convert to Armor2D list
+  const float offset_x = pre.roi_used ? static_cast<float>(pre.roi_rect.x) : 0.0f;
+  const float offset_y = pre.roi_used ? static_cast<float>(pre.roi_rect.y) : 0.0f;
+
   std::vector<Armor2D> out;
   out.reserve(pairs.size());
 
-  // 计算 ROI 偏移量（如果使用了 ROI）
-  float offset_x = 0.0f;
-  float offset_y = 0.0f;
-  if (pre.roi_used) {
-    offset_x = static_cast<float>(pre.roi_rect.x);
-    offset_y = static_cast<float>(pre.roi_rect.y);
+  for (auto pr : pairs) {
+    applyOffset(pr, offset_x, offset_y);
+    const bool use_legacy_pair = (mode_ == DetectorMode::LEGACY);
+    out.push_back(makeArmorFromPair(pr, use_legacy_pair));
   }
 
-  for (const auto & pr : pairs) {
-    Armor2D a;
-    
-    // 将 ROI 局部坐标转换为全局坐标
-    a.center.x = pr.center.x + offset_x;
-    a.center.y = pr.center.y + offset_y;
-    
-    a.score = pr.confidence;
-    a.valid = true;
-
-    a.legacy_pair = pr;
-    a.has_legacy_pair = true;
-
-    a.type = ArmorType::SMALL;
-    
-    out.push_back(a);
-  }
-
-  // highest confidence first
   std::sort(out.begin(), out.end(),
             [](const Armor2D & a, const Armor2D & b) { return a.score > b.score; });
 

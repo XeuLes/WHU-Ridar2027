@@ -57,7 +57,7 @@ struct TrackedUav {
 class Detect final : public rclcpp::Node {
 public:
     explicit Detect(const rclcpp::NodeOptions& options);
-    void callback(const std::shared_ptr<sensor_msgs::msg::Image> msg);
+    void callback(sensor_msgs::msg::Image::UniquePtr msg);
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub;
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr
         compressed_image_sub;
@@ -69,6 +69,7 @@ private:
     std::shared_ptr<Infer<int>> classifier;
     std::string image_topic_;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr pub;
+    rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_img_pub_;
 
     bool        if_rosbag = false;
     int         EnemyColor;

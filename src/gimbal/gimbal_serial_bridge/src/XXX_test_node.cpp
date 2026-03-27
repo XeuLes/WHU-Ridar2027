@@ -561,12 +561,18 @@ private:
                 std::memcpy(&rx, frame_bytes, sizeof(rx));
                 rxbuf.erase(rxbuf.begin(), rxbuf.begin() + static_cast<long>(frame_len));
 
+               // ----- 修改后的代码 -----
                 std_msgs::msg::Float64MultiArray angles;
-                angles.data.resize(2);
-                angles.data[0] = static_cast<double>(rx.yaw);
-                angles.data[1] = static_cast<double>(rx.pitch);
+                // 根据 yaw 和 pitch 的最大索引来分配数组大小，并用 0.0 填充默认值
+                int max_idx = std::max(yaw_index_, pitch_index_);
+                angles.data.resize(max_idx + 1, 0.0); 
+                
+                // 严格按照配置的索引位置填入姿态角数据，确保和 cmd_topic 格式完全对齐
+                angles.data[yaw_index_] = static_cast<double>(rx.yaw);
+                angles.data[pitch_index_] = static_cast<double>(rx.pitch);
+                
                 pub_angles_->publish(angles);
-
+                
                 std_msgs::msg::UInt8 m;
                 m.data = rx.mode;
                 pub_mode_->publish(m);

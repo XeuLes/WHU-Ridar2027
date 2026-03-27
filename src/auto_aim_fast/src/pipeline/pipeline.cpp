@@ -154,6 +154,16 @@ void Pipeline::setDetectorParams(const SimpleLightDetector::Params & p)
   impl_->pairing.setLegacyParams(p);
 }
 
+void Pipeline::setDetectorMode(const vision::DetectorMode mode)
+{
+  impl_->pairing.setDetectorMode(mode);
+}
+
+void Pipeline::setYoloDetectorParams(const vision::YoloDetectorParams & p)
+{
+  impl_->pairing.setYoloParams(p);
+}
+
 void Pipeline::setCamera(const cv::Mat & K, const cv::Mat & D)
 {
   impl_->pnp.setCamera(K, D);

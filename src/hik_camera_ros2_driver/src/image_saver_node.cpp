@@ -219,9 +219,9 @@ int main(int argc, char ** argv)
   }
   rclcpp::shutdown();
   return 0;
-}
+} 
+// ros2 run hik_camera_ros2_driver image_saver_node --ros-args 
+//   -p save_dir:=/home/user/DATA/jiguangmokuai/image1 
+//   -p save_every_n:=1
 
 
-//ros2 run hik_camera_ros2_driver image_saver_node --ros-args \
-  -p save_dir:=/home/user/DATA/jiguangmokuai/image1 \
-  -p save_every_n:=1

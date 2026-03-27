@@ -2,6 +2,7 @@
 
 #include "auto_aim_fast/pipeline/frame.hpp"
 #include "auto_aim_fast/tracking/target_tracker.hpp"
+#include "auto_aim_fast/vision/pairing.hpp"
 #include "auto_aim_fast/legacy/detector.hpp"
 
 #include <atomic>
@@ -88,6 +89,8 @@ public:
 
   void setTrackerParams(const tracking::TrackerParams & p);
   void setDetectorParams(const SimpleLightDetector::Params & p);
+  void setDetectorMode(const vision::DetectorMode mode);
+  void setYoloDetectorParams(const vision::YoloDetectorParams & p);
   void setCamera(const cv::Mat & K, const cv::Mat & D);
 
   // Debug images from legacy detector (thread-safe snapshots)

@@ -17,8 +17,8 @@
     cam0.camera_topic: "camera0/image"
 
     cam0.acquisition_frame_rate: 30.0
-    cam0.exposure_time: 12000
-    cam0.gain: 14.9
+    cam0.exposure_time: 8000
+    cam0.gain: 18.9
 
     # ---------------- cam1（第二台相机） ----------------
     cam1.camera_info_url: "package://hik_camera_ros2_driver/config/camera_info1.yaml"

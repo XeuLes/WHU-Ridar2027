@@ -2,6 +2,7 @@
 
 #include <opencv2/opencv.hpp>
 #include <vector>
+#include <array>
 
 class SimpleLightDetector {
 public:
@@ -105,6 +106,17 @@ public:
         float angle;                // 顶边方向角（弧度）
         int pair_type;              // 可自定义一个 pattern type
         float confidence;
+
+        // ---- YOLO pose mode extensions ----
+        bool has_precise_corners = false;
+        cv::Point2f precise_left_top;
+        cv::Point2f precise_left_bottom;
+        cv::Point2f precise_right_top;
+        cv::Point2f precise_right_bottom;
+
+        bool has_keypoints = false;
+        std::array<cv::Point2f, 8> keypoints{};
+        std::array<float, 8> keypoint_scores{};
     };
 
     // 静态颜色常量
