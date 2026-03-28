@@ -55,13 +55,19 @@ target_link_libraries(pnp_calib_node camera_field_calib_tool_core)
 ament_target_dependencies(pnp_calib_node rclcpp sensor_msgs cv_bridge image_transport)
 target_link_libraries(pnp_calib_node ${OpenCV_LIBS} yaml-cpp)
 
+add_executable(pnp_calib_node_new
+  src/pnp_calib_node_new.cpp
+)
+target_link_libraries(pnp_calib_node_new camera_field_calib_tool_core)
+ament_target_dependencies(pnp_calib_node_new rclcpp sensor_msgs cv_bridge image_transport)
+target_link_libraries(pnp_calib_node_new ${OpenCV_LIBS} yaml-cpp)
+
 add_executable(plane_polygon_node
   src/plane_polygon_node.cpp
 )
 target_link_libraries(plane_polygon_node camera_field_calib_tool_core)
 ament_target_dependencies(plane_polygon_node rclcpp sensor_msgs cv_bridge image_transport)
 target_link_libraries(plane_polygon_node ${OpenCV_LIBS} yaml-cpp)
-
 # -----------------------------
 # Install / Export
 # -----------------------------
@@ -93,6 +99,7 @@ install(
 install(
   TARGETS
     pnp_calib_node
+    pnp_calib_node_new
     plane_polygon_node
   DESTINATION lib/${PROJECT_NAME}
 )
