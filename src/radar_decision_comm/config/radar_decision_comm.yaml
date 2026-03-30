@@ -90,6 +90,12 @@ fusion_engine:
 decision_engine:
   ros__parameters:
     enabled: true
+    decision_mode: "btcpp"
+    bt_xml_path: ""
+    bt_models_path: "/tmp/radar_decision_nodes.xml"
+    enable_groot_monitoring: true
+    groot_publisher_port: 1666
+    groot_server_port: 1667
     my_color: "Red"
     my_sentinel_id: 7
     infantry_3_id: 3
@@ -168,7 +174,7 @@ referee_serial_tx:
     enabled: true
     tx_mode: "topic"           # topic / serial
     my_color: "Red"
-    map_0305_layout: "legacy24"   # legacy24 / proto48_operational
+    map_0305_layout: "legacy24"   # legacy24 / proto48_operational   # legacy24 / proto48_operational   # legacy24 / proto48_operational   # legacy24 / proto48_operational
     device: "/dev/ttyUSB0"
     baudrate: 115200
     timeout_ms: 2

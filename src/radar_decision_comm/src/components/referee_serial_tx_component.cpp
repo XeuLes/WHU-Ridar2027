@@ -15,7 +15,6 @@
 #include "radar_decision_comm/msg/map_publish_request.hpp"
 #include "radar_decision_comm/msg/radar_decision_command.hpp"
 #include "radar_decision_comm/msg/robot_interaction_request.hpp"
-#include "radar_decision_comm/msg/tx_debug_stats.hpp"
 #include "radar_decision_comm/srv/force_send.hpp"
 #include "radar_decision_comm/srv/reopen_port.hpp"
 
@@ -43,8 +42,6 @@ public:
     publish_debug_frames_ = this->declare_parameter<bool>("publish_debug_frames", true);
     debug_raw_frame_topic_ = this->declare_parameter<std::string>(
       "debug_raw_frame_topic", "/radar/debug/referee_tx_raw_bytes");
-    debug_tx_stats_topic_ = this->declare_parameter<std::string>(
-      "debug_tx_stats_topic", "/radar/debug/tx_stats");
 
     input_map_request_topic_ = this->declare_parameter<std::string>(
       "input_map_request_topic", "/radar/tx/map_robot_data");
@@ -57,8 +54,6 @@ public:
       raw_frame_pub_ = this->create_publisher<std_msgs::msg::UInt8MultiArray>(
         debug_raw_frame_topic_, 20);
     }
-    tx_stats_pub_ = this->create_publisher<radar_decision_comm::msg::TxDebugStats>(
-      debug_tx_stats_topic_, 10);
 
     map_sub_ = this->create_subscription<radar_decision_comm::msg::MapPublishRequest>(
       input_map_request_topic_, 10,
@@ -93,15 +88,12 @@ public:
         if (tx_mode_ == "serial") {
           serial_.close();
           const bool ok = serial_.open(request->port_name, baudrate_, timeout_ms_);
-          serial_open_ok_ = ok;
-          last_error_ = ok ? "" : "failed to reopen tx serial port";
           response->success = ok;
           response->message = ok ? "tx serial port reopened" : "failed to reopen tx serial port";
         } else {
           response->success = true;
           response->message = "tx mode is not serial; reopen skipped";
         }
-        publish_tx_stats();
       });
 
     force_send_srv_ = this->create_service<radar_decision_comm::srv::ForceSend>(
@@ -123,20 +115,11 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "RefereeSerialTxComponent started. enabled=%s mode=%s my_color=%s layout=%s device=%s baudrate=%d queue_depth=%d crc8=%s crc16=%s debug_frames=%s stats_topic=%s",
+      "RefereeSerialTxComponent started. enabled=%s mode=%s my_color=%s layout=%s",
       enabled_ ? "true" : "false",
       tx_mode_.c_str(),
       my_color_.c_str(),
-      map_0305_layout_.c_str(),
-      device_.c_str(),
-      baudrate_,
-      send_queue_depth_,
-      enable_crc8_ ? "true" : "false",
-      enable_crc16_ ? "true" : "false",
-      publish_debug_frames_ ? "true" : "false",
-      debug_tx_stats_topic_.c_str());
-
-    publish_tx_stats();
+      map_0305_layout_.c_str());
   }
 
 private:
@@ -175,27 +158,8 @@ private:
     return build_0301_payload(msg.data_cmd_id, sender_id, msg.receiver_id, msg.user_data);
   }
 
-  void publish_tx_stats()
-  {
-    radar_decision_comm::msg::TxDebugStats msg;
-    msg.header.stamp = this->now();
-    msg.frames_tx = frames_tx_;
-    msg.frames_tx_ok = frames_tx_ok_;
-    msg.frames_tx_fail = frames_tx_fail_;
-    msg.bytes_tx = bytes_tx_;
-    msg.last_cmd_id = last_cmd_id_;
-    msg.last_frame_size = static_cast<uint32_t>(last_frame_size_);
-    msg.serial_open_ok = serial_open_ok_;
-    msg.tx_mode = tx_mode_;
-    msg.last_error = last_error_;
-    tx_stats_pub_->publish(msg);
-  }
-
   bool emit_frame(const std::vector<uint8_t> & frame, uint16_t cmd_id, const char * reason)
   {
-    ++frames_tx_;
-    last_cmd_id_ = cmd_id;
-    last_frame_size_ = frame.size();
     bool ok = false;
 
     if (tx_mode_ == "topic") {
@@ -205,16 +169,10 @@ private:
         raw_frame_pub_->publish(raw_msg);
       }
       ok = true;
-      serial_open_ok_ = false;
-      last_error_.clear();
     } else if (tx_mode_ == "serial") {
       if (!serial_.is_open()) {
         const bool opened = serial_.open(device_, baudrate_, timeout_ms_);
-        serial_open_ok_ = opened;
         if (!opened) {
-          last_error_ = "failed to open tx serial port";
-          ++frames_tx_fail_;
-          publish_tx_stats();
           RCLCPP_WARN_THROTTLE(
             this->get_logger(),
             *this->get_clock(),
@@ -228,8 +186,6 @@ private:
 
       const auto written = serial_.write(frame);
       ok = (written == frame.size());
-      serial_open_ok_ = serial_.is_open();
-      last_error_ = ok ? "" : "serial write short/failed";
 
       if (publish_debug_frames_ && raw_frame_pub_) {
         std_msgs::msg::UInt8MultiArray raw_msg;
@@ -237,19 +193,6 @@ private:
         raw_frame_pub_->publish(raw_msg);
       }
     }
-
-    if (ok) {
-      ++frames_tx_ok_;
-      bytes_tx_ += static_cast<uint32_t>(frame.size());
-      last_error_.clear();
-    } else {
-      ++frames_tx_fail_;
-      if (last_error_.empty()) {
-        last_error_ = "emit_frame failed";
-      }
-    }
-
-    publish_tx_stats();
 
     static int log_count = 0;
     if ((log_count++ % 10) == 0) {
@@ -262,6 +205,7 @@ private:
         ok ? "true" : "false");
     }
 
+    last_cmd_id_ = cmd_id;
     return ok;
   }
 
@@ -285,13 +229,6 @@ private:
     const bool ok = emit_frame(frame, referee_cmd_ids::kMapRadarData, "map_0305");
     if (!ok) {
       RCLCPP_WARN(this->get_logger(), "Failed to transmit 0x0305 frame.");
-    } else {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "Encoded 0x0305 layout=%s payload=%zu robots=%zu",
-        build_result.layout_used.c_str(),
-        build_result.payload.size(),
-        msg.robots.size());
     }
   }
 
@@ -318,15 +255,6 @@ private:
     const bool ok = emit_frame(frame, referee_cmd_ids::kRobotInteraction, "robot_interaction_0301");
     if (!ok) {
       RCLCPP_WARN(this->get_logger(), "Failed to transmit 0x0301 frame.");
-    } else {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "Encoded 0x0301: data_cmd_id=0x%04x sender_id=%u receiver_id=%u user_data=%zu payload=%zu",
-        msg.data_cmd_id,
-        (msg.sender_id == 0 ? default_radar_sender_id() : msg.sender_id),
-        msg.receiver_id,
-        msg.user_data.size(),
-        payload.size());
     }
   }
 
@@ -357,13 +285,6 @@ private:
     const bool ok = emit_frame(frame, referee_cmd_ids::kRobotInteraction, "radar_decision_0121");
     if (!ok) {
       RCLCPP_WARN(this->get_logger(), "Failed to transmit radar decision 0x0121 frame.");
-    } else {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "Encoded radar decision 0x0121: sender_id=%u receiver_id=0x%04x times=%u",
-        default_radar_sender_id(),
-        interaction_cmd_ids::kRadarDecisionReceiver,
-        msg.command_value);
     }
   }
 
@@ -371,15 +292,6 @@ private:
   bool enable_crc8_{true};
   bool enable_crc16_{true};
   bool publish_debug_frames_{true};
-  bool serial_open_ok_{false};
-
-  uint32_t frames_tx_{0};
-  uint32_t frames_tx_ok_{0};
-  uint32_t frames_tx_fail_{0};
-  uint32_t bytes_tx_{0};
-  uint16_t last_cmd_id_{0};
-  std::size_t last_frame_size_{0};
-  std::string last_error_;
 
   int baudrate_{115200};
   int timeout_ms_{2};
@@ -387,6 +299,7 @@ private:
   int tx_thread_priority_{80};
   int send_queue_depth_{128};
 
+  uint16_t last_cmd_id_{0};
   std::vector<uint8_t> last_frame_;
 
   std::string tx_mode_{"topic"};
@@ -394,7 +307,6 @@ private:
   std::string map_0305_layout_{"legacy24"};
   std::string device_;
   std::string debug_raw_frame_topic_;
-  std::string debug_tx_stats_topic_;
   std::string input_map_request_topic_;
   std::string input_robot_interaction_topic_;
   std::string input_radar_command_topic_;
@@ -403,7 +315,6 @@ private:
   SerialPort serial_;
 
   rclcpp::Publisher<std_msgs::msg::UInt8MultiArray>::SharedPtr raw_frame_pub_;
-  rclcpp::Publisher<radar_decision_comm::msg::TxDebugStats>::SharedPtr tx_stats_pub_;
   rclcpp::Subscription<radar_decision_comm::msg::MapPublishRequest>::SharedPtr map_sub_;
   rclcpp::Subscription<radar_decision_comm::msg::RobotInteractionRequest>::SharedPtr interaction_sub_;
   rclcpp::Subscription<radar_decision_comm::msg::RadarDecisionCommand>::SharedPtr radar_cmd_sub_;

@@ -59,14 +59,9 @@ public:
 
     RCLCPP_INFO(
       get_logger(),
-      "FusionComponent started. enabled=%s fusion_rate_hz=%.1f weights(direct=%.2f wireless=%.2f topo=%.2f) kalman=%s topo=%s",
+      "FusionComponent started. enabled=%s fusion_rate_hz=%.1f",
       enabled_ ? "true" : "false",
-      fusion_rate_hz_,
-      direct_obs_weight_,
-      wireless_obs_weight_,
-      topo_rule_weight_,
-      enable_kalman_slot_ ? "true" : "false",
-      enable_topo_slot_ ? "true" : "false");
+      fusion_rate_hz_);
   }
 
 private:
@@ -105,29 +100,16 @@ private:
     }
 
     enemy_world_pub_->publish(out);
-
-    static int log_count = 0;
-    if ((log_count++ % 20) == 0) {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "Fusion published enemy_world_state: perception=%zu wireless=%zu fused=%zu",
-        last_enemy_tracks_.robots.size(),
-        last_wireless_enemy_state_.robots.size(),
-        out.robots.size());
-    }
   }
 
   bool enabled_{true};
   bool enable_kalman_slot_{false};
   bool enable_topo_slot_{true};
-
   int stale_decay_ms_{300};
-
   double fusion_rate_hz_{50.0};
   double direct_obs_weight_{1.0};
   double wireless_obs_weight_{0.8};
   double topo_rule_weight_{0.5};
-
   std::string output_enemy_world_state_topic_;
 
   radar_decision_comm::msg::TrackedRobotArray last_enemy_tracks_;

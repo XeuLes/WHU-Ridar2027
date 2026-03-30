@@ -9,6 +9,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(rclcpp_components REQUIRED)
+find_package(behaviortree_cpp_v3 REQUIRED)
+find_package(ament_index_cpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
@@ -51,6 +53,8 @@ add_library(radar_decision_comm_core SHARED
   src/state/blackboard.cpp
   src/fusion/fusion_policy.cpp
   src/decision/decision_engine.cpp
+  src/decision/double_effect_fsm.cpp
+  src/decision/target_selector.cpp
   src/scheduler/tx_scheduler.cpp
   src/common/serial_port.cpp
   src/common/frame_receiver.cpp
@@ -60,9 +64,12 @@ add_library(radar_decision_comm_core SHARED
 
 target_compile_features(radar_decision_comm_core PUBLIC cxx_std_17)
 
-ament_target_dependencies(radar_decision_comm_core
-  rclcpp
+ament_target_dependencies(
+  radar_decision_comm_corerclcpp
   rclcpp_components
+
+  ament_index_cpp
+  behaviortree_cpp_v3
 )
 
 rosidl_target_interfaces(radar_decision_comm_core
@@ -172,3 +179,14 @@ install(
 ament_export_include_directories(include)
 ament_export_dependencies(rosidl_default_runtime)
 ament_package()
+
+
+target_link_libraries(
+  radar_decision_comm_core
+  BT::behaviortree_cpp_v3
+)
+
+
+install(DIRECTORY config launch
+  DESTINATION share/${PROJECT_NAME}
+)

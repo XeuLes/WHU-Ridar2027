@@ -101,7 +101,10 @@ public:
 
     enemy_state_sub_ = this->create_subscription<radar_decision_comm::msg::EnemyWorldState>(
       "/radar/fusion/enemy_world_state", 10,
-      [this](const radar_decision_comm::msg::EnemyWorldState::SharedPtr msg) { last_enemy_state_ = *msg; });
+      [this](const radar_decision_comm::msg::EnemyWorldState::SharedPtr msg)
+      {
+        last_enemy_state_ = *msg;
+      });
 
     wireless_hp_sub_ = this->create_subscription<radar_decision_comm::msg::WirelessEnemyHp>(
       "/radar/wireless/enemy_hp", 10,
@@ -195,32 +198,13 @@ public:
         msg.perception_stale = is_stale(last_perception_update_, enemy_track_ttl_ms_);
 
         blackboard_pub_->publish(msg);
-
-        static int log_count = 0;
-        if ((log_count++ % 30) == 0) {
-          RCLCPP_INFO(
-            this->get_logger(),
-            "Blackboard published: remain=%u hero_hp=%u hero_mark=%u double_chance=%u robots=%zu stale(ref=%s wl=%s perc=%s)",
-            msg.game_state.stage_remain_time,
-            msg.enemy_hp.hero,
-            msg.mark_progress.hero,
-            msg.radar_sync.double_effect_chance,
-            msg.enemy_state.robots.size(),
-            msg.referee_stale ? "true" : "false",
-            msg.wireless_stale ? "true" : "false",
-            msg.perception_stale ? "true" : "false");
-        }
       });
 
     RCLCPP_INFO(
       get_logger(),
-      "StateBlackboardComponent started. enabled=%s publish_blackboard_hz=%.1f ttl(state=%d enemy=%d wireless=%d referee=%d)",
+      "StateBlackboardComponent started. enabled=%s publish_blackboard_hz=%.1f",
       enabled_ ? "true" : "false",
-      publish_blackboard_hz_,
-      state_ttl_ms_,
-      enemy_track_ttl_ms_,
-      wireless_track_ttl_ms_,
-      referee_state_ttl_ms_);
+      publish_blackboard_hz_);
   }
 
 private:

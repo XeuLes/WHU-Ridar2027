@@ -19,16 +19,16 @@ int MapPayloadBuilder::slot_from_robot_id(const std::string & my_color, uint16_t
       case 107: return 5;
       default: return -1;
     }
-  } else {
-    switch (robot_id) {
-      case 1: return 0;
-      case 2: return 1;
-      case 3: return 2;
-      case 4: return 3;
-      case 5: return 4;
-      case 7: return 5;
-      default: return -1;
-    }
+  }
+
+  switch (robot_id) {
+    case 1: return 0;
+    case 2: return 1;
+    case 3: return 2;
+    case 4: return 3;
+    case 5: return 4;
+    case 7: return 5;
+    default: return -1;
   }
 }
 
