@@ -1,0 +1,184 @@
+/**:
+  ros__parameters:
+    use_sim_time: false
+    my_color: "Red"            # Red / Blue
+    my_radar_id: 9
+    my_hero_id: 1
+    my_sentinel_id: 7
+    enemy_hero_id: 101
+    enemy_sentinel_id: 107
+
+referee_serial_rx:
+  ros__parameters:
+    enabled: true
+    device: "/dev/ttyUSB0"
+    baudrate: 115200
+    timeout_ms: 2
+    reconnect_interval_ms: 1000
+    rx_thread_priority: 80
+    enable_crc8_check: true
+    enable_crc16_check: true
+    publish_raw_debug: false
+    publish_rate_hz: 100.0
+    debug_mock_publish: true
+    debug_mock_rate_hz: 2.0
+    my_color: "Red"
+    legacy_mark_progress: true
+    legacy_dart_bits: true
+    rx_mode: "serial"            # mock / topic / serial
+    debug_raw_bytes_topic: "/radar/debug/referee_raw_bytes"
+
+radar_wireless_rx:
+  ros__parameters:
+    enabled: true
+    backend_type: "serial"     # serial / udp / custom
+    my_color: "Red"
+    rx_mode: "mock"            # mock / topic / serial
+    debug_raw_bytes_topic: "/radar/debug/wireless_raw_bytes"
+    debug_mock_publish: true
+    debug_mock_rate_hz: 2.0
+    device: "/dev/ttyUSB1"
+    baudrate: 115200
+    timeout_ms: 2
+    reconnect_interval_ms: 1000
+    rx_thread_priority: 80
+    enable_crc8_check: true
+    enable_crc16_check: true
+    publish_rate_hz: 100.0
+
+client_bridge:
+  ros__parameters:
+    enabled: false
+    mqtt_server_ip: "192.168.12.1"
+    mqtt_server_port: 3333
+    client_ip: "192.168.12.2"
+    udp_video_port: 3334
+    proto_version: 1
+
+perception_adapter:
+  ros__parameters:
+    enabled: true
+    input_enemy_tracks_topic: "/radar/perception/enemy_tracks"
+    input_our_tracks_topic: "/radar/perception/our_tracks"
+    input_topo_hint_topic: "/radar/fusion/topo_hint"
+    input_ballistic_hint_topic: "/radar/fusion/ballistic_hint"
+    output_enemy_tracks_topic: "/radar/internal/perception/enemy_tracks"
+    output_our_tracks_topic: "/radar/internal/perception/our_tracks"
+
+state_blackboard:
+  ros__parameters:
+    enabled: true
+    state_ttl_ms: 500
+    enemy_track_ttl_ms: 300
+    wireless_track_ttl_ms: 500
+    referee_state_ttl_ms: 1500
+    publish_blackboard_hz: 30.0
+
+fusion_engine:
+  ros__parameters:
+    enabled: true
+    fusion_rate_hz: 50.0
+    direct_obs_weight: 1.0
+    wireless_obs_weight: 0.8
+    topo_rule_weight: 0.5
+    stale_decay_ms: 300
+    enable_kalman_slot: false
+    enable_topo_slot: true
+    output_enemy_world_state_topic: "/radar/fusion/enemy_world_state"
+    output_blackboard_topic: "/radar/fusion/battle_blackboard"
+
+decision_engine:
+  ros__parameters:
+    enabled: true
+    my_color: "Red"
+    my_sentinel_id: 7
+    infantry_3_id: 3
+    infantry_4_id: 4
+    enemy_hero_id: 101
+
+    decision_rate_hz: 50.0
+    map_publish_period_ms: 200
+    map_keepalive_ms: 1000
+
+    sentry_alert_change_distance_m: 0.30
+    sentry_alert_keepalive_ms: 1000
+
+    sentry_field_pos_epsilon_m: 0.10
+    sentry_field_keepalive_ms: 1000
+
+    hero_alert_keepalive_ms: 1000
+    double_effect_keepalive_ms: 1500
+
+    low_hp_alert_threshold: 120
+    low_ammo_threshold: 10
+    buff_bonus_score: 8.0
+    macro_bonus_score: 3.0
+
+    hero_alert_area_check: true
+    hero_times_threshold: 3
+    send_double_threshold: 3
+    map_send_stale_ms: 300
+    force_zero_when_lost_ms: 800
+
+    enable_sentry_alert_angle: true
+    sentry_alert_period_ms: 200
+
+    enable_sentry_field_state: true
+    sentry_field_period_ms: 500
+
+    enable_hero_alert_flag: true
+    hero_alert_period_ms: 500
+
+    enable_double_effect_forward: true
+    double_effect_period_ms: 1000
+
+    enable_radar_double_effect_command: true
+    radar_double_effect_period_ms: 1000
+    radar_double_effect_keepalive_ms: 1500
+
+    output_map_request_topic: "/radar/decision/map_publish_request"
+    output_robot_interaction_topic: "/radar/decision/robot_interaction_request"
+    output_radar_command_topic: "/radar/decision/radar_command"
+
+tx_scheduler:
+  ros__parameters:
+    enabled: true
+    scheduler_rate_hz: 100.0
+    deduplicate: true
+    prefer_latest: true
+    enable_rate_limit: true
+
+    map_max_hz: 5.0
+    interaction_max_hz: 30.0
+    radar_cmd_max_hz: 10.0
+
+    same_map_resend_ms: 1000
+    same_interaction_resend_ms: 1000
+    same_radar_cmd_resend_ms: 1000
+
+    input_map_request_topic: "/radar/decision/map_publish_request"
+    input_robot_interaction_topic: "/radar/decision/robot_interaction_request"
+    input_radar_command_topic: "/radar/decision/radar_command"
+    output_map_request_topic: "/radar/tx/map_robot_data"
+    output_robot_interaction_topic: "/radar/tx/robot_interaction"
+    output_radar_command_topic: "/radar/tx/radar_cmd"
+
+referee_serial_tx:
+  ros__parameters:
+    enabled: true
+    tx_mode: "topic"           # topic / serial
+    my_color: "Red"
+    map_0305_layout: "legacy24"   # legacy24 / proto48_operational
+    device: "/dev/ttyUSB0"
+    baudrate: 115200
+    timeout_ms: 2
+    reconnect_interval_ms: 1000
+    tx_thread_priority: 80
+    enable_crc8: true
+    enable_crc16: true
+    send_queue_depth: 128
+    publish_debug_frames: true
+    debug_raw_frame_topic: "/radar/debug/referee_tx_raw_bytes"
+    input_map_request_topic: "/radar/tx/map_robot_data"
+    input_robot_interaction_topic: "/radar/tx/robot_interaction"
+    input_radar_command_topic: "/radar/tx/radar_cmd"

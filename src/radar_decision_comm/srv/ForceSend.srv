@@ -1,0 +1,5 @@
+uint16 cmd_id
+string target
+---
+bool success
+string message

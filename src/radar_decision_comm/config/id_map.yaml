@@ -1,0 +1,59 @@
+robot_ids:
+  Red:
+    radar: 9
+    hero: 1
+    engineer: 2
+    infantry_3: 3
+    infantry_4: 4
+    infantry_5: 5
+    sentinel: 7
+    client: 0
+  Blue:
+    radar: 109
+    hero: 101
+    engineer: 102
+    infantry_3: 103
+    infantry_4: 104
+    infantry_5: 105
+    sentinel: 107
+    client: 0
+
+enemy_ids:
+  Red:
+    hero: 101
+    engineer: 102
+    infantry_3: 103
+    infantry_4: 104
+    infantry_5: 105
+    sentinel: 107
+  Blue:
+    hero: 1
+    engineer: 2
+    infantry_3: 3
+    infantry_4: 4
+    infantry_5: 5
+    sentinel: 7
+
+cmd_ids:
+  referee:
+    game_status: 0x0001
+    robot_hp: 0x0003
+    dart_info: 0x0105
+    radar_mark_progress: 0x020C
+    radar_decision_sync: 0x020E
+  tx:
+    robot_interaction: 0x0301
+    map_radar_data: 0x0305
+  wireless:
+    enemy_position: 0x0A01
+    enemy_hp: 0x0A02
+    enemy_ammo: 0x0A03
+    enemy_macro: 0x0A04
+    enemy_buffs: 0x0A05
+    interference_key: 0x0A06
+
+robot_interaction_subcmd:
+  sentry_alert_angle: 0x0201
+  sentry_field_state: 0x0202
+  hero_alert_flag: 0x0203
+  double_effect_times: 0x0204

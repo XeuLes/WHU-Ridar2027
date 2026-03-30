@@ -1,0 +1,11 @@
+std_msgs/Header header
+uint16 robot_id
+uint32 track_id
+bool is_valid
+float32 confidence
+float32 image_u
+float32 image_v
+geometry_msgs/Point camera_position
+geometry_msgs/Point field_position
+geometry_msgs/Vector3 velocity
+uint32 source_mask

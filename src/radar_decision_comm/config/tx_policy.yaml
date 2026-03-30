@@ -1,0 +1,33 @@
+limits:
+  map_0x0305_hz: 5.0
+  robot_interaction_0x0301_hz: 30.0
+  custom_client_0x0310_hz: 50.0
+  custom_client_0x0311_hz: 75.0
+
+priority:
+  radar_command: 100
+  hero_alert: 90
+  sentry_alert: 80
+  robot_interaction: 70
+  map_publish: 60
+  debug: 10
+
+dedup:
+  enable: true
+  map_position_epsilon_m: 0.10
+  interaction_payload_exact_match: true
+  radar_command_exact_match: true
+
+coalesce:
+  enable: true
+  window_ms: 20
+
+timeout:
+  drop_stale_map_request_ms: 300
+  drop_stale_interaction_request_ms: 200
+  drop_stale_radar_command_ms: 100
+
+routing:
+  enable_robot_interaction: true
+  enable_map_publish: true
+  enable_radar_command: true

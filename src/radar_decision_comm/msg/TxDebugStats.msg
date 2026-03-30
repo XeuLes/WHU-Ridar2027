@@ -1,0 +1,10 @@
+std_msgs/Header header
+uint32 frames_tx
+uint32 frames_tx_ok
+uint32 frames_tx_fail
+uint32 bytes_tx
+uint16 last_cmd_id
+uint32 last_frame_size
+bool serial_open_ok
+string tx_mode
+string last_error
