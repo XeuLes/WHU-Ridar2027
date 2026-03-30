@@ -23,4 +23,6 @@
   <export>
     <build_type>ament_cmake</build_type>
   </export>
+  <depend>ament_index_cpp</depend>
+  <depend>behaviortree_cpp_v3</depend>
 </package>

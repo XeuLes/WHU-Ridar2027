@@ -1,0 +1,36 @@
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="RadarDecisionRoot">
+      <PublishMap/>
+
+      <Fallback name="SentryAlertBranch">
+        <Sequence>
+          <HasEnemy/>
+          <SendSentryAlertAngle/>
+        </Sequence>
+        <Noop/>
+      </Fallback>
+
+      <SendSentryFieldState/>
+      <SendHeroAlertFlag/>
+
+      <Fallback name="DoubleEffectForwardBranch">
+        <Sequence>
+          <RefereeFresh/>
+          <DoubleEffectForwardNeeded/>
+          <SendDoubleEffectForward/>
+        </Sequence>
+        <Noop/>
+      </Fallback>
+
+      <Fallback name="RadarDecisionBranch">
+        <Sequence>
+          <RefereeFresh/>
+          <RadarCommandNeeded/>
+          <SendRadarDecision/>
+        </Sequence>
+        <Noop/>
+      </Fallback>
+    </Sequence>
+  </BehaviorTree>
+</root>
