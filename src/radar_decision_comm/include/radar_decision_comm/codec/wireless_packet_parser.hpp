@@ -35,6 +35,16 @@ struct WirelessParseResult
   std::string warning;
 };
 
+struct WirelessBridgePacket
+{
+  bool valid{false};
+  uint16_t cmd_id{0};
+  std::vector<uint8_t> payload;
+  rclcpp::Time stamp{0, 0, RCL_ROS_TIME};
+  std::string source_type;
+  std::string warning;
+};
+
 class WirelessPacketParser
 {
 public:
@@ -47,6 +57,16 @@ public:
     uint16_t cmd_id,
     const std::vector<uint8_t> & payload,
     const rclcpp::Time & stamp) const;
+
+  WirelessBridgePacket parse_bridge_packet(
+    const std::string & json_text,
+    const rclcpp::Time & default_stamp) const;
+
+  WirelessParseResult parse_bridge_json(
+    const std::string & json_text,
+    const rclcpp::Time & default_stamp,
+    uint16_t * out_cmd_id = nullptr,
+    std::string * out_source_type = nullptr) const;
 
 private:
   std::string my_color_{"Red"};

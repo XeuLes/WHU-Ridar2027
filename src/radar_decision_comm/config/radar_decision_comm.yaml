@@ -25,26 +25,15 @@ referee_serial_rx:
     my_color: "Red"
     legacy_mark_progress: true
     legacy_dart_bits: true
-    rx_mode: "serial"            # mock / topic / serial
+    rx_mode: "topic"             # mock / topic / serial
     debug_raw_bytes_topic: "/radar/debug/referee_raw_bytes"
 
 radar_wireless_rx:
   ros__parameters:
     enabled: true
-    backend_type: "serial"     # serial / udp / custom
     my_color: "Red"
-    rx_mode: "mock"            # mock / topic / serial
-    debug_raw_bytes_topic: "/radar/debug/wireless_raw_bytes"
-    debug_mock_publish: true
-    debug_mock_rate_hz: 2.0
-    device: "/dev/ttyUSB1"
-    baudrate: 115200
-    timeout_ms: 2
-    reconnect_interval_ms: 1000
-    rx_thread_priority: 80
-    enable_crc8_check: true
-    enable_crc16_check: true
-    publish_rate_hz: 100.0
+    input_pdu_topic: "/radar/all_pdu"
+    input_queue_depth: 50
 
 client_bridge:
   ros__parameters:

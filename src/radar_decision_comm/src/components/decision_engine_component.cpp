@@ -486,59 +486,59 @@ private:
 
   void register_bt_nodes()
   {
-    factory_.registerSimpleAction("Noop", []() { return BT::NodeStatus::SUCCESS; });
+    factory_.registerSimpleAction("Noop", [](BT::TreeNode &) { return BT::NodeStatus::SUCCESS; });
 
-    factory_.registerSimpleAction("PublishMap", [this]() {
+    factory_.registerSimpleAction("PublishMap", [this](BT::TreeNode &) {
       (void)action_publish_map();
       return BT::NodeStatus::SUCCESS;
     });
 
-    factory_.registerSimpleAction("SendSentryAlertAngle", [this]() {
+    factory_.registerSimpleAction("SendSentryAlertAngle", [this](BT::TreeNode &) {
       (void)action_send_sentry_alert();
       return BT::NodeStatus::SUCCESS;
     });
 
-    factory_.registerSimpleAction("SendSentryFieldState", [this]() {
+    factory_.registerSimpleAction("SendSentryFieldState", [this](BT::TreeNode &) {
       (void)action_send_sentry_field_state();
       return BT::NodeStatus::SUCCESS;
     });
 
-    factory_.registerSimpleAction("SendHeroAlertFlag", [this]() {
+    factory_.registerSimpleAction("SendHeroAlertFlag", [this](BT::TreeNode &) {
       (void)action_send_hero_alert();
       return BT::NodeStatus::SUCCESS;
     });
 
-    factory_.registerSimpleAction("SendDoubleEffectForward", [this]() {
+    factory_.registerSimpleAction("SendDoubleEffectForward", [this](BT::TreeNode &) {
       (void)action_send_double_forward();
       return BT::NodeStatus::SUCCESS;
     });
 
-    factory_.registerSimpleAction("SendRadarDecision", [this]() {
+    factory_.registerSimpleAction("SendRadarDecision", [this](BT::TreeNode &) {
       (void)action_send_radar_decision();
       return BT::NodeStatus::SUCCESS;
     });
 
-    factory_.registerSimpleCondition("HasEnemy", [this]() {
+    factory_.registerSimpleCondition("HasEnemy", [this](BT::TreeNode &) {
       return current_selected_target_.has_target ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
     });
 
-    factory_.registerSimpleCondition("RefereeFresh", [this]() {
+    factory_.registerSimpleCondition("RefereeFresh", [this](BT::TreeNode &) {
       return last_blackboard_.referee_stale ? BT::NodeStatus::FAILURE : BT::NodeStatus::SUCCESS;
     });
 
-    factory_.registerSimpleCondition("WirelessFresh", [this]() {
+    factory_.registerSimpleCondition("WirelessFresh", [this](BT::TreeNode &) {
       return last_blackboard_.wireless_stale ? BT::NodeStatus::FAILURE : BT::NodeStatus::SUCCESS;
     });
 
-    factory_.registerSimpleCondition("HeroAlertNeeded", [this]() {
+    factory_.registerSimpleCondition("HeroAlertNeeded", [this](BT::TreeNode &) {
       return evaluate_hero_alert() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
     });
 
-    factory_.registerSimpleCondition("DoubleEffectForwardNeeded", [this]() {
+    factory_.registerSimpleCondition("DoubleEffectForwardNeeded", [this](BT::TreeNode &) {
       return current_fsm_output_.should_forward ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
     });
 
-    factory_.registerSimpleCondition("RadarCommandNeeded", [this]() {
+    factory_.registerSimpleCondition("RadarCommandNeeded", [this](BT::TreeNode &) {
       return current_fsm_output_.should_send_radar_command ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
     });
   }
@@ -551,7 +551,7 @@ private:
 
     if (bt_xml_path_.empty()) {
       resolved_bt_xml_path_ =
-        ament_index_cpp::get_package_share_directory("radar_decision_comm") + "/bt/decision_tree.xml";
+        ament_index_cpp::get_package_share_directory("radar_decision_comm") + "/config/bt/decision_tree.xml";
     } else {
       resolved_bt_xml_path_ = bt_xml_path_;
     }
