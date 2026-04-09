@@ -52,9 +52,8 @@ int main()
     make_pdu_json("info", 0x0A03, "1e0014000a0008000600", 123456791),
     rclcpp::Time(0, 0, RCL_ROS_TIME));
   if (!parsed_ammo.has_enemy_ammo || parsed_ammo.enemy_ammo.hero != 30 ||
-    parsed_ammo.enemy_ammo.engineer != 0 || parsed_ammo.enemy_ammo.infantry_3 != 20 ||
+    parsed_ammo.enemy_ammo.infantry_3 != 20 ||
     parsed_ammo.enemy_ammo.infantry_4 != 10 || parsed_ammo.enemy_ammo.aerial_6 != 8 ||
-    parsed_ammo.enemy_ammo.infantry_5 != 0 ||
     parsed_ammo.enemy_ammo.sentinel != 6)
   {
     std::cerr << "wireless selfcheck failed: 0x0A03 parse mismatch" << std::endl;

@@ -54,11 +54,9 @@ void fill_five_u16_ammo_msg(
 {
   msg.header.stamp = stamp;
   msg.hero = le_u16(payload, 0);
-  msg.engineer = 0;
   msg.infantry_3 = le_u16(payload, 2);
   msg.infantry_4 = le_u16(payload, 4);
   msg.aerial_6 = le_u16(payload, 6);
-  msg.infantry_5 = 0;
   msg.sentinel = le_u16(payload, 8);
 }
 

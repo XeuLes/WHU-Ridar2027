@@ -205,10 +205,10 @@ private:
   {
     switch (enemy_slot_from_robot_id(robot_id)) {
       case 0: return last_blackboard_.wireless_enemy_ammo.hero;
-      case 1: return last_blackboard_.wireless_enemy_ammo.engineer;
+      case 1: return 0;
       case 2: return last_blackboard_.wireless_enemy_ammo.infantry_3;
       case 3: return last_blackboard_.wireless_enemy_ammo.infantry_4;
-      case 4: return last_blackboard_.wireless_enemy_ammo.infantry_5;
+      case 4: return 0;
       case 5: return last_blackboard_.wireless_enemy_ammo.sentinel;
       default: return 0;
     }

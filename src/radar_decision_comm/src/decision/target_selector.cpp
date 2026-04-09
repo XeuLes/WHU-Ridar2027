@@ -53,10 +53,10 @@ uint16_t TargetSelector::wireless_ammo_for_slot(
 {
   switch (slot) {
     case 0: return bb.wireless_enemy_ammo.hero;
-    case 1: return bb.wireless_enemy_ammo.engineer;
+    case 1: return 0;
     case 2: return bb.wireless_enemy_ammo.infantry_3;
     case 3: return bb.wireless_enemy_ammo.infantry_4;
-    case 4: return bb.wireless_enemy_ammo.infantry_5;
+    case 4: return 0;
     case 5: return bb.wireless_enemy_ammo.sentinel;
     default: return 0;
   }
