@@ -1,9 +1,0 @@
-digraph G {
-"cam_install_frame" -> "gimbal_base_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
-"gimbal_axis2_frame" -> "gimbal_cam_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
-"gimbal_cam_frame" -> "laser_emitter_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
-edge [style=invis];
- subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
-"Recorded at time: 1768656826.909801"[ shape=plaintext ] ;
-}->"gimbal_axis2_frame";
-}
