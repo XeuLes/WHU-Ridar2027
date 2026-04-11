@@ -10,4 +10,6 @@ config/merged_bag/*
 
 
 
-ros2bags/
+ros2bags/src/lidar/localization/config/*.pcd
+__pycache__/
+*.pyc
