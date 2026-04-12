@@ -14,6 +14,14 @@
       <SendSentryFieldState/>
       <SendHeroAlertFlag/>
 
+      <Fallback name="HeroLobAssistBranch">
+        <Sequence>
+          <HeroLobActionNeeded/>
+          <SendHeroLobAssist/>
+        </Sequence>
+        <Noop/>
+      </Fallback>
+
       <Fallback name="DoubleEffectForwardBranch">
         <Sequence>
           <RefereeFresh/>

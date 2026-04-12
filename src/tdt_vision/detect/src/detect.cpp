@@ -1,5 +1,9 @@
 #include "detect.h"
 #include <opencv2/imgproc.hpp>
+#include <pcl/point_cloud.h>
+#include <pcl/point_types.h>
+#include <pcl_conversions/pcl_conversions.h>
+#include <cmath>
 #include <rclcpp/logging.hpp>
 #include <rclcpp/utilities.hpp>
 #include <future>
@@ -189,6 +193,27 @@ static cv::Mat resize_keep_ratio_blackpad(
     return dst;  // 输出始终是 1280x1280
 }
 
+struct UavDetectionCandidate {
+    cv::Rect bbox;
+    cv::Rect roi;
+    cv::Point2f roi_center;
+    float confidence{0.0f};
+    int color{1};
+};
+
+static cv::Rect build_uav_upper_middle_roi(const cv::Rect& bbox)
+{
+    if (bbox.width <= 0 || bbox.height <= 0) {
+        return cv::Rect();
+    }
+
+    const int roi_x = bbox.x + static_cast<int>(std::round(bbox.width * 0.30f));
+    const int roi_y = bbox.y;
+    const int roi_w = std::max(1, static_cast<int>(std::round(bbox.width * 0.40f)));
+    const int roi_h = std::max(1, static_cast<int>(std::round(bbox.height * 0.40f)));
+    return cv::Rect(roi_x, roi_y, roi_w, roi_h);
+}
+
 // ==================== 检测节点构造函数 ====================
 /**
  * @brief Detect节点构造函数
@@ -288,15 +313,10 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
         RCLCPP_ERROR(this->get_logger(), "[INIT] Check if file exists, has correct format, or is corrupted");
     }
 
-    // 7. 初始化UAV检测辅助模块
-    this->light_bar_detector_ = std::make_shared<LightBarDetector>();  // 灯条精细检测器
-    
-    // 8. 初始化UAV DeepSORT跟踪器（结合卡尔曼滤波）
-    // 参数说明：
-    //   max_iou_distance = 0.7   - IOU距离阈值（1-IOU < 0.7认为是同一目标）
-    //   max_feature_distance = 0.3 - 特征距离阈值（暂未使用外观特征）
-    //   feature_weight = 0.0     - 特征权重（0=纯IOU匹配，1=纯特征匹配）
-    this->uav_tracker_ = std::make_shared<UAVDeepSORTTracker>(0.7f, 0.3f, 0.0f);
+    // UAV 老版本灯条/DeepSORT 逻辑不再接入当前定位链路
+    this->light_bar_detector_.reset();
+    this->uav_tracker_.reset();
+    RCLCPP_INFO(this->get_logger(), "[INIT] UAV pipeline uses raw YOLO boxes only (DeepSORT/light detector disabled)");
 
     image_topic_ = this->declare_parameter<std::string>("image_topic", "/camera_image");
 
@@ -305,10 +325,68 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
         image_topic_, rclcpp::SensorDataQoS(),
         std::bind(&Detect::callback, this, std::placeholders::_1));
 
+    this->declare_parameter<int>("uav_intersection_timeout_ms", 120);
+    uav_intersection_timeout_ms_ =
+        this->get_parameter("uav_intersection_timeout_ms").as_int();
+    uav_intersection_debug_sub_ =
+        this->create_subscription<sensor_msgs::msg::PointCloud2>(
+            "/uav_intersection_debug", rclcpp::SensorDataQoS(),
+            std::bind(&Detect::uavIntersectionDebugCallback, this, std::placeholders::_1));
+    uav_cluster_debug_sub_ =
+        this->create_subscription<sensor_msgs::msg::PointCloud2>(
+            "/uav_cluster_debug", rclcpp::SensorDataQoS(),
+            std::bind(&Detect::uavClusterDebugCallback, this, std::placeholders::_1));
+
     pub = this->create_publisher<vision_interface::msg::DetectResult>(
         "detect_result", rclcpp::SensorDataQoS());
 
     RCLCPP_INFO(this->get_logger(), "Detect node has been started.");
+}
+
+void Detect::uavIntersectionDebugCallback(
+    const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
+    pcl::PointCloud<pcl::PointXYZ> cloud;
+    pcl::fromROSMsg(*msg, cloud);
+
+    std::vector<cv::Point2f> points;
+    points.reserve(cloud.points.size());
+    for (const auto& p : cloud.points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+            continue;
+        }
+        points.emplace_back(p.x, p.y);
+    }
+
+    std::lock_guard<std::mutex> lk(uav_intersection_mutex_);
+    uav_intersection_points_ = std::move(points);
+    uav_intersection_stamp_ =
+        (msg->header.stamp.sec == 0 && msg->header.stamp.nanosec == 0)
+            ? this->now()
+            : rclcpp::Time(msg->header.stamp);
+}
+
+void Detect::uavClusterDebugCallback(
+    const sensor_msgs::msg::PointCloud2::SharedPtr msg)
+{
+    pcl::PointCloud<pcl::PointXYZ> cloud;
+    pcl::fromROSMsg(*msg, cloud);
+
+    std::vector<cv::Point2f> points;
+    points.reserve(cloud.points.size());
+    for (const auto& p : cloud.points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+            continue;
+        }
+        points.emplace_back(p.x, p.y);
+    }
+
+    std::lock_guard<std::mutex> lk(uav_intersection_mutex_);
+    uav_cluster_points_ = std::move(points);
+    uav_cluster_stamp_ =
+        (msg->header.stamp.sec == 0 && msg->header.stamp.nanosec == 0)
+            ? this->now()
+            : rclcpp::Time(msg->header.stamp);
 }
 
 // ==================== 主检测回调函数 ====================
@@ -468,6 +546,7 @@ for (const auto& b : result) {
 
     // ==================== 阶段2: 初始化检测结果消息 ====================
     vision_interface::msg::DetectResult detect_result;
+    detect_result.header = msg->header;
     
     // 2.1 初始化车辆检测数组（防止垃圾数据）
     for (int i = 0; i < 7; i++) {
@@ -486,6 +565,15 @@ for (const auto& b : result) {
         detect_result.red_uav_light_x[i] = 0.0f;
         detect_result.red_uav_light_y[i] = 0.0f;
     }
+
+    detect_result.blue_uav_bbox_x = 0.0f;
+    detect_result.blue_uav_bbox_y = 0.0f;
+    detect_result.blue_uav_bbox_w = 0.0f;
+    detect_result.blue_uav_bbox_h = 0.0f;
+    detect_result.red_uav_bbox_x = 0.0f;
+    detect_result.red_uav_bbox_y = 0.0f;
+    detect_result.red_uav_bbox_w = 0.0f;
+    detect_result.red_uav_bbox_h = 0.0f;
     
     size_t array_limit = detect_result.blue_x.size(); 
 
@@ -756,290 +844,146 @@ for (const auto& b : result) {
         //                     uav_raw_result[i].right, uav_raw_result[i].bottom);
     }
     
-    // 4.2 准备DeepSORT跟踪器输入数据
-    std::vector<cv::Rect> uav_bboxes;
-    std::vector<float> uav_confidences;
-    std::vector<cv::Mat> uav_features;  // 暂不使用外观特征（feature_weight=0.0）
-    
-    for (const auto& uav : uav_filtered) {
-        // 坐标转换：1280x1280 → 原图尺寸
-        // 1280x1280（含黑边）坐标 -> 原图坐标
-        int x1 = (int)std::round((uav.left   - pad_x) * uav_scale_inv);
-        int y1 = (int)std::round((uav.top    - pad_y) * uav_scale_inv);
-        int x2 = (int)std::round((uav.right  - pad_x) * uav_scale_inv);
-        int y2 = (int)std::round((uav.bottom - pad_y) * uav_scale_inv);
+    std::vector<UavDetectionCandidate> uav_candidates;
+    uav_candidates.reserve(uav_filtered.size());
 
-        // clamp 到图像范围（防止越界）
+    auto area_ratio_ok = [&](const cv::Rect& r) -> bool {
+        if (r.width <= 0 || r.height <= 0) return false;
+        if (r.width < r.height || r.width > 4 * r.height) return false;
+        const float ratio = static_cast<float>(r.area()) / img_area;
+        return ratio >= 0.0002f && ratio <= 0.08f;
+    };
+
+    for (const auto& uav : uav_filtered) {
+        int x1 = static_cast<int>(std::round((uav.left - pad_x) * uav_scale_inv));
+        int y1 = static_cast<int>(std::round((uav.top - pad_y) * uav_scale_inv));
+        int x2 = static_cast<int>(std::round((uav.right - pad_x) * uav_scale_inv));
+        int y2 = static_cast<int>(std::round((uav.bottom - pad_y) * uav_scale_inv));
+
         x1 = std::max(0, std::min(x1, img.cols - 1));
         y1 = std::max(0, std::min(y1, img.rows - 1));
         x2 = std::max(0, std::min(x2, img.cols - 1));
         y2 = std::max(0, std::min(y2, img.rows - 1));
 
-        int w = x2 - x1;
-        int h = y2 - y1;
-        if (w <= 0 || h <= 0) {
+        cv::Rect bbox(x1, y1, x2 - x1, y2 - y1);
+        bbox = getSafeRectUAV(img, bbox);
+        if (!area_ratio_ok(bbox)) {
             continue;
         }
 
-        // 长宽比过滤
-        if (w < h || w > 4 * h) {
-            continue;
+        cv::Mat bbox_roi = img(bbox);
+        const int uav_color = getColor(bbox_roi);
+
+        cv::Rect roi = build_uav_upper_middle_roi(bbox);
+        roi = getSafeRect(img, roi);
+        if (roi.width <= 0 || roi.height <= 0) {
+            roi = bbox;
         }
-        
-        // 面积过滤（排除异常大小的检测）
-        float uav_area = static_cast<float>(w * h);
-        float ratio = uav_area / img_area;
-        if (ratio > 0.08f || ratio < 0.0002f) {
-            continue;
-        }
-        
-        cv::Rect bbox(x1, y1, w, h);
-        uav_bboxes.push_back(bbox);
-        uav_confidences.push_back(uav.confidence);
+
+        UavDetectionCandidate candidate;
+        candidate.bbox = bbox;
+        candidate.roi = roi;
+        candidate.roi_center = cv::Point2f(
+            roi.x + roi.width * 0.5f,
+            roi.y + roi.height * 0.5f);
+        candidate.confidence = uav.confidence;
+        candidate.color = uav_color;
+        uav_candidates.push_back(candidate);
     }
-    
-    // 4.3 更新DeepSORT跟踪器（匹配 + 卡尔曼预测）
-    std::vector<std::shared_ptr<UAVTrack>> confirmed_tracks;
-    if (uav_tracker_ != nullptr) {
-        confirmed_tracks = uav_tracker_->update(uav_bboxes, uav_confidences, uav_features);
-        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-        //                     "[UAV-Track] Detections: %zu, Confirmed tracks: %zu",
-        //                     uav_bboxes.size(), confirmed_tracks.size());
-    } else {
-        RCLCPP_ERROR_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                             "[UAV-Track] Tracker not initialized!");
+
+    int uav_id = UAV_ID;
+    int idx = uav_id - 1;
+    bool can_send = (idx < static_cast<int>(array_limit));
+    if (!can_send) {
+        RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
+                             "DetectResult array size %zu too small for UAV index %d; consider expanding msg arrays",
+                             array_limit, idx);
     }
-    
-    // 4.4 处理每个确认的跟踪目标（优先处理有检测的，跳过过旧的预测）
-    int uav_passed = 0;
-    // 只处理最多两个track
-    std::vector<cv::Rect> kalman_rects; // 每帧局部变量
-    int track_count = 0;
-    for (const auto& track : confirmed_tracks) {
-        if (track_count >= 2) break;
-        // 快速过滤：跳过丢失超过UAV_MAX_TRACKING_AGE帧的轨迹（减少无效计算）
-        if (track->getTimeSinceUpdate() > UAV_MAX_TRACKING_AGE) {
-            RCLCPP_DEBUG(this->get_logger(), "[UAV] Skipping Track ID=%d (lost %d frames)",
-                        track->getID(), track->getTimeSinceUpdate());
-            continue;
+
+    auto choose_best_candidate = [&](int color) -> const UavDetectionCandidate* {
+        const UavDetectionCandidate* best = nullptr;
+        for (const auto& candidate : uav_candidates) {
+            if (candidate.color != color) {
+                continue;
+            }
+            if (best == nullptr || candidate.confidence > best->confidence) {
+                best = &candidate;
+            }
         }
-        // 4.4.1 判断当前帧是否有检测匹配
-        //      time_since_update=0: 有YOLO检测匹配
-        //      time_since_update>0: 仅卡尔曼预测
-        bool has_detection = (track->getTimeSinceUpdate() == 0);
+        return best;
+    };
 
-        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-        //                     "[UAV] Track ID=%d, has_detection=%s, time_since_update=%d",
-        //                     track->getID(), has_detection ? "YES" : "NO", 
-        //                     track->getTimeSinceUpdate());
+    const UavDetectionCandidate* best_blue = choose_best_candidate(0);
+    const UavDetectionCandidate* best_red = choose_best_candidate(2);
 
-        // 4.4.2 根据检测状态选择边界框
-        auto area_ratio_ok = [&](const cv::Rect& r) -> bool {
-            if (r.width <= 0 || r.height <= 0) return false;
-            if(r.width<r.height || r.width>4*r.height) return false;
-            float ratio = (float)r.area() / img_area;
-            return (ratio >= 0.0002f && ratio <= 0.05f);
-        };
+    if (can_send && best_blue != nullptr) {
+        detect_result.blue_x[idx] = best_blue->roi_center.x;
+        detect_result.blue_y[idx] = best_blue->roi_center.y;
+        detect_result.blue_uav_bbox_x = static_cast<float>(best_blue->bbox.x);
+        detect_result.blue_uav_bbox_y = static_cast<float>(best_blue->bbox.y);
+        detect_result.blue_uav_bbox_w = static_cast<float>(best_blue->bbox.width);
+        detect_result.blue_uav_bbox_h = static_cast<float>(best_blue->bbox.height);
+    }
 
-        // 选择 track 框（检测框或预测框）
-        cv::Rect uav_rect_raw = has_detection ? track->getBox(): track->getPredictedBox();
+    if (can_send && best_red != nullptr) {
+        detect_result.red_x[idx] = best_red->roi_center.x;
+        detect_result.red_y[idx] = best_red->roi_center.y;
+        detect_result.red_uav_bbox_x = static_cast<float>(best_red->bbox.x);
+        detect_result.red_uav_bbox_y = static_cast<float>(best_red->bbox.y);
+        detect_result.red_uav_bbox_w = static_cast<float>(best_red->bbox.width);
+        detect_result.red_uav_bbox_h = static_cast<float>(best_red->bbox.height);
+    }
 
-        // ===== 在裁剪前对 track 框做面积过滤（关键）=====
-        if (!area_ratio_ok(uav_rect_raw)) {
-            // 这里两种策略二选一：
-            // A) 仅跳过本帧处理（推荐：不会破坏 tracker 内部状态）
-            // continue;
+    if (debug) {
+        for (const auto& candidate : uav_candidates) {
+            cv::Scalar color_bgr = cv::Scalar(255, 0, 255);
+            std::string label = "UAV";
+            if (candidate.color == 0) {
+                color_bgr = cv::Scalar(255, 0, 0);
+                label = "UAV-B";
+            } else if (candidate.color == 2) {
+                color_bgr = cv::Scalar(0, 0, 255);
+                label = "UAV-R";
+            }
 
-            // B) 同时让 track “视为丢失”（更激进，会加速删除异常轨迹）
-            track->markMissed();
-            continue;
-        }
-
-        // 再做安全裁剪（防越界）
-        cv::Rect uav_rect = getSafeRectUAV(img, uav_rect_raw);
-        if (uav_rect.width <= 0 || uav_rect.height <= 0) continue;
-
-
-        uav_passed++;
-        track_count++;
-
-        // 4.4.3 快速检查有效性（getSafeRect已确保边界安全，只需检查面积）
-        if (uav_rect.width <= 0 || uav_rect.height <= 0) {
-            continue;
+            cv::rectangle(img, candidate.bbox, color_bgr, 2);
+            cv::rectangle(img, candidate.roi, cv::Scalar(0, 255, 255), 2);
+            cv::circle(img, candidate.roi_center, 4, cv::Scalar(0, 255, 0), -1);
+            cv::putText(img, label,
+                        cv::Point(candidate.bbox.x, std::max(candidate.bbox.y - 6, 0)),
+                        cv::FONT_HERSHEY_SIMPLEX, 0.8, color_bgr, 2);
         }
 
-        // 收集kalman预测框用于重叠判断
-        if (!has_detection) {
-            kalman_rects.push_back(uav_rect);
-        }
-        
-        cv::Mat uav_roi = img(uav_rect);
-        int uav_color = getColor(uav_roi);
+        const rclcpp::Time image_stamp =
+            (msg->header.stamp.sec == 0 && msg->header.stamp.nanosec == 0)
+                ? this->now()
+                : rclcpp::Time(msg->header.stamp);
 
-        // 4.4.4 精细检测（对所有有效轨迹执行，包括YOLO检测和卡尔曼预测）
-        cv::Rect fine_roi_local;
-        cv::Point2f fine_roi_center_global;
-        std::vector<LightBarDetector::LightBar> detected_lights;
-        std::vector<LightBarDetector::UAVTarget> detected_uav_targets;
-        cv::Point2f refined_center;
-        
-        // 跳过time_since_update>UAV_MAX_TRACKING_AGE的轨迹（允许卡尔曼预测，提高跟踪鲁棒性）
-        if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
-            // 调用LightBarDetector执行精细检测流程（对检测框和预测框都执行）
-            refined_center = light_bar_detector_->performFineDetection(
-                uav_roi, uav_rect, uav_color,
-                fine_roi_local, fine_roi_center_global,
-                detected_lights, detected_uav_targets
-            );
-            
-            // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-            //                     "[UAV-Fine] %s: Detected %zu lights, %zu targets, center=(%.1f,%.1f)",
-            //                     has_detection ? "YOLO" : "KALMAN",
-            //                     detected_lights.size(), detected_uav_targets.size(),
-            //                     refined_center.x, refined_center.y);
-        } else {
-            // 无检测时直接使用预测框中心
-            refined_center = cv::Point2f(
-                uav_rect.x + uav_rect.width / 2.0f,
-                uav_rect.y + uav_rect.height / 2.0f
-            );
-            
-            // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-            //                     "[UAV-Fine] No fine detection, using %s center=(%.1f,%.1f)",
-            //                     has_detection ? "YOLO" : "predicted",
-            //                     refined_center.x, refined_center.y);
-        }
-
-        // 4.4.5 填充检测结果
-        cv::Scalar color_bgr;
-        int uav_id = UAV_ID; // 7
-        int idx = uav_id - 1; // 6
-        bool can_send = (idx < (int)array_limit);
-        
-        // UAV框偏中心点
-        cv::Point2f uav_box_center(
-            uav_rect.x + uav_rect.width *0.50f,
-            uav_rect.y + uav_rect.height *0.60f
-        );
-        
-        // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-        //                     "[UAV-Box] uav_rect=[%d,%d,%d,%d], center=(%.1f,%.1f), refined_center=(%.1f,%.1f)",
-        //                     uav_rect.x, uav_rect.y, uav_rect.width, uav_rect.height,
-        //                     uav_box_center.x, uav_box_center.y,
-        //                     refined_center.x, refined_center.y);
-
-        if (uav_color == 0) { // Blue
-            color_bgr = cv::Scalar(255, 0, 0);
-            if (can_send) {
-                if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
-                    detect_result.blue_x[idx] = uav_box_center.x;
-                    detect_result.blue_y[idx] = uav_box_center.y;
-                    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                    //                     "[UAV] Blue team sent: refined_center=(%.1f, %.1f)", 
-                    //                     refined_center.x, refined_center.y);
-                } else {
-                    detect_result.blue_x[idx] = 0.0f;
-                    detect_result.blue_y[idx] = 0.0f;
+        std::vector<cv::Point2f> debug_points;
+        std::vector<cv::Point2f> debug_cluster_points;
+        {
+            std::lock_guard<std::mutex> lk(uav_intersection_mutex_);
+            if (uav_intersection_stamp_.nanoseconds() != 0) {
+                const double dt_ms =
+                    std::fabs((image_stamp - uav_intersection_stamp_).seconds()) * 1000.0;
+                if (dt_ms <= static_cast<double>(uav_intersection_timeout_ms_)) {
+                    debug_points = uav_intersection_points_;
                 }
             }
-            // 发送蓝方UAV所有灯条对的中心点（最多2个）
-            size_t light_count = std::min(detected_uav_targets.size(), size_t(2));
-            detect_result.blue_uav_light_count = static_cast<uint8_t>(light_count);
-            for (size_t i = 0; i < light_count; i++) {
-                detect_result.blue_uav_light_x[i] = uav_rect.x + fine_roi_local.x + detected_uav_targets[i].center.x;
-                detect_result.blue_uav_light_y[i] = uav_rect.y + fine_roi_local.y + detected_uav_targets[i].center.y;
-            }
-            // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-            //                     "[UAV-Light] Blue team: %u light pairs sent", 
-            //                     detect_result.blue_uav_light_count);
-        } else if (uav_color == 2) { // Red
-            color_bgr = cv::Scalar(0, 0, 255);
-            if (can_send) {
-                if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
-                    detect_result.red_x[idx] = uav_box_center.x;
-                    detect_result.red_y[idx] = uav_box_center.y;
-                    // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-                    //                     "[UAV] Red team sent: refined_center=(%.1f, %.1f)", 
-                    //                     refined_center.x, refined_center.y);
-                } else {
-                    detect_result.red_x[idx] = 0.0f;
-                    detect_result.red_y[idx] = 0.0f;
+            if (uav_cluster_stamp_.nanoseconds() != 0) {
+                const double dt_ms =
+                    std::fabs((image_stamp - uav_cluster_stamp_).seconds()) * 1000.0;
+                if (dt_ms <= static_cast<double>(uav_intersection_timeout_ms_)) {
+                    debug_cluster_points = uav_cluster_points_;
                 }
             }
-            // 发送红方UAV所有灯条对的中心点（最多2个）
-            size_t light_count = std::min(detected_uav_targets.size(), size_t(2));
-            detect_result.red_uav_light_count = static_cast<uint8_t>(light_count);
-            for (size_t i = 0; i < light_count; i++) {
-                detect_result.red_uav_light_x[i] = uav_rect.x + fine_roi_local.x + detected_uav_targets[i].center.x;
-                detect_result.red_uav_light_y[i] = uav_rect.y + fine_roi_local.y + detected_uav_targets[i].center.y;
-            }
-            // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
-            //                     "[UAV-Light] Red team: %u light pairs sent", 
-            //                     detect_result.red_uav_light_count);
-        } else {
-            color_bgr = cv::Scalar(255, 0, 255); 
         }
 
-        if (!can_send) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 2000,
-                                 "DetectResult array size %zu too small for UAV index %d; consider expanding msg arrays",
-                                 array_limit, idx);
+        for (const auto& pt : debug_points) {
+            cv::circle(img, pt, 1, cv::Scalar(0, 255, 255), -1);
         }
-
-        // 4.4.6 绘制可视化结果（调试模式）
-        if (debug) {
-            // 只做多个kalman预测框重叠时只保留最后一个
-            bool draw_this = true;
-            if (!has_detection) {
-                // 只保留最后一个重叠的kalman预测框
-                for (size_t k = kalman_rects.size() - 1; k > 0; --k) {
-                    if (kalman_rects[k] == uav_rect) continue;
-                    cv::Rect inter = kalman_rects[k] & uav_rect;
-                    if (inter.area() > 0) {
-                        draw_this = false;
-                        break;
-                    }
-                }
-            }
-            if (draw_this) {
-                cv::rectangle(img, uav_rect, color_bgr, 2);
-                if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
-                    light_bar_detector_->drawLightDetection(
-                        img, uav_rect, fine_roi_local,
-                        detected_lights, detected_uav_targets,
-                        refined_center, fine_roi_center_global
-                    );
-                }
-            }
-
-            // 第二步:如果执行了精细检测,绘制灯条检测结果（对检测框和预测框都绘制）
-            if (light_bar_detector_ != nullptr && track->getTimeSinceUpdate() <= UAV_MAX_TRACKING_AGE) {
-                light_bar_detector_->drawLightDetection(
-                    img, uav_rect, fine_roi_local,
-                    detected_lights, detected_uav_targets,
-                    refined_center, fine_roi_center_global
-                );
-            }
-            
-            // 第三步:绘制UAV标签
-            std::string label = "UAV(ID" + std::to_string(uav_id) + ")";
-            if (!has_detection) {
-                label += " [KALMAN]";
-            }
-            if (!can_send) {
-                label += " MSG-FULL";
-            }
-            
-            int baseline = 0;
-            cv::Size txt_size = cv::getTextSize(label, cv::FONT_HERSHEY_SIMPLEX, 0.8, 2, &baseline);
-            cv::rectangle(img,
-                        cv::Point(uav_rect.x, std::max(uav_rect.y - txt_size.height - 4, 0)),
-                        cv::Point(uav_rect.x + txt_size.width, uav_rect.y + 2),
-                        cv::Scalar(0, 0, 0), -1);
-            
-            cv::Scalar label_color = has_detection ? color_bgr : cv::Scalar(200, 200, 255);
-            cv::putText(img, label, cv::Point(uav_rect.x, std::max(uav_rect.y - 6, 0)),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.8, label_color, 2);
+        for (const auto& pt : debug_cluster_points) {
+            cv::circle(img, pt, 1, cv::Scalar(0, 0, 255), -1);
         }
     }
 
@@ -1047,8 +991,6 @@ for (const auto& b : result) {
 
     // RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] header.stamp: sec=%u, nsec=%u", detect_result.header.stamp.sec, detect_result.header.stamp.nanosec);
     // 输出UAV相关坐标日志，便于调试
-    int uav_id = UAV_ID; // 7
-    int idx = uav_id - 1; // 6
     // RCLCPP_INFO(this->get_logger(), "[DETECT-RESULT] blue_x[%d]=%.2f, blue_y[%d]=%.2f, red_x[%d]=%.2f, red_y[%d]=%.2f", 
     //     idx, detect_result.blue_x[idx], idx, detect_result.blue_y[idx], idx, detect_result.red_x[idx], idx, detect_result.red_y[idx]);
 
@@ -1067,11 +1009,11 @@ for (const auto& b : result) {
     
     // 显示检测统计信息（显示过滤后的UAV数量）
     std::string status_text = "Cars: " + std::to_string(cars.size()) +
-                          " | UAVs: " + std::to_string(uav_filtered.size());
+                          " | UAVs: " + std::to_string(uav_candidates.size());
 
     cv::putText(final_img, status_text, cv::Point(10, 30), cv::FONT_HERSHEY_SIMPLEX, 1.2, cv::Scalar(0, 255, 0), 2);
     
-    if (uav_filtered.empty()) {
+    if (uav_candidates.empty()) {
         cv::putText(final_img, "NO UAV DETECTED!", cv::Point(10, 70), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
     }
     

@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <fstream>
 #include <memory>
+#include <limits>
 #include <optional>
 #include <sstream>
 #include <string>
@@ -22,8 +23,13 @@
 #include "radar_decision_comm/codec/interaction_payload_builder.hpp"
 #include "radar_decision_comm/common/interaction_cmd_ids.hpp"
 #include "radar_decision_comm/decision/double_effect_fsm.hpp"
+#include "radar_decision_comm/decision/hero_lob_ballistics.hpp"
+#include "radar_decision_comm/decision/hero_lob_fsm.hpp"
+#include "radar_decision_comm/decision/hero_lob_window.hpp"
 #include "radar_decision_comm/decision/target_selector.hpp"
 #include "radar_decision_comm/msg/battle_blackboard.hpp"
+#include "radar_decision_comm/msg/hero_lob_assist_debug.hpp"
+#include "radar_decision_comm/msg/hero_lob_assist_status.hpp"
 #include "radar_decision_comm/msg/map_publish_request.hpp"
 #include "radar_decision_comm/msg/radar_decision_command.hpp"
 #include "radar_decision_comm/msg/robot_interaction_request.hpp"
@@ -53,6 +59,7 @@ public:
     decision_mode_ = this->declare_parameter<std::string>("decision_mode", "btcpp");   // rule / btcpp
 
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
+    my_hero_id_ = this->declare_parameter<int>("my_hero_id", 1);
     my_sentinel_id_ = this->declare_parameter<int>("my_sentinel_id", 7);
     infantry_3_id_ = this->declare_parameter<int>("infantry_3_id", 3);
     infantry_4_id_ = this->declare_parameter<int>("infantry_4_id", 4);
@@ -76,8 +83,50 @@ public:
     enable_sentry_alert_angle_ = this->declare_parameter<bool>("enable_sentry_alert_angle", true);
     enable_sentry_field_state_ = this->declare_parameter<bool>("enable_sentry_field_state", true);
     enable_hero_alert_flag_ = this->declare_parameter<bool>("enable_hero_alert_flag", true);
+    enable_hero_lob_assist_ = this->declare_parameter<bool>("enable_hero_lob_assist", false);
     enable_double_effect_forward_ = this->declare_parameter<bool>("enable_double_effect_forward", true);
     enable_radar_double_effect_command_ = this->declare_parameter<bool>("enable_radar_double_effect_command", true);
+
+    hero_lob_receiver_id_ = this->declare_parameter<int>("hero_lob_receiver_id", my_hero_id_);
+    hero_lob_data_cmd_id_ = this->declare_parameter<int>(
+      "hero_lob_data_cmd_id", static_cast<int>(interaction_cmd_ids::kHeroLobAssist));
+    hero_lob_shooter_height_m_ = this->declare_parameter<double>("hero_lob_shooter_height_m", 0.30);
+    hero_lob_window_s_ = this->declare_parameter<double>("hero_lob_window_s", 2.0);
+    hero_lob_min_samples_ = this->declare_parameter<int>("hero_lob_min_samples", 10);
+    hero_lob_max_avg_displacement_m_ = this->declare_parameter<double>(
+      "hero_lob_max_avg_displacement_m", 0.60);
+    hero_lob_enemy_block_radius_m_ = this->declare_parameter<double>(
+      "hero_lob_enemy_block_radius_m", 3.0);
+    hero_lob_min_enemy_confidence_ = this->declare_parameter<double>(
+      "hero_lob_min_enemy_confidence", 0.50);
+    hero_lob_require_enemy_valid_ = this->declare_parameter<bool>(
+      "hero_lob_require_enemy_valid", true);
+    hero_lob_require_enemy_direct_source_ = this->declare_parameter<bool>(
+      "hero_lob_require_enemy_direct_source", false);
+    hero_lob_enter_quiet_ms_ = this->declare_parameter<int>("hero_lob_enter_quiet_ms", 500);
+    hero_lob_keepalive_ms_ = this->declare_parameter<int>("hero_lob_keepalive_ms", 500);
+    hero_lob_clear_repeat_ = this->declare_parameter<int>("hero_lob_clear_repeat", 3);
+    hero_lob_solve_period_ms_ = this->declare_parameter<int>("hero_lob_solve_period_ms", 200);
+    hero_lob_muzzle_speed_mps_ = this->declare_parameter<double>("hero_lob_muzzle_speed_mps", 0.0);
+    hero_lob_drag_k_ = this->declare_parameter<double>("hero_lob_drag_k", 0.0);
+    hero_lob_yaw_sigma_deg_ = this->declare_parameter<double>("hero_lob_yaw_sigma_deg", 0.0);
+    hero_lob_pitch_sigma_deg_ = this->declare_parameter<double>("hero_lob_pitch_sigma_deg", 0.0);
+    hero_lob_yaw_bias_deg_ = this->declare_parameter<double>("hero_lob_yaw_bias_deg", 0.0);
+    hero_lob_pitch_bias_deg_ = this->declare_parameter<double>("hero_lob_pitch_bias_deg", 0.0);
+    hero_lob_integrate_dt_s_ = this->declare_parameter<double>("hero_lob_integrate_dt_s", 0.005);
+    hero_lob_max_flight_time_s_ = this->declare_parameter<double>("hero_lob_max_flight_time_s", 5.0);
+    hero_lob_yaw_refine_range_deg_ = this->declare_parameter<double>("hero_lob_yaw_refine_range_deg", 1.0);
+    hero_lob_yaw_refine_step_deg_ = this->declare_parameter<double>("hero_lob_yaw_refine_step_deg", 0.1);
+    hero_lob_pitch_search_min_deg_ = this->declare_parameter<double>(
+      "hero_lob_pitch_search_min_deg", 15.0);
+    hero_lob_pitch_search_max_deg_ = this->declare_parameter<double>(
+      "hero_lob_pitch_search_max_deg", 75.0);
+    hero_lob_pitch_search_step_deg_ = this->declare_parameter<double>(
+      "hero_lob_pitch_search_step_deg", 0.2);
+    hero_lob_target_xyz_when_red_ = this->declare_parameter<std::vector<double>>(
+      "hero_lob_target_xyz_when_red", std::vector<double>{0.0, 0.0, 0.0});
+    hero_lob_target_xyz_when_blue_ = this->declare_parameter<std::vector<double>>(
+      "hero_lob_target_xyz_when_blue", std::vector<double>{0.0, 0.0, 0.0});
 
     bt_xml_path_ = this->declare_parameter<std::string>("bt_xml_path", "");
     bt_models_path_ = this->declare_parameter<std::string>("bt_models_path", "/tmp/radar_decision_nodes.xml");
@@ -91,6 +140,10 @@ public:
       "output_robot_interaction_topic", "/radar/decision/robot_interaction_request");
     output_radar_command_topic_ = this->declare_parameter<std::string>(
       "output_radar_command_topic", "/radar/decision/radar_command");
+    output_hero_lob_status_topic_ = this->declare_parameter<std::string>(
+      "output_hero_lob_status_topic", "/radar/debug/hero_lob_status");
+    output_hero_lob_debug_topic_ = this->declare_parameter<std::string>(
+      "output_hero_lob_debug_topic", "/radar/debug/hero_lob_debug");
 
     selector_cfg_.my_color = my_color_;
     selector_cfg_.enemy_hero_id = enemy_hero_id_;
@@ -105,6 +158,10 @@ public:
       output_robot_interaction_topic_, 10);
     radar_command_pub_ = this->create_publisher<radar_decision_comm::msg::RadarDecisionCommand>(
       output_radar_command_topic_, 10);
+    hero_lob_status_pub_ = this->create_publisher<radar_decision_comm::msg::HeroLobAssistStatus>(
+      output_hero_lob_status_topic_, 10);
+    hero_lob_debug_pub_ = this->create_publisher<radar_decision_comm::msg::HeroLobAssistDebug>(
+      output_hero_lob_debug_topic_, 10);
 
     blackboard_sub_ = this->create_subscription<radar_decision_comm::msg::BattleBlackboard>(
       "/radar/fusion/battle_blackboard", 10,
@@ -113,6 +170,27 @@ public:
         last_blackboard_ = *msg;
         have_blackboard_ = true;
       });
+
+    hero_lob_window_.set_window_seconds(hero_lob_window_s_);
+    hero_lob_window_.set_min_samples(static_cast<std::size_t>(std::max(hero_lob_min_samples_, 1)));
+    hero_lob_window_.set_max_avg_displacement_m(hero_lob_max_avg_displacement_m_);
+
+    HeroLobBallisticsConfig hero_lob_ballistics_cfg;
+    hero_lob_ballistics_cfg.muzzle_speed_mps = hero_lob_muzzle_speed_mps_;
+    hero_lob_ballistics_cfg.drag_k = hero_lob_drag_k_;
+    hero_lob_ballistics_cfg.yaw_sigma_deg = hero_lob_yaw_sigma_deg_;
+    hero_lob_ballistics_cfg.pitch_sigma_deg = hero_lob_pitch_sigma_deg_;
+    hero_lob_ballistics_cfg.yaw_bias_deg = hero_lob_yaw_bias_deg_;
+    hero_lob_ballistics_cfg.pitch_bias_deg = hero_lob_pitch_bias_deg_;
+    hero_lob_ballistics_cfg.integrate_dt_s = hero_lob_integrate_dt_s_;
+    hero_lob_ballistics_cfg.max_flight_time_s = hero_lob_max_flight_time_s_;
+    hero_lob_ballistics_cfg.yaw_refine_range_deg = hero_lob_yaw_refine_range_deg_;
+    hero_lob_ballistics_cfg.yaw_refine_step_deg = hero_lob_yaw_refine_step_deg_;
+    hero_lob_ballistics_cfg.pitch_search_min_deg = hero_lob_pitch_search_min_deg_;
+    hero_lob_ballistics_cfg.pitch_search_max_deg = hero_lob_pitch_search_max_deg_;
+    hero_lob_ballistics_cfg.pitch_search_step_deg = hero_lob_pitch_search_step_deg_;
+    hero_lob_ballistics_.set_config(hero_lob_ballistics_cfg);
+    hero_lob_fsm_.set_clear_repeat(hero_lob_clear_repeat_);
 
     init_bt();
 
@@ -370,6 +448,218 @@ private:
     return in;
   }
 
+  static double xy_distance(
+    const geometry_msgs::msg::Point & lhs,
+    const geometry_msgs::msg::Point & rhs)
+  {
+    return std::hypot(lhs.x - rhs.x, lhs.y - rhs.y);
+  }
+
+  bool find_our_hero_track(radar_decision_comm::msg::TrackedRobot * out) const
+  {
+    if (out == nullptr) {
+      return false;
+    }
+
+    bool found = false;
+    float best_confidence = -1.0F;
+    for (const auto & robot : last_blackboard_.our_state.robots) {
+      if (robot.robot_id != static_cast<uint16_t>(my_hero_id_)) {
+        continue;
+      }
+
+      const bool prefer_this =
+        (!found) ||
+        (robot.is_valid && !out->is_valid) ||
+        (robot.confidence > best_confidence);
+      if (prefer_this) {
+        *out = robot;
+        best_confidence = robot.confidence;
+        found = true;
+      }
+    }
+    return found;
+  }
+
+  geometry_msgs::msg::Point resolve_hero_lob_target_point(bool * valid) const
+  {
+    geometry_msgs::msg::Point point;
+    const auto & target_xyz = (my_color_ == "Red") ? hero_lob_target_xyz_when_red_ : hero_lob_target_xyz_when_blue_;
+    const bool ok = target_xyz.size() == 3;
+    if (ok) {
+      point.x = target_xyz[0];
+      point.y = target_xyz[1];
+      point.z = target_xyz[2];
+    }
+    if (valid != nullptr) {
+      *valid = ok;
+    }
+    return point;
+  }
+
+  uint16_t quantized_hero_lob_age_ms() const
+  {
+    if (!have_hero_lob_solve_tp_) {
+      return 0;
+    }
+
+    const auto age_ms = static_cast<int>(
+      std::chrono::duration_cast<std::chrono::milliseconds>(current_tick_now_ - last_hero_lob_solve_tp_).count());
+    const int quantum_ms = std::max(hero_lob_keepalive_ms_, 1);
+    const int quantized_ms = std::max(age_ms, 0) / quantum_ms * quantum_ms;
+    return static_cast<uint16_t>(std::min(quantized_ms, 65535));
+  }
+
+  void publish_hero_lob_topics()
+  {
+    radar_decision_comm::msg::HeroLobAssistStatus status_msg;
+    status_msg.header.stamp = this->now();
+    status_msg.state = static_cast<uint8_t>(current_hero_lob_fsm_output_.state);
+    status_msg.hero_robot_id = static_cast<uint16_t>(my_hero_id_);
+    status_msg.nearest_enemy_robot_id = current_nearest_enemy_id_;
+    status_msg.hero_found = current_hero_found_;
+    status_msg.our_track_fresh = current_hero_track_fresh_;
+    status_msg.pose_stable = current_hero_lob_window_output_.stable;
+    status_msg.enemy_nearby_3m = current_enemy_nearby_3m_;
+    status_msg.solution_valid = current_hero_lob_solution_usable_;
+    status_msg.publish_active = current_hero_lob_fsm_output_.publish_active;
+    status_msg.window_avg_displacement_m = std::isfinite(current_hero_lob_window_output_.avg_displacement_m) ?
+      static_cast<float>(current_hero_lob_window_output_.avg_displacement_m) : -1.0F;
+    status_msg.nearest_enemy_distance_m = std::isfinite(current_nearest_enemy_distance_m_) ?
+      static_cast<float>(current_nearest_enemy_distance_m_) : -1.0F;
+    status_msg.reason = current_hero_lob_fsm_output_.reason;
+    if (
+      status_msg.reason == "solving_no_solution" &&
+      !current_hero_lob_solution_.reason.empty())
+    {
+      status_msg.reason += "|" + current_hero_lob_solution_.reason;
+    }
+    hero_lob_status_pub_->publish(status_msg);
+
+    radar_decision_comm::msg::HeroLobAssistDebug debug_msg;
+    debug_msg.header.stamp = status_msg.header.stamp;
+    debug_msg.hero_track = current_hero_track_;
+    debug_msg.shooter_point = current_hero_lob_shooter_point_;
+    debug_msg.target_point = current_hero_lob_target_point_;
+    debug_msg.impact_center_point = current_hero_lob_solution_.impact_center_point;
+    debug_msg.solution_valid = current_hero_lob_solution_usable_;
+    debug_msg.yaw_field_cw_deg = static_cast<float>(current_hero_lob_solution_.yaw_field_cw_deg);
+    debug_msg.pitch_deg = static_cast<float>(current_hero_lob_solution_.pitch_deg);
+    debug_msg.flight_time_s = static_cast<float>(current_hero_lob_solution_.flight_time_s);
+    debug_msg.impact_error_m = std::isfinite(current_hero_lob_solution_.impact_error_m) ?
+      static_cast<float>(current_hero_lob_solution_.impact_error_m) : -1.0F;
+    debug_msg.splash_radius_m = static_cast<float>(current_hero_lob_solution_.splash_radius_m);
+    debug_msg.muzzle_speed_mps = static_cast<float>(hero_lob_muzzle_speed_mps_);
+    debug_msg.drag_k = static_cast<float>(hero_lob_drag_k_);
+    debug_msg.yaw_sigma_deg = static_cast<float>(hero_lob_yaw_sigma_deg_);
+    debug_msg.pitch_sigma_deg = static_cast<float>(hero_lob_pitch_sigma_deg_);
+    debug_msg.yaw_bias_deg = static_cast<float>(hero_lob_yaw_bias_deg_);
+    debug_msg.pitch_bias_deg = static_cast<float>(hero_lob_pitch_bias_deg_);
+    hero_lob_debug_pub_->publish(debug_msg);
+  }
+
+  void update_hero_lob_assist()
+  {
+    current_hero_track_ = radar_decision_comm::msg::TrackedRobot();
+    current_hero_found_ = find_our_hero_track(&current_hero_track_);
+    current_hero_track_fresh_ = current_hero_found_ && !last_blackboard_.our_stale;
+
+    if (current_hero_track_fresh_) {
+      hero_lob_window_.ingest(current_hero_track_.field_position, last_blackboard_.our_last_update);
+    } else {
+      hero_lob_window_.reset();
+    }
+    current_hero_lob_window_output_ = hero_lob_window_.evaluate();
+
+    current_hero_lob_shooter_point_ = current_hero_found_ ?
+      current_hero_track_.field_position : geometry_msgs::msg::Point();
+    if (current_hero_lob_window_output_.sample_count > 0U) {
+      current_hero_lob_shooter_point_ = current_hero_lob_window_output_.mean_position;
+    }
+    current_hero_lob_shooter_point_.z = hero_lob_shooter_height_m_;
+
+    bool target_valid = false;
+    current_hero_lob_target_point_ = resolve_hero_lob_target_point(&target_valid);
+
+    current_nearest_enemy_distance_m_ = std::numeric_limits<double>::infinity();
+    current_nearest_enemy_id_ = 0;
+    current_enemy_nearby_3m_ = false;
+    if (current_hero_found_) {
+      const geometry_msgs::msg::Point hero_reference_point =
+        (current_hero_lob_window_output_.sample_count > 0U) ?
+        current_hero_lob_window_output_.mean_position : current_hero_track_.field_position;
+
+      for (const auto & robot : last_blackboard_.enemy_state.robots) {
+        if (hero_lob_require_enemy_valid_ && !robot.is_valid) {
+          continue;
+        }
+        if (robot.confidence < static_cast<float>(hero_lob_min_enemy_confidence_)) {
+          continue;
+        }
+        if (hero_lob_require_enemy_direct_source_ && ((robot.source_mask & 0x01U) == 0U)) {
+          continue;
+        }
+
+        const double dist = xy_distance(hero_reference_point, robot.field_position);
+        if (dist < current_nearest_enemy_distance_m_) {
+          current_nearest_enemy_distance_m_ = dist;
+          current_nearest_enemy_id_ = robot.robot_id;
+        }
+      }
+
+      current_enemy_nearby_3m_ =
+        std::isfinite(current_nearest_enemy_distance_m_) &&
+        current_nearest_enemy_distance_m_ <= hero_lob_enemy_block_radius_m_;
+    }
+
+    const bool solve_gate =
+      enable_hero_lob_assist_ &&
+      current_hero_track_fresh_ &&
+      current_hero_lob_window_output_.ready &&
+      current_hero_lob_window_output_.stable &&
+      !current_enemy_nearby_3m_ &&
+      target_valid;
+
+    if (
+      solve_gate &&
+      (!have_hero_lob_solve_tp_ || due(current_tick_now_, last_hero_lob_solve_tp_, hero_lob_solve_period_ms_)))
+    {
+      current_hero_lob_solution_ = hero_lob_ballistics_.solve(
+        current_hero_lob_shooter_point_, current_hero_lob_target_point_);
+      last_hero_lob_solve_tp_ = current_tick_now_;
+      have_hero_lob_solve_tp_ = true;
+    }
+
+    current_hero_lob_solution_usable_ = solve_gate && current_hero_lob_solution_.valid;
+    if (current_hero_lob_solution_usable_) {
+      if (!hero_lob_ready_since_.has_value()) {
+        hero_lob_ready_since_ = current_tick_now_;
+      }
+    } else {
+      hero_lob_ready_since_.reset();
+    }
+
+    HeroLobFSMInput hero_lob_input;
+    hero_lob_input.enabled = enable_hero_lob_assist_;
+    hero_lob_input.hero_found = current_hero_found_;
+    hero_lob_input.our_track_fresh = current_hero_track_fresh_;
+    hero_lob_input.window_ready = current_hero_lob_window_output_.ready;
+    hero_lob_input.pose_stable = current_hero_lob_window_output_.stable;
+    hero_lob_input.enemy_nearby_3m = current_enemy_nearby_3m_;
+    hero_lob_input.quiet_enter_satisfied =
+      current_hero_lob_solution_usable_ &&
+      hero_lob_ready_since_.has_value() &&
+      due(current_tick_now_, *hero_lob_ready_since_, hero_lob_enter_quiet_ms_);
+    hero_lob_input.solution_valid = current_hero_lob_solution_usable_;
+
+    current_hero_lob_fsm_output_ = hero_lob_fsm_.tick(hero_lob_input);
+    if (current_hero_lob_fsm_output_.state != HeroLobState::CLEARING) {
+      hero_lob_clear_sequence_ = 0;
+    }
+
+    publish_hero_lob_topics();
+  }
+
   bool action_publish_map() { return publish_map_request_if_needed(current_tick_now_); }
 
   bool action_send_sentry_alert()
@@ -433,6 +723,53 @@ private:
       payload);
 
     return maybe_publish_interaction("hero_alert_flag", req, hero_alert_keepalive_ms_, current_tick_now_);
+  }
+
+  bool action_send_hero_lob_assist()
+  {
+    if (!enable_hero_lob_assist_ || !current_hero_lob_fsm_output_.action_needed) {
+      return false;
+    }
+
+    uint8_t flags = 0U;
+    if (current_hero_lob_solution_usable_) {
+      flags |= 0x01U;
+    }
+    if (current_hero_lob_window_output_.stable) {
+      flags |= 0x02U;
+    }
+    if (current_enemy_nearby_3m_) {
+      flags |= 0x04U;
+    }
+    if (!current_hero_lob_fsm_output_.clear_mode && current_hero_lob_solution_usable_) {
+      flags |= 0x08U;
+    }
+    if (current_hero_lob_fsm_output_.clear_mode) {
+      flags |= 0x10U;
+    }
+
+    const uint8_t sequence_tag = current_hero_lob_fsm_output_.clear_mode ? ++hero_lob_clear_sequence_ : 0U;
+    const auto payload = InteractionPayloadBuilder::build_hero_lob_assist_payload(
+      flags,
+      current_hero_lob_solution_.valid ? current_hero_lob_solution_.yaw_field_cw_deg : 0.0,
+      current_hero_lob_solution_.valid ? current_hero_lob_solution_.pitch_deg : 0.0,
+      current_hero_lob_solution_.valid ? quantized_hero_lob_age_ms() : 0U,
+      current_hero_lob_solution_.valid ? current_hero_lob_solution_.impact_error_m : 0.0,
+      current_hero_lob_solution_.valid ? current_hero_lob_solution_.splash_radius_m : 0.0,
+      static_cast<uint8_t>(current_hero_lob_fsm_output_.state),
+      sequence_tag);
+
+    const auto req = make_request(
+      static_cast<uint16_t>(hero_lob_data_cmd_id_),
+      static_cast<uint16_t>(hero_lob_receiver_id_),
+      payload);
+
+    const bool sent = maybe_publish_interaction(
+      "hero_lob_assist", req, hero_lob_keepalive_ms_, current_tick_now_);
+    if (sent && current_hero_lob_fsm_output_.clear_mode) {
+      hero_lob_fsm_.note_action_sent();
+    }
+    return sent;
   }
 
   bool action_send_double_forward()
@@ -508,6 +845,11 @@ private:
       return BT::NodeStatus::SUCCESS;
     });
 
+    factory_.registerSimpleAction("SendHeroLobAssist", [this](BT::TreeNode &) {
+      (void)action_send_hero_lob_assist();
+      return BT::NodeStatus::SUCCESS;
+    });
+
     factory_.registerSimpleAction("SendDoubleEffectForward", [this](BT::TreeNode &) {
       (void)action_send_double_forward();
       return BT::NodeStatus::SUCCESS;
@@ -532,6 +874,10 @@ private:
 
     factory_.registerSimpleCondition("HeroAlertNeeded", [this](BT::TreeNode &) {
       return evaluate_hero_alert() ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+    });
+
+    factory_.registerSimpleCondition("HeroLobActionNeeded", [this](BT::TreeNode &) {
+      return current_hero_lob_fsm_output_.action_needed ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
     });
 
     factory_.registerSimpleCondition("DoubleEffectForwardNeeded", [this](BT::TreeNode &) {
@@ -573,6 +919,7 @@ private:
     bt_blackboard_->set("referee_fresh", !last_blackboard_.referee_stale);
     bt_blackboard_->set("wireless_fresh", !last_blackboard_.wireless_stale);
     bt_blackboard_->set("hero_alert", evaluate_hero_alert());
+    bt_blackboard_->set("hero_lob_action", current_hero_lob_fsm_output_.action_needed);
     bt_blackboard_->set("double_forward", current_fsm_output_.should_forward);
     bt_blackboard_->set("radar_cmd", current_fsm_output_.should_send_radar_command);
 
@@ -589,6 +936,7 @@ private:
     (void)action_send_sentry_alert();
     (void)action_send_sentry_field_state();
     (void)action_send_hero_alert();
+    (void)action_send_hero_lob_assist();
     (void)action_send_double_forward();
     (void)action_send_radar_decision();
   }
@@ -609,6 +957,7 @@ private:
     current_tick_now_ = Clock::now();
     current_selected_target_ = TargetSelector::select(last_blackboard_, selector_cfg_);
     current_fsm_output_ = double_effect_fsm_.tick(build_double_effect_input());
+    update_hero_lob_assist();
     update_bt_blackboard();
 
     if (decision_mode_ == "rule") {
@@ -624,21 +973,30 @@ private:
   bool enable_sentry_alert_angle_{true};
   bool enable_sentry_field_state_{true};
   bool enable_hero_alert_flag_{true};
+  bool enable_hero_lob_assist_{false};
   bool enable_double_effect_forward_{true};
   bool enable_radar_double_effect_command_{true};
 
+  int my_hero_id_{1};
   int my_sentinel_id_{7};
   int infantry_3_id_{3};
   int infantry_4_id_{4};
   int enemy_hero_id_{101};
+  int hero_lob_receiver_id_{1};
+  int hero_lob_data_cmd_id_{static_cast<int>(interaction_cmd_ids::kHeroLobAssist)};
 
   int map_publish_period_ms_{200};
   int map_keepalive_ms_{1000};
   int sentry_alert_keepalive_ms_{1000};
   int sentry_field_keepalive_ms_{1000};
   int hero_alert_keepalive_ms_{1000};
+  int hero_lob_keepalive_ms_{500};
+  int hero_lob_enter_quiet_ms_{500};
+  int hero_lob_clear_repeat_{3};
+  int hero_lob_solve_period_ms_{200};
   int double_effect_keepalive_ms_{1500};
   int radar_double_effect_keepalive_ms_{1500};
+  int hero_lob_min_samples_{10};
 
   int low_hp_alert_threshold_{120};
   int low_ammo_threshold_{10};
@@ -646,6 +1004,26 @@ private:
   double decision_rate_hz_{50.0};
   double buff_bonus_score_{8.0};
   double macro_bonus_score_{3.0};
+  double hero_lob_shooter_height_m_{0.30};
+  double hero_lob_window_s_{2.0};
+  double hero_lob_max_avg_displacement_m_{0.60};
+  double hero_lob_enemy_block_radius_m_{3.0};
+  double hero_lob_min_enemy_confidence_{0.50};
+  bool hero_lob_require_enemy_valid_{true};
+  bool hero_lob_require_enemy_direct_source_{false};
+  double hero_lob_muzzle_speed_mps_{0.0};
+  double hero_lob_drag_k_{0.0};
+  double hero_lob_yaw_sigma_deg_{0.0};
+  double hero_lob_pitch_sigma_deg_{0.0};
+  double hero_lob_yaw_bias_deg_{0.0};
+  double hero_lob_pitch_bias_deg_{0.0};
+  double hero_lob_integrate_dt_s_{0.005};
+  double hero_lob_max_flight_time_s_{5.0};
+  double hero_lob_yaw_refine_range_deg_{1.0};
+  double hero_lob_yaw_refine_step_deg_{0.1};
+  double hero_lob_pitch_search_min_deg_{15.0};
+  double hero_lob_pitch_search_max_deg_{75.0};
+  double hero_lob_pitch_search_step_deg_{0.2};
 
   std::string decision_mode_{"btcpp"};
   std::string my_color_{"Red"};
@@ -659,12 +1037,35 @@ private:
   std::string output_map_request_topic_;
   std::string output_robot_interaction_topic_;
   std::string output_radar_command_topic_;
+  std::string output_hero_lob_status_topic_;
+  std::string output_hero_lob_debug_topic_;
+  std::vector<double> hero_lob_target_xyz_when_red_;
+  std::vector<double> hero_lob_target_xyz_when_blue_;
 
   TargetSelectorConfig selector_cfg_;
   TargetSelectorResult current_selected_target_;
   DoubleEffectFSM double_effect_fsm_;
   DoubleEffectFSMOutput current_fsm_output_;
+  HeroLobWindow hero_lob_window_;
+  HeroLobBallistics hero_lob_ballistics_;
+  HeroLobFSM hero_lob_fsm_;
+  HeroLobWindowOutput current_hero_lob_window_output_;
+  HeroLobFSMOutput current_hero_lob_fsm_output_;
+  HeroLobSolution current_hero_lob_solution_;
+  radar_decision_comm::msg::TrackedRobot current_hero_track_;
+  geometry_msgs::msg::Point current_hero_lob_shooter_point_;
+  geometry_msgs::msg::Point current_hero_lob_target_point_;
+  double current_nearest_enemy_distance_m_{std::numeric_limits<double>::infinity()};
+  uint16_t current_nearest_enemy_id_{0};
+  bool current_hero_found_{false};
+  bool current_hero_track_fresh_{false};
+  bool current_enemy_nearby_3m_{false};
+  bool current_hero_lob_solution_usable_{false};
+  uint8_t hero_lob_clear_sequence_{0};
   TimePoint current_tick_now_{};
+  TimePoint last_hero_lob_solve_tp_{};
+  bool have_hero_lob_solve_tp_{false};
+  std::optional<TimePoint> hero_lob_ready_since_;
 
   radar_decision_comm::msg::BattleBlackboard last_blackboard_;
 
@@ -680,6 +1081,8 @@ private:
   rclcpp::Publisher<radar_decision_comm::msg::MapPublishRequest>::SharedPtr map_request_pub_;
   rclcpp::Publisher<radar_decision_comm::msg::RobotInteractionRequest>::SharedPtr robot_interaction_pub_;
   rclcpp::Publisher<radar_decision_comm::msg::RadarDecisionCommand>::SharedPtr radar_command_pub_;
+  rclcpp::Publisher<radar_decision_comm::msg::HeroLobAssistStatus>::SharedPtr hero_lob_status_pub_;
+  rclcpp::Publisher<radar_decision_comm::msg::HeroLobAssistDebug>::SharedPtr hero_lob_debug_pub_;
   rclcpp::Subscription<radar_decision_comm::msg::BattleBlackboard>::SharedPtr blackboard_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };

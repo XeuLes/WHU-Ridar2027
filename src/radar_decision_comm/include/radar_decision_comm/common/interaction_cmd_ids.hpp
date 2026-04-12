@@ -18,6 +18,7 @@ static constexpr uint16_t kSentryAlertAngle = 0x0201;
 static constexpr uint16_t kSentryFieldState = 0x0202;
 static constexpr uint16_t kHeroAlertFlag = 0x0203;
 static constexpr uint16_t kDoubleEffectForward = 0x0204;
+static constexpr uint16_t kHeroLobAssist = 0x0205;
 
 static constexpr uint16_t kRadarDecisionReceiver = 0x8080;
 

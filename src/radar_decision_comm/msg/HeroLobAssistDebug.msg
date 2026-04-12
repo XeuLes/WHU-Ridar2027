@@ -1,0 +1,20 @@
+std_msgs/Header header
+
+TrackedRobot hero_track
+geometry_msgs/Point shooter_point
+geometry_msgs/Point target_point
+geometry_msgs/Point impact_center_point
+
+bool solution_valid
+float32 yaw_field_cw_deg
+float32 pitch_deg
+float32 flight_time_s
+float32 impact_error_m
+float32 splash_radius_m
+
+float32 muzzle_speed_mps
+float32 drag_k
+float32 yaw_sigma_deg
+float32 pitch_sigma_deg
+float32 yaw_bias_deg
+float32 pitch_bias_deg

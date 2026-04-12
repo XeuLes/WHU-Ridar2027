@@ -5,6 +5,7 @@ RadarMarkProgress mark_progress
 RadarDecisionSync radar_sync
 DartStatus dart_status
 EnemyWorldState enemy_state
+TrackedRobotArray our_state
 WirelessEnemyHp wireless_enemy_hp
 WirelessEnemyAmmo wireless_enemy_ammo
 WirelessEnemyMacroState wireless_macro_state
@@ -14,6 +15,8 @@ WirelessInterferenceKey wireless_interference_key
 builtin_interfaces/Time referee_last_update
 builtin_interfaces/Time wireless_last_update
 builtin_interfaces/Time perception_last_update
+builtin_interfaces/Time our_last_update
 bool referee_stale
 bool wireless_stale
 bool perception_stale
+bool our_stale

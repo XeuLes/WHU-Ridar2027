@@ -21,13 +21,6 @@ Cluster::Cluster(const rclcpp::NodeOptions& node_options)
         std::bind(&Cluster::callback_dynamic, this, std::placeholders::_1));
     pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
         "/livox/lidar_cluster", 10);
-
-    // 新增数据流：订阅/livox/lidar_other，发布到/livox/lidar_other_cluster
-    sub_other_ = this->create_subscription<sensor_msgs::msg::PointCloud2>(
-        "/livox/lidar_other", 10,
-        std::bind(&Cluster::callback_other, this, std::placeholders::_1));
-    pub_other_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
-        "/livox/lidar_other_cluster", 10);
 }
 
 // 原始数据流回调函数：处理/livox/lidar_dynamic
@@ -35,13 +28,6 @@ void Cluster::callback_dynamic(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
     process_cluster(msg, pub_);  // 调用通用聚类处理函数
-}
-
-// 新增数据流回调函数：处理/livox/lidar_other
-void Cluster::callback_other(
-    const sensor_msgs::msg::PointCloud2::SharedPtr msg)
-{
-    process_cluster(msg, pub_other_);  // 调用通用聚类处理函数
 }
 
 // 通用聚类处理函数：复用聚类算法逻辑

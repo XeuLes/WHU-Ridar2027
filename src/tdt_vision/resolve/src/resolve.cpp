@@ -7,6 +7,8 @@
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
+#include <pcl/search/kdtree.h>
+#include <pcl/segmentation/extract_clusters.h>
 
 namespace tdt_radar {
 
@@ -88,11 +90,17 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     pub_uav_positions_ =
         this->create_publisher<geometry_msgs::msg::PoseArray>(
             "/uav_positions", rclcpp::SensorDataQoS());
+    pub_uav_intersection_debug_ =
+        this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/uav_intersection_debug", rclcpp::SensorDataQoS());
+    pub_uav_cluster_debug_ =
+        this->create_publisher<sensor_msgs::msg::PointCloud2>(
+            "/uav_cluster_debug", rclcpp::SensorDataQoS());
 
-    sub_uav_other_cluster_ =
+    sub_uav_other_cloud_ =
         this->create_subscription<sensor_msgs::msg::PointCloud2>(
-            "/livox/lidar_other_cluster", rclcpp::SensorDataQoS(),
-            std::bind(&Resolve::UavOtherClusterCallback, this,
+            "/livox/lidar_other", rclcpp::SensorDataQoS(),
+            std::bind(&Resolve::UavOtherCloudCallback, this,
                       std::placeholders::_1));
 
     // params
@@ -102,6 +110,18 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<double>("uav_w_vision_xy", 0.5);  // 降低相机权重(透视变换外推不准)
     this->declare_parameter<double>("uav_w_lidar_xy", 0.7);   // 提高雷达权重
     this->declare_parameter<double>("uav_assign_gate_m", 5.0);
+    this->declare_parameter<double>("uav_bbox_roi_x_ratio", 0.30);
+    this->declare_parameter<double>("uav_bbox_roi_y_ratio", 0.00);
+    this->declare_parameter<double>("uav_bbox_roi_w_ratio", 0.40);
+    this->declare_parameter<double>("uav_bbox_roi_h_ratio", 0.40);
+    this->declare_parameter<double>("uav_proj_pixel_margin", 6.0);
+    this->declare_parameter<double>("uav_point_min_z", 1.2);
+    this->declare_parameter<double>("uav_point_max_z", 4.5);
+    this->declare_parameter<double>("uav_cluster_tolerance", 0.60);
+    this->declare_parameter<int>("uav_cluster_min_size", 6);
+    this->declare_parameter<int>("uav_cluster_max_size", 2000);
+    this->declare_parameter<double>("uav_cluster_score_dist_weight", 0.02);
+    this->declare_parameter<double>("uav_cluster_score_size_weight", 0.08);
 
     this->declare_parameter<double>("uav_z_ema_alpha", 0.90);
     this->declare_parameter<double>("uav_z_jump_max", 0.80);
@@ -123,6 +143,28 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     uav_w_lidar_xy_ = this->get_parameter("uav_w_lidar_xy").as_double();
     uav_assign_gate_m_ =
         this->get_parameter("uav_assign_gate_m").as_double();
+    uav_bbox_roi_x_ratio_ =
+        this->get_parameter("uav_bbox_roi_x_ratio").as_double();
+    uav_bbox_roi_y_ratio_ =
+        this->get_parameter("uav_bbox_roi_y_ratio").as_double();
+    uav_bbox_roi_w_ratio_ =
+        this->get_parameter("uav_bbox_roi_w_ratio").as_double();
+    uav_bbox_roi_h_ratio_ =
+        this->get_parameter("uav_bbox_roi_h_ratio").as_double();
+    uav_proj_pixel_margin_ =
+        this->get_parameter("uav_proj_pixel_margin").as_double();
+    uav_point_min_z_ = this->get_parameter("uav_point_min_z").as_double();
+    uav_point_max_z_ = this->get_parameter("uav_point_max_z").as_double();
+    uav_cluster_tolerance_ =
+        this->get_parameter("uav_cluster_tolerance").as_double();
+    uav_cluster_min_size_ =
+        this->get_parameter("uav_cluster_min_size").as_int();
+    uav_cluster_max_size_ =
+        this->get_parameter("uav_cluster_max_size").as_int();
+    uav_cluster_score_dist_weight_ =
+        this->get_parameter("uav_cluster_score_dist_weight").as_double();
+    uav_cluster_score_size_weight_ =
+        this->get_parameter("uav_cluster_score_size_weight").as_double();
 
     uav_z_ema_alpha_ = this->get_parameter("uav_z_ema_alpha").as_double();
     uav_z_jump_max_ = this->get_parameter("uav_z_jump_max").as_double();
@@ -132,6 +174,31 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
         uav_z_ema_alpha_ = 0.99;
     if (uav_z_jump_max_ < 0.0)
         uav_z_jump_max_ = 0.0;
+    uav_bbox_roi_x_ratio_ = std::clamp(uav_bbox_roi_x_ratio_, 0.0, 0.95);
+    uav_bbox_roi_y_ratio_ = std::clamp(uav_bbox_roi_y_ratio_, 0.0, 0.95);
+    uav_bbox_roi_w_ratio_ = std::clamp(uav_bbox_roi_w_ratio_, 0.05, 1.0);
+    uav_bbox_roi_h_ratio_ = std::clamp(uav_bbox_roi_h_ratio_, 0.05, 1.0);
+    if (uav_bbox_roi_x_ratio_ + uav_bbox_roi_w_ratio_ > 1.0) {
+        uav_bbox_roi_x_ratio_ = std::max(0.0, 1.0 - uav_bbox_roi_w_ratio_);
+    }
+    if (uav_bbox_roi_y_ratio_ + uav_bbox_roi_h_ratio_ > 1.0) {
+        uav_bbox_roi_y_ratio_ = std::max(0.0, 1.0 - uav_bbox_roi_h_ratio_);
+    }
+    if (uav_proj_pixel_margin_ < 0.0) {
+        uav_proj_pixel_margin_ = 0.0;
+    }
+    if (uav_point_min_z_ > uav_point_max_z_) {
+        std::swap(uav_point_min_z_, uav_point_max_z_);
+    }
+    if (uav_cluster_tolerance_ < 0.05) {
+        uav_cluster_tolerance_ = 0.05;
+    }
+    if (uav_cluster_min_size_ < 1) {
+        uav_cluster_min_size_ = 1;
+    }
+    if (uav_cluster_max_size_ < uav_cluster_min_size_) {
+        uav_cluster_max_size_ = uav_cluster_min_size_;
+    }
 
     uav_lost_timeout_ms_ =
         this->get_parameter("uav_lost_timeout_ms").as_int();
@@ -183,21 +250,21 @@ void Resolve::callback(const geometry_msgs::msg::Vector3::SharedPtr msg)
     pub->publish(output);
 }
 
-void Resolve::UavOtherClusterCallback(
+void Resolve::UavOtherCloudCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
     pcl::PointCloud<pcl::PointXYZ> cloud;
     pcl::fromROSMsg(*msg, cloud);
 
     std::lock_guard<std::mutex> lk(uav_other_mutex_);
-    uav_other_clusters_.clear();
-    uav_other_clusters_.reserve(cloud.points.size());
+    uav_other_points_.clear();
+    uav_other_points_.reserve(cloud.points.size());
 
     for (const auto& p : cloud.points) {
         if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
             continue;
         }
-        uav_other_clusters_.push_back(p);
+        uav_other_points_.push_back(p);
     }
 
     uav_other_stamp_ = is_stamp_zero(msg->header.stamp)
@@ -225,6 +292,170 @@ float Resolve::GetFilteredZPlane(int idx, double z_raw)
     const double a = uav_z_ema_alpha_;
     uav_z_plane_filt_[idx] = a * z_prev + (1.0 - a) * z_raw;
     return static_cast<float>(uav_z_plane_filt_[idx]);
+}
+
+cv::Rect2f Resolve::BuildUavRoiFromBbox(float x, float y, float w, float h) const
+{
+    if (!(w > 1.0f && h > 1.0f)) {
+        return cv::Rect2f();
+    }
+
+    const float roi_x = x + static_cast<float>(uav_bbox_roi_x_ratio_) * w;
+    const float roi_y = y + static_cast<float>(uav_bbox_roi_y_ratio_) * h;
+    const float roi_w = std::max(1.0f, static_cast<float>(uav_bbox_roi_w_ratio_) * w);
+    const float roi_h = std::max(1.0f, static_cast<float>(uav_bbox_roi_h_ratio_) * h);
+    return cv::Rect2f(roi_x, roi_y, roi_w, roi_h);
+}
+
+bool Resolve::SolveUavFrustumMeasurement(
+    const cv::Rect2f& roi,
+    const std::vector<pcl::PointXYZ>& points,
+    double& out_x,
+    double& out_y,
+    double& out_z,
+    std::vector<cv::Point2f>* debug_uvs,
+    std::vector<cv::Point2f>* selected_cluster_uvs) const
+{
+    if (roi.width <= 1.0f || roi.height <= 1.0f || points.empty() || parser_ == nullptr) {
+        return false;
+    }
+
+    std::vector<cv::Point3f> world_points;
+    world_points.reserve(points.size());
+    for (const auto& p : points) {
+        if (p.z < uav_point_min_z_ || p.z > uav_point_max_z_) {
+            continue;
+        }
+        world_points.emplace_back(p.x, p.y - 15.0f, p.z);
+    }
+    if (world_points.empty()) {
+        return false;
+    }
+
+    std::vector<cv::Point2f> image_points;
+    cv::projectPoints(world_points,
+                      parser_->world_rvec,
+                      parser_->world_tvec,
+                      parser_->camera_matrix,
+                      parser_->dist_coeffs,
+                      image_points);
+
+    const float margin = static_cast<float>(std::max(0.0, uav_proj_pixel_margin_));
+    const cv::Rect2f expanded_roi(
+        roi.x - margin,
+        roi.y - margin,
+        roi.width + 2.0f * margin,
+        roi.height + 2.0f * margin);
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr intersected(new pcl::PointCloud<pcl::PointXYZ>);
+    intersected->reserve(world_points.size());
+
+    for (size_t i = 0, src_i = 0; i < points.size(); ++i) {
+        const auto& p = points[i];
+        if (p.z < uav_point_min_z_ || p.z > uav_point_max_z_) {
+            continue;
+        }
+        const auto& uv = image_points[src_i++];
+        if (!std::isfinite(uv.x) || !std::isfinite(uv.y)) {
+            continue;
+        }
+        if (!expanded_roi.contains(uv)) {
+            continue;
+        }
+        intersected->push_back(p);
+        if (debug_uvs != nullptr) {
+            debug_uvs->push_back(uv);
+        }
+    }
+
+    if (intersected->size() < static_cast<size_t>(std::max(1, uav_cluster_min_size_))) {
+        return false;
+    }
+
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
+    tree->setInputCloud(intersected);
+
+    pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
+    ec.setClusterTolerance(uav_cluster_tolerance_);
+    ec.setMinClusterSize(std::max(1, uav_cluster_min_size_));
+    ec.setMaxClusterSize(std::max(uav_cluster_min_size_, uav_cluster_max_size_));
+    ec.setSearchMethod(tree);
+    ec.setInputCloud(intersected);
+
+    std::vector<pcl::PointIndices> cluster_indices;
+    ec.extract(cluster_indices);
+    if (cluster_indices.empty()) {
+        return false;
+    }
+
+    const cv::Point2f roi_center(roi.x + roi.width * 0.5f, roi.y + roi.height * 0.5f);
+    double best_score = std::numeric_limits<double>::infinity();
+    bool found = false;
+    std::vector<cv::Point2f> best_cluster_uvs;
+
+    for (const auto& indices : cluster_indices) {
+        double sum_x = 0.0;
+        double sum_y = 0.0;
+        double sum_z = 0.0;
+        std::vector<cv::Point3f> cluster_world;
+        cluster_world.reserve(indices.indices.size());
+
+        for (int idx : indices.indices) {
+            const auto& p = intersected->points[idx];
+            sum_x += p.x;
+            sum_y += p.y;
+            sum_z += p.z;
+            cluster_world.emplace_back(p.x, p.y - 15.0f, p.z);
+        }
+
+        const double inv_n = 1.0 / static_cast<double>(indices.indices.size());
+        const double cx = sum_x * inv_n;
+        const double cy = sum_y * inv_n;
+        const double cz = sum_z * inv_n;
+
+        std::vector<cv::Point2f> center_uvs;
+        cv::projectPoints(cluster_world,
+                          parser_->world_rvec,
+                          parser_->world_tvec,
+                          parser_->camera_matrix,
+                          parser_->dist_coeffs,
+                          center_uvs);
+
+        double min_pixel_dist = std::numeric_limits<double>::infinity();
+        for (const auto& uv : center_uvs) {
+            if (!std::isfinite(uv.x) || !std::isfinite(uv.y)) {
+                continue;
+            }
+            const double du = static_cast<double>(uv.x) - roi_center.x;
+            const double dv = static_cast<double>(uv.y) - roi_center.y;
+            const double dist = std::sqrt(du * du + dv * dv);
+            if (dist < min_pixel_dist) {
+                min_pixel_dist = dist;
+            }
+        }
+        if (!std::isfinite(min_pixel_dist)) {
+            continue;
+        }
+
+        const double score =
+            min_pixel_dist * uav_cluster_score_dist_weight_ -
+            static_cast<double>(indices.indices.size()) * uav_cluster_score_size_weight_;
+
+        if (score < best_score) {
+            best_score = score;
+            out_x = cx;
+            out_y = cy;
+            out_z = cz;
+            best_cluster_uvs = center_uvs;
+            found = true;
+        }
+    }
+
+    if (found && selected_cluster_uvs != nullptr) {
+        *selected_cluster_uvs = std::move(best_cluster_uvs);
+    }
+
+    return found;
 }
 
 // KF helpers
@@ -438,30 +669,44 @@ void Resolve::DetectCallback(
     set_default_pose(uav_out.poses[1]);
 
     // ========== 阶段一：接收检测消息 ==========
-    const bool has_blue_uav = (msg->blue_x[6] != 0.0f && msg->blue_y[6] != 0.0f);
-    const bool has_red_uav = (msg->red_x[6] != 0.0f && msg->red_y[6] != 0.0f);
+    const bool has_blue_bbox =
+        (msg->blue_uav_bbox_w > 1.0f && msg->blue_uav_bbox_h > 1.0f);
+    const bool has_red_bbox =
+        (msg->red_uav_bbox_w > 1.0f && msg->red_uav_bbox_h > 1.0f);
+    const bool has_blue_uav =
+        has_blue_bbox || (msg->blue_x[6] != 0.0f && msg->blue_y[6] != 0.0f);
+    const bool has_red_uav =
+        has_red_bbox || (msg->red_x[6] != 0.0f && msg->red_y[6] != 0.0f);
     
     if (has_blue_uav || has_red_uav) {
         RCLCPP_INFO(this->get_logger(), "========== [阶段一：接收检测消息] ==========");
         if (has_blue_uav) {
-            RCLCPP_INFO(this->get_logger(), "  蓝方UAV相机坐标: (%.2f, %.2f)", msg->blue_x[6], msg->blue_y[6]);
+            RCLCPP_INFO(this->get_logger(),
+                        "  蓝方UAV观测: center=(%.2f, %.2f), bbox=(%.2f, %.2f, %.2f, %.2f)",
+                        msg->blue_x[6], msg->blue_y[6],
+                        msg->blue_uav_bbox_x, msg->blue_uav_bbox_y,
+                        msg->blue_uav_bbox_w, msg->blue_uav_bbox_h);
         } else {
             RCLCPP_INFO(this->get_logger(), "  蓝方UAV: 无检测");
         }
         if (has_red_uav) {
-            RCLCPP_INFO(this->get_logger(), "  红方UAV相机坐标: (%.2f, %.2f)", msg->red_x[6], msg->red_y[6]);
+            RCLCPP_INFO(this->get_logger(),
+                        "  红方UAV观测: center=(%.2f, %.2f), bbox=(%.2f, %.2f, %.2f, %.2f)",
+                        msg->red_x[6], msg->red_y[6],
+                        msg->red_uav_bbox_x, msg->red_uav_bbox_y,
+                        msg->red_uav_bbox_w, msg->red_uav_bbox_h);
         } else {
             RCLCPP_INFO(this->get_logger(), "  红方UAV: 无检测");
         }
     }
 
-    // ========== 阶段二：读取雷达聚类数据 ==========
-    std::vector<pcl::PointXYZ> clusters;
+    // ========== 阶段二：读取原始 lidar_other 点云 ==========
+    std::vector<pcl::PointXYZ> other_points;
     bool other_fresh = false;
 
     {
         std::lock_guard<std::mutex> lk(uav_other_mutex_);
-        clusters = uav_other_clusters_;
+        other_points = uav_other_points_;
 
         const rclcpp::Time t_cam = is_stamp_zero(msg->header.stamp)
                                     ? this->now()
@@ -472,271 +717,164 @@ void Resolve::DetectCallback(
         other_fresh = (dt_ms <= uav_other_timeout_ms_);
 
         if (has_blue_uav || has_red_uav) {
-            RCLCPP_INFO(this->get_logger(), "========== [阶段二：读取雷达聚类数据] ==========");
+            RCLCPP_INFO(this->get_logger(), "========== [阶段二：读取 lidar_other 原始点云] ==========");
             RCLCPP_INFO(this->get_logger(),
-                        "  聚类中心数量: %zu, 时间差: %lld ms, 数据新鲜: %s",
-                        clusters.size(), (long long)dt_ms, other_fresh ? "是" : "否");
+                        "  点云数量: %zu, 时间差: %lld ms, 数据新鲜: %s",
+                        other_points.size(), (long long)dt_ms, other_fresh ? "是" : "否");
 
-            if (other_fresh && !clusters.empty()) {
-                for (size_t i = 0; i < clusters.size(); ++i) {
-                    RCLCPP_INFO(this->get_logger(),
-                                "  雷达聚类[%zu]: (%.3f, %.3f, %.3f)",
-                                i, clusters[i].x, clusters[i].y, clusters[i].z);
-                }
-            } else if (clusters.empty()) {
-                RCLCPP_WARN(this->get_logger(), "  ⚠️ 无可用聚类中心");
+            if (other_points.empty()) {
+                RCLCPP_WARN(this->get_logger(), "  ⚠️ 无可用 lidar_other 点");
             } else {
-                RCLCPP_WARN(this->get_logger(), "  ⚠️ 聚类数据超时");
+                RCLCPP_INFO(this->get_logger(),
+                            "  lidar_other 使用原始点云做视锥体投影筛点，聚类将在解算阶段完成");
             }
         }
     }
 
-    // Lambda: 使用透视变换方法(对地面车辆已验证准确)
+    // Lambda: 使用透视变换方法做纯视觉 fallback
     auto solve_xy_on_z = [&](float px, float py, float z_plane) -> cv::Point2f {
         cv::Point2f pixel(px, py);
-        // 使用透视变换: height参数是地面高度,需要减去ARMOR_HEIGHT=0.15
-        // 对于UAV: z_plane是绝对高度,所以传入 z_plane - 0.15 作为地面高度
         cv::Point2f world_xy = parser_->parse_with_height(pixel, z_plane - 0.15f);
-        // 坐标系转换: y轴偏移
         float y_offset = world_xy.y + 15.0f;
         float clamp_x = std::clamp(world_xy.x, 0.0f, 28.0f);
         float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
         return cv::Point2f(clamp_x, clamp_y);
     };
-    auto solve_xyz_on_z = [&](float px, float py, float z_plane) -> cv::Point3f {
-    cv::Point2f pixel(px, py);
-    cv::Point2f world_xy = parser_->parse_with_height(pixel, z_plane - 0.15f);
-
-    float y_offset = world_xy.y + 15.0f;
-    float clamp_x = std::clamp(world_xy.x, 0.0f, 28.0f);
-    float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-    float clamp_z = z_plane;   // UAV 当前假设高度
-
-    return cv::Point3f(clamp_x, clamp_y, clamp_z);
-    };
-
-    // ========== 阶段三：相机-雷达数据关联（基于2.3m三维最近邻） ==========
-    int assign_blue = -1, assign_red = -1;
-    double dist_blue = 1e9, dist_red = 1e9;
-
-    cv::Point3f blue_cam_3d(0.f, 0.f, 0.f);
-    cv::Point3f red_cam_3d(0.f, 0.f, 0.f);
-
-    if (other_fresh && !clusters.empty() && (has_blue_uav || has_red_uav)) {
-        RCLCPP_INFO(this->get_logger(), "========== [阶段三：相机-雷达数据关联] ==========");
-        RCLCPP_INFO(this->get_logger(),
-                    "  [三维匹配] 使用默认z=%.2fm反解相机UAV三维坐标，再做最近邻空间距离匹配",
-                    uav_default_z_);
-
-        auto dist3 = [](const cv::Point3f& a, const pcl::PointXYZ& b) -> double {
-            const double dx = static_cast<double>(a.x) - b.x;
-            const double dy = static_cast<double>(a.y) - b.y;
-            const double dz = static_cast<double>(a.z) - b.z;
-            return std::sqrt(dx * dx + dy * dy + dz * dz);
-        };
-
-        const double gate = std::max(0.1, uav_assign_gate_m_);
-
-        // 蓝方
-        if (has_blue_uav) {
-            blue_cam_3d = solve_xyz_on_z(msg->blue_x[6], msg->blue_y[6],
-                                        static_cast<float>(uav_default_z_));
-
-            RCLCPP_INFO(this->get_logger(),
-                        "    蓝方相机(%.1f, %.1f) z=%.2f → 三维点(%.3f, %.3f, %.3f)",
-                        msg->blue_x[6], msg->blue_y[6], uav_default_z_,
-                        blue_cam_3d.x, blue_cam_3d.y, blue_cam_3d.z);
-
-            for (size_t i = 0; i < clusters.size(); ++i) {
-                double dist = dist3(blue_cam_3d, clusters[i]);
-                RCLCPP_INFO(this->get_logger(),
-                            "      vs 聚类[%zu](%.3f, %.3f, %.3f): 空间距离 %.3fm",
-                            i, clusters[i].x, clusters[i].y, clusters[i].z, dist);
-
-                if (dist < dist_blue) {
-                    dist_blue = dist;
-                    assign_blue = static_cast<int>(i);
-                }
-            }
-
-            if (assign_blue >= 0 && dist_blue > gate) {
-                RCLCPP_WARN(this->get_logger(),
-                            "  蓝方: 最近聚类[%d]空间距离 %.3fm > 门限 %.3fm, ❌拒绝",
-                            assign_blue, dist_blue, gate);
-                assign_blue = -1;
-            }
-        }
-
-        // 红方
-        if (has_red_uav) {
-            red_cam_3d = solve_xyz_on_z(msg->red_x[6], msg->red_y[6],
-                                        static_cast<float>(uav_default_z_));
-
-            RCLCPP_INFO(this->get_logger(),
-                        "    红方相机(%.1f, %.1f) z=%.2f → 三维点(%.3f, %.3f, %.3f)",
-                        msg->red_x[6], msg->red_y[6], uav_default_z_,
-                        red_cam_3d.x, red_cam_3d.y, red_cam_3d.z);
-
-            for (size_t i = 0; i < clusters.size(); ++i) {
-                double dist = dist3(red_cam_3d, clusters[i]);
-                RCLCPP_INFO(this->get_logger(),
-                            "      vs 聚类[%zu](%.3f, %.3f, %.3f): 空间距离 %.3fm",
-                            i, clusters[i].x, clusters[i].y, clusters[i].z, dist);
-
-                if (dist < dist_red) {
-                    dist_red = dist;
-                    assign_red = static_cast<int>(i);
-                }
-            }
-
-            if (assign_red >= 0 && dist_red > gate) {
-                RCLCPP_WARN(this->get_logger(),
-                            "  红方: 最近聚类[%d]空间距离 %.3fm > 门限 %.3fm, ❌拒绝",
-                            assign_red, dist_red, gate);
-                assign_red = -1;
-            }
-        }
-
-        // 蓝红冲突消解
-        if (has_blue_uav && has_red_uav && assign_blue >= 0 && assign_red >= 0) {
-            if (assign_blue == assign_red) {
-                if (dist_blue <= dist_red) {
-                    RCLCPP_WARN(this->get_logger(),
-                                "  ⚠️ 冲突: 蓝红都选聚类[%d], 保留蓝方(%.3fm < %.3fm)",
-                                assign_blue, dist_blue, dist_red);
-                    assign_red = -1;
-                } else {
-                    RCLCPP_WARN(this->get_logger(),
-                                "  ⚠️ 冲突: 蓝红都选聚类[%d], 保留红方(%.3fm < %.3fm)",
-                                assign_red, dist_red, dist_blue);
-                    assign_blue = -1;
-                }
-            }
-        }
-
-        if (assign_blue >= 0) {
-            RCLCPP_INFO(this->get_logger(), "  ✓ 蓝方 -> 聚类[%d] 空间距离 %.3fm",
-                        assign_blue, dist_blue);
-        } else if (has_blue_uav) {
-            RCLCPP_WARN(this->get_logger(), "  ❌ 蓝方: 无匹配聚类");
-        }
-
-        if (assign_red >= 0) {
-            RCLCPP_INFO(this->get_logger(), "  ✓ 红方 -> 聚类[%d] 空间距离 %.3fm",
-                        assign_red, dist_red);
-        } else if (has_red_uav) {
-            RCLCPP_WARN(this->get_logger(), "  ❌ 红方: 无匹配聚类");
-        }
-    }
-
-    // ========== 阶段四：相机-雷达融合测量 ==========
+    // ========== 阶段三：视锥体求交 + 聚类中心 ==========
     bool   meas_ok[2]{false, false};
     double meas_x[2]{0, 0}, meas_y[2]{0, 0}, meas_z[2]{0, 0};
+    std::vector<cv::Point2f> debug_uvs_all;
+    std::vector<cv::Point2f> debug_cluster_uvs_all;
+    debug_uvs_all.reserve(256);
+    debug_cluster_uvs_all.reserve(128);
 
-    auto compute_meas = [&](int idx, float px, float py, int assigned) {
+    auto compute_meas = [&](int idx,
+                            bool has_target,
+                            bool has_bbox,
+                            float px,
+                            float py,
+                            float bbox_x,
+                            float bbox_y,
+                            float bbox_w,
+                            float bbox_h) {
         const char* side_name = (idx == 0) ? "蓝方" : "红方";
-        bool has_cluster =
-        (other_fresh &&
-        assigned >= 0 &&
-        assigned < static_cast<int>(clusters.size()));
-        
-        if (!has_cluster) {
-            float z_plane = static_cast<float>(uav_default_z_);
-            cv::Point2f pv = solve_xy_on_z(px, py, z_plane);
+        if (!has_target) {
+            return;
+        }
 
+        const cv::Rect2f roi = has_bbox
+            ? BuildUavRoiFromBbox(bbox_x, bbox_y, bbox_w, bbox_h)
+            : cv::Rect2f();
+
+        if (has_bbox && other_fresh && !other_points.empty()) {
+            double ix = 0.0, iy = 0.0, iz = 0.0;
+            std::vector<cv::Point2f> debug_uvs_side;
+            std::vector<cv::Point2f> debug_cluster_uvs_side;
+            if (SolveUavFrustumMeasurement(
+                    roi, other_points, ix, iy, iz,
+                    &debug_uvs_side, &debug_cluster_uvs_side)) {
+                meas_ok[idx] = true;
+                meas_x[idx] = ix;
+                meas_y[idx] = iy;
+                meas_z[idx] = GetFilteredZPlane(idx, iz);
+                debug_uvs_all.insert(
+                    debug_uvs_all.end(),
+                    debug_uvs_side.begin(),
+                    debug_uvs_side.end());
+                debug_cluster_uvs_all.insert(
+                    debug_cluster_uvs_all.end(),
+                    debug_cluster_uvs_side.begin(),
+                    debug_cluster_uvs_side.end());
+
+                const cv::Point2f roi_center(
+                    roi.x + roi.width * 0.5f,
+                    roi.y + roi.height * 0.5f);
+                const cv::Point2f pv = solve_xy_on_z(
+                    roi_center.x, roi_center.y, static_cast<float>(meas_z[idx]));
+
+                RCLCPP_INFO(this->get_logger(),
+                            "  %s: 视锥求交成功 roi=(%.1f, %.1f, %.1f, %.1f) -> cluster=(%.3f, %.3f, %.3f), vision@z=(%.3f, %.3f)",
+                            side_name,
+                            roi.x, roi.y, roi.width, roi.height,
+                            meas_x[idx], meas_y[idx], meas_z[idx],
+                            pv.x, pv.y);
+                return;
+            }
+
+            RCLCPP_WARN(this->get_logger(),
+                        "  %s: ROI 视锥求交未得到有效聚类，转入纯视觉 fallback",
+                        side_name);
+        }
+
+        if (px != 0.0f && py != 0.0f) {
+            const float z_plane = static_cast<float>(uav_default_z_);
+            const cv::Point2f pv = solve_xy_on_z(px, py, z_plane);
             meas_ok[idx] = true;
             meas_x[idx] = pv.x;
             meas_y[idx] = pv.y;
             meas_z[idx] = uav_default_z_;
 
             RCLCPP_WARN(this->get_logger(),
-                        "  %s: 无合法聚类( other_fresh=%s, assigned=%d, clusters=%zu )，纯相机模式 z=%.2f -> (%.3f, %.3f, %.3f)",
-                        side_name,
-                        other_fresh ? "true" : "false",
-                        assigned,
-                        clusters.size(),
-                        z_plane,
+                        "  %s: 纯视觉 fallback center=(%.1f, %.1f) z=%.2f -> (%.3f, %.3f, %.3f)",
+                        side_name, px, py, z_plane,
                         meas_x[idx], meas_y[idx], meas_z[idx]);
-            return;
         }
-        
-        // 融合模式: 智能选择z值
-        double xL = clusters[assigned].x;
-        double yL = clusters[assigned].y;
-        double zL = clusters[assigned].z;
-        
-        // 步骤3A: 先用默认z投影,计算距离
-        float z_default = static_cast<float>(uav_default_z_);
-        cv::Point2f pv_default = solve_xy_on_z(px, py, z_default);
-        double dx_def = pv_default.x - xL, dy_def = pv_default.y - yL;
-        double dist_default = std::sqrt(dx_def * dx_def + dy_def * dy_def);
-        
-        // 步骤3B: 用雷达真实z投影,计算距离
-        float z_lidar = GetFilteredZPlane(idx, zL);
-        cv::Point2f pv_lidar = solve_xy_on_z(px, py, z_lidar);
-        double dx_lid = pv_lidar.x - xL, dy_lid = pv_lidar.y - yL;
-        double dist_lidar = std::sqrt(dx_lid * dx_lid + dy_lid * dy_lid);
-        
-        // 步骤3C: 选择距离更小的z值
-        float z_best;
-        cv::Point2f pv_best;
-        double dist_best;
-        if (dist_lidar < dist_default) {
-            z_best = z_lidar;
-            pv_best = pv_lidar;
-            dist_best = dist_lidar;
-            RCLCPP_INFO(this->get_logger(), "  %s: [智能选z] 雷达z=%.3f距离%.3fm < 默认z=%.2f距离%.3fm, ✓选雷达z", 
-                side_name, z_lidar, dist_lidar, z_default, dist_default);
-        } else {
-            z_best = z_default;
-            pv_best = pv_default;
-            dist_best = dist_default;
-            RCLCPP_INFO(this->get_logger(), "  %s: [智能选z] 默认z=%.2f距离%.3fm < 雷达z=%.3f距离%.3fm, ✓选默认z", 
-                side_name, z_default, dist_default, z_lidar, dist_lidar);
-        }
-        
-        double xV = pv_best.x, yV = pv_best.y;
-        
-        RCLCPP_INFO(this->get_logger(), "  %s: [精确投影] 相机像素(%.1f,%.1f) 用z=%.3f → 精确XY(%.3f,%.3f)", 
-            side_name, px, py, z_best, xV, yV);
-        
-        // 步骤4: 相机XY与雷达XY加权融合
-        const double dx = xV - xL, dy = yV - yL;
-        const double r_xy = std::sqrt(dx * dx + dy * dy);
-        const double delta = std::max(1e-6, uav_huber_delta_xy_);
-        const double huber = (r_xy <= delta) ? 1.0 : (delta / std::max(1e-6, r_xy));
-        const double wV = std::max(1e-6, uav_w_vision_xy_);
-        const double wL = std::max(1e-6, uav_w_lidar_xy_) * huber;
-        
-        meas_ok[idx] = true;
-        const double w_sum = std::max(1e-6, wV + wL);
-        meas_x[idx] = (wV * xV + wL * xL) / w_sum;
-        meas_y[idx] = (wV * yV + wL * yL) / w_sum;
-        meas_z[idx] = z_lidar;
-        
-        // 计算归一化后的权重(用于日志显示)
-        const double wV_norm = wV / w_sum;
-        const double wL_norm = wL / w_sum;
-
-        RCLCPP_INFO(this->get_logger(),
-            "  %s: 使用聚类[%d] = (%.3f, %.3f, %.3f)",
-            side_name, assigned, xL, yL, zL);
-        
-        RCLCPP_INFO(this->get_logger(), "  %s: [融合] 相机(%.2f,%.2f)*%.3f + 雷达(%.2f,%.2f)*%.3f = 最终(%.3f,%.3f,%.3f)", 
-            side_name, xV, yV, wV_norm, xL, yL, wL_norm, meas_x[idx], meas_y[idx], meas_z[idx]);
     };
 
     if (has_blue_uav || has_red_uav) {
-        RCLCPP_INFO(this->get_logger(), "========== [阶段四：相机-雷达融合测量] ==========");
+        RCLCPP_INFO(this->get_logger(), "========== [阶段三：视锥体求交测量] ==========");
     }
-    if (has_blue_uav) {
-        compute_meas(0, msg->blue_x[6], msg->blue_y[6], assign_blue);
+    compute_meas(0, has_blue_uav, has_blue_bbox,
+                 msg->blue_x[6], msg->blue_y[6],
+                 msg->blue_uav_bbox_x, msg->blue_uav_bbox_y,
+                 msg->blue_uav_bbox_w, msg->blue_uav_bbox_h);
+    compute_meas(1, has_red_uav, has_red_bbox,
+                 msg->red_x[6], msg->red_y[6],
+                 msg->red_uav_bbox_x, msg->red_uav_bbox_y,
+                 msg->red_uav_bbox_w, msg->red_uav_bbox_h);
+
+    {
+        pcl::PointCloud<pcl::PointXYZ> debug_cloud;
+        debug_cloud.points.reserve(debug_uvs_all.size());
+        for (const auto& uv : debug_uvs_all) {
+            pcl::PointXYZ p;
+            p.x = uv.x;
+            p.y = uv.y;
+            p.z = 0.0f;
+            debug_cloud.points.push_back(p);
+        }
+
+        sensor_msgs::msg::PointCloud2 debug_msg;
+        pcl::toROSMsg(debug_cloud, debug_msg);
+        debug_msg.header = msg->header;
+        debug_msg.header.frame_id = "camera_image";
+        if (is_stamp_zero(debug_msg.header.stamp)) {
+            debug_msg.header.stamp = this->now();
+        }
+        pub_uav_intersection_debug_->publish(debug_msg);
     }
-    if (has_red_uav) {
-        compute_meas(1, msg->red_x[6], msg->red_y[6], assign_red);
+    {
+        pcl::PointCloud<pcl::PointXYZ> debug_cloud;
+        debug_cloud.points.reserve(debug_cluster_uvs_all.size());
+        for (const auto& uv : debug_cluster_uvs_all) {
+            pcl::PointXYZ p;
+            p.x = uv.x;
+            p.y = uv.y;
+            p.z = 0.0f;
+            debug_cloud.points.push_back(p);
+        }
+
+        sensor_msgs::msg::PointCloud2 debug_msg;
+        pcl::toROSMsg(debug_cloud, debug_msg);
+        debug_msg.header = msg->header;
+        debug_msg.header.frame_id = "camera_image";
+        if (is_stamp_zero(debug_msg.header.stamp)) {
+            debug_msg.header.stamp = this->now();
+        }
+        pub_uav_cluster_debug_->publish(debug_msg);
     }
 
-    // ========== 阶段五：卡尔曼滤波预测与更新 ==========
+    // ========== 阶段四：卡尔曼滤波预测与更新 ==========
     const rclcpp::Time t_now = is_stamp_zero(msg->header.stamp) 
                                ? this->now() 
                                : rclcpp::Time(msg->header.stamp);

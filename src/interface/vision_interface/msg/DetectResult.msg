@@ -4,6 +4,17 @@ float32[7] blue_y
 float32[7] red_x
 float32[7] red_y
 
+# UAV YOLO bbox in original image coordinates (valid when w/h > 0)
+float32 blue_uav_bbox_x
+float32 blue_uav_bbox_y
+float32 blue_uav_bbox_w
+float32 blue_uav_bbox_h
+
+float32 red_uav_bbox_x
+float32 red_uav_bbox_y
+float32 red_uav_bbox_w
+float32 red_uav_bbox_h
+
 # UAV light bar targets (vertical pairs) - up to 2 targets per UAV
 uint8 blue_uav_light_count     # number of blue team light bar pairs (0-2)
 float32[2] blue_uav_light_x    # x coordinates of blue light bar pair centers

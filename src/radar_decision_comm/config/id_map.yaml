@@ -57,3 +57,4 @@ robot_interaction_subcmd:
   sentry_field_state: 0x0202
   hero_alert_flag: 0x0203
   double_effect_times: 0x0204
+  hero_lob_assist: 0x0205

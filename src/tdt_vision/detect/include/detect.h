@@ -5,6 +5,7 @@
 #include <future>
 #include <memory>
 #include <mutex>
+#include <vector>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <sensor_msgs/msg/image.hpp>
@@ -14,6 +15,7 @@
 #include "geometry_msgs/msg/vector3.hpp"
 #include "NvidiaInterface.hpp"
 #include "opencv2/opencv.hpp"
+#include "sensor_msgs/msg/point_cloud2.hpp"
 #include "sensor_msgs/msg/compressed_image.hpp"
 #include "vision_interface/msg/detect_result.hpp"
 #include "yolos.hpp"
@@ -58,9 +60,17 @@ class Detect final : public rclcpp::Node {
 public:
     explicit Detect(const rclcpp::NodeOptions& options);
     void callback(sensor_msgs::msg::Image::UniquePtr msg);
+    void uavIntersectionDebugCallback(
+        const sensor_msgs::msg::PointCloud2::SharedPtr msg);
+    void uavClusterDebugCallback(
+        const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr image_sub;
     rclcpp::Subscription<sensor_msgs::msg::CompressedImage>::SharedPtr
         compressed_image_sub;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
+        uav_intersection_debug_sub_;
+    rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
+        uav_cluster_debug_sub_;
 
 private:
     std::shared_ptr<Infer<yolo::BoxArray>>     yolo;
@@ -98,6 +108,13 @@ private:
     
     // 灯条检测器
     std::shared_ptr<class LightBarDetector> light_bar_detector_;
+
+    std::mutex uav_intersection_mutex_;
+    std::vector<cv::Point2f> uav_intersection_points_;
+    rclcpp::Time uav_intersection_stamp_{0, 0, RCL_ROS_TIME};
+    std::vector<cv::Point2f> uav_cluster_points_;
+    rclcpp::Time uav_cluster_stamp_{0, 0, RCL_ROS_TIME};
+    int uav_intersection_timeout_ms_{120};
 };
 class Car {
 public:

@@ -60,6 +60,7 @@ state_blackboard:
     state_ttl_ms: 500
     enemy_track_ttl_ms: 300
     wireless_track_ttl_ms: 500
+    our_track_ttl_ms: 500
     referee_state_ttl_ms: 1500
     publish_blackboard_hz: 30.0
 
@@ -86,6 +87,7 @@ decision_engine:
     groot_publisher_port: 1666
     groot_server_port: 1667
     my_color: "Red"
+    my_hero_id: 1
     my_sentinel_id: 7
     infantry_3_id: 3
     infantry_4_id: 4
@@ -123,6 +125,39 @@ decision_engine:
 
     enable_hero_alert_flag: true
     hero_alert_period_ms: 500
+
+    enable_hero_lob_assist: false
+    hero_lob_receiver_id: 1
+    hero_lob_data_cmd_id: 517           # 0x0205
+    hero_lob_shooter_height_m: 0.30
+    hero_lob_window_s: 2.0
+    hero_lob_min_samples: 10
+    hero_lob_max_avg_displacement_m: 0.60
+    hero_lob_enemy_block_radius_m: 3.0
+    hero_lob_min_enemy_confidence: 0.50
+    hero_lob_require_enemy_valid: true
+    hero_lob_require_enemy_direct_source: false
+    hero_lob_enter_quiet_ms: 500
+    hero_lob_keepalive_ms: 500
+    hero_lob_clear_repeat: 3
+    hero_lob_solve_period_ms: 200
+    hero_lob_muzzle_speed_mps: 0.0
+    hero_lob_drag_k: 0.0
+    hero_lob_yaw_sigma_deg: 0.0
+    hero_lob_pitch_sigma_deg: 0.0
+    hero_lob_yaw_bias_deg: 0.0
+    hero_lob_pitch_bias_deg: 0.0
+    hero_lob_integrate_dt_s: 0.005
+    hero_lob_max_flight_time_s: 5.0
+    hero_lob_yaw_refine_range_deg: 1.0
+    hero_lob_yaw_refine_step_deg: 0.1
+    hero_lob_pitch_search_min_deg: 15.0
+    hero_lob_pitch_search_max_deg: 75.0
+    hero_lob_pitch_search_step_deg: 0.2
+    hero_lob_target_xyz_when_red: [0.0, 0.0, 0.0]
+    hero_lob_target_xyz_when_blue: [0.0, 0.0, 0.0]
+    output_hero_lob_status_topic: "/radar/debug/hero_lob_status"
+    output_hero_lob_debug_topic: "/radar/debug/hero_lob_debug"
 
     enable_double_effect_forward: true
     double_effect_period_ms: 1000

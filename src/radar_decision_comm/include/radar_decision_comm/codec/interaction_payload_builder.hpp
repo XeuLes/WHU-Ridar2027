@@ -29,8 +29,19 @@ public:
 
   static std::vector<uint8_t> build_double_effect_forward_payload(uint8_t times);
 
+  static std::vector<uint8_t> build_hero_lob_assist_payload(
+    uint8_t flags,
+    double yaw_field_cw_deg,
+    double pitch_deg,
+    uint16_t age_ms,
+    double impact_error_m,
+    double splash_radius_m,
+    uint8_t state,
+    uint8_t sequence_tag);
+
 private:
   static void append_u16_le(std::vector<uint8_t> & out, uint16_t value);
+  static void append_i16_le(std::vector<uint8_t> & out, int16_t value);
   static void append_float_le(std::vector<uint8_t> & out, float value);
 };
 
