@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <opencv2/imgproc.hpp>
 
 namespace auto_aim_fast::vision
 {
@@ -135,7 +136,14 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
     }
 
     if (yolo_init_ok_ && yolo_detector_->isReady()) {
-      pairs = yolo_detector_->detectDetailed(pre.bgr);
+      cv::Mat yolo_input = pre.bgr;
+      cv::Mat swapped;
+      if (yolo_params_.swap_rb_input) {
+        cv::cvtColor(pre.bgr, swapped, cv::COLOR_BGR2RGB);
+        yolo_input = swapped;
+      }
+
+      pairs = yolo_detector_->detectDetailed(yolo_input);
 
       cv::Mat dbg = pre.bgr.clone();
       for (const auto & pr : pairs) {

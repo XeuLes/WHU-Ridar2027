@@ -18,6 +18,22 @@
 namespace debug_map_homo
 {
 
+namespace
+{
+
+int normalize_self_color(int raw_color, int fallback)
+{
+  if (raw_color == 0) {
+    return 0;
+  }
+  if (raw_color == 1 || raw_color == 2) {
+    return 2;
+  }
+  return (fallback == 0) ? 0 : 2;
+}
+
+}  // namespace
+
 class DebugMapHomoNode : public rclcpp::Node
 {
 public:
@@ -41,6 +57,8 @@ public:
     declare_parameter<int>("draw_timeout_ms", 500);
     declare_parameter<bool>("show_window", true);
     declare_parameter<bool>("prefer_kalman", true);
+    declare_parameter<bool>("use_match_info_color", true);
+    declare_parameter<int>("self_color_override", 0);
 
     map_path_ = get_parameter("map_path").as_string();
     target_w_ = get_parameter("target_w").as_int();
@@ -59,6 +77,9 @@ public:
     draw_timeout_ms_ = get_parameter("draw_timeout_ms").as_int();
     show_window_ = get_parameter("show_window").as_bool();
     prefer_kalman_ = get_parameter("prefer_kalman").as_bool();
+    use_match_info_color_ = get_parameter("use_match_info_color").as_bool();
+    self_color_override_ =
+      normalize_self_color(get_parameter("self_color_override").as_int(), 0);
 
     if (map_path_.empty()) {
       RCLCPP_FATAL(get_logger(), "parameter 'map_path' is empty");
@@ -231,7 +252,7 @@ bool saveHomographyToFile()
     uav_t_[0] = 0.0;
     uav_t_[1] = 0.0;
 
-    self_color_ = 0;
+    self_color_ = self_color_override_;
 
     mapping_ready_ = false;
     H_p2w_.release();
@@ -312,11 +333,9 @@ bool saveHomographyToFile()
   void onMatchInfo(const vision_interface::msg::MatchInfo::SharedPtr msg)
   {
     if (!msg) return;
+    if (!use_match_info_color_) return;
     std::lock_guard<std::mutex> lk(mtx_);
-    self_color_ = msg->self_color;
-    if (self_color_ == 1) {
-      self_color_ = 2;
-    }
+    self_color_ = normalize_self_color(msg->self_color, self_color_override_);
   }
 
   void onUav(const geometry_msgs::msg::PoseArray::SharedPtr msg)
@@ -742,6 +761,8 @@ bool auto_save_homography_{true};
   int draw_timeout_ms_{500};
   bool show_window_{true};
   bool prefer_kalman_{true};
+  bool use_match_info_color_{true};
+  int self_color_override_{0};
 
   cv::Mat map_;
   int self_color_{0};

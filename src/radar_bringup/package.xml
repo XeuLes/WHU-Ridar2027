@@ -11,16 +11,30 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
 
   <!-- 运行依赖：launch基础功能 -->
+  <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
 
   <!-- 运行依赖：激光雷达驱动 -->
-  <exec_depend>livox_ros_driver2</exec_depend>
+  <exec_depend>livox_ros2_driver</exec_depend>
 
   <!-- 运行依赖：功能节点 -->
+  <exec_depend>hik_camera_ros2_driver</exec_depend>
   <exec_depend>localization</exec_depend>
   <exec_depend>dynamic_cloud</exec_depend>
   <exec_depend>cluster</exec_depend>
+  <exec_depend>tdt_vision</exec_depend>
+  <exec_depend>debug_map</exec_depend>
+  <exec_depend>kalman_filter</exec_depend>
+  <exec_depend>rosbag_player</exec_depend>
+  <exec_depend>gimbal_aim_solver</exec_depend>
+  <exec_depend>gimbal_serial_bridge</exec_depend>
+  <exec_depend>laser_aim_controller</exec_depend>
+  <exec_depend>auto_aim_fast</exec_depend>
+  <exec_depend>livox_cloud_integrator</exec_depend>
+  <exec_depend>radar_decision_comm</exec_depend>
+  <exec_depend>radar_pdu_bridge</exec_depend>
 
   <!-- 运行依赖：点云处理 -->
   <exec_depend>pcl_ros</exec_depend>

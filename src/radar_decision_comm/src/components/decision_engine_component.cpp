@@ -49,6 +49,23 @@ static std::chrono::milliseconds hz_to_period_ms(double hz)
   return std::chrono::milliseconds(ms);
 }
 
+struct DerivedTeamIds
+{
+  int my_hero_id{1};
+  int my_sentinel_id{7};
+  int infantry_3_id{3};
+  int infantry_4_id{4};
+  int enemy_hero_id{101};
+};
+
+static DerivedTeamIds derive_team_ids_from_color(const std::string & my_color)
+{
+  if (my_color == "Blue" || my_color == "blue") {
+    return DerivedTeamIds{101, 107, 103, 104, 1};
+  }
+  return DerivedTeamIds{};
+}
+
 class DecisionEngineComponent : public rclcpp::Node
 {
 public:
@@ -59,11 +76,21 @@ public:
     decision_mode_ = this->declare_parameter<std::string>("decision_mode", "btcpp");   // rule / btcpp
 
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
+    derive_ids_from_my_color_ = this->declare_parameter<bool>("derive_ids_from_my_color", true);
     my_hero_id_ = this->declare_parameter<int>("my_hero_id", 1);
     my_sentinel_id_ = this->declare_parameter<int>("my_sentinel_id", 7);
     infantry_3_id_ = this->declare_parameter<int>("infantry_3_id", 3);
     infantry_4_id_ = this->declare_parameter<int>("infantry_4_id", 4);
     enemy_hero_id_ = this->declare_parameter<int>("enemy_hero_id", 101);
+
+    if (derive_ids_from_my_color_) {
+      const auto ids = derive_team_ids_from_color(my_color_);
+      my_hero_id_ = ids.my_hero_id;
+      my_sentinel_id_ = ids.my_sentinel_id;
+      infantry_3_id_ = ids.infantry_3_id;
+      infantry_4_id_ = ids.infantry_4_id;
+      enemy_hero_id_ = ids.enemy_hero_id;
+    }
 
     decision_rate_hz_ = this->declare_parameter<double>("decision_rate_hz", 50.0);
     map_publish_period_ms_ = this->declare_parameter<int>("map_publish_period_ms", 200);
@@ -88,6 +115,9 @@ public:
     enable_radar_double_effect_command_ = this->declare_parameter<bool>("enable_radar_double_effect_command", true);
 
     hero_lob_receiver_id_ = this->declare_parameter<int>("hero_lob_receiver_id", my_hero_id_);
+    if (derive_ids_from_my_color_) {
+      hero_lob_receiver_id_ = my_hero_id_;
+    }
     hero_lob_data_cmd_id_ = this->declare_parameter<int>(
       "hero_lob_data_cmd_id", static_cast<int>(interaction_cmd_ids::kHeroLobAssist));
     hero_lob_shooter_height_m_ = this->declare_parameter<double>("hero_lob_shooter_height_m", 0.30);
@@ -976,6 +1006,7 @@ private:
   bool enable_hero_lob_assist_{false};
   bool enable_double_effect_forward_{true};
   bool enable_radar_double_effect_command_{true};
+  bool derive_ids_from_my_color_{true};
 
   int my_hero_id_{1};
   int my_sentinel_id_{7};

@@ -18,11 +18,22 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
-# 安装config文件夹（包含RViz配置文件）
-install(DIRECTORY
-  config
-  DESTINATION share/${PROJECT_NAME}
-)
+# 安装 radar_bringup 自身的 config 目录（如果后续补充文件会一并安装）
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config")
+  install(DIRECTORY
+    config
+    DESTINATION share/${PROJECT_NAME}
+  )
+endif()
+
+# 安装仓库根目录下的通用配置，供 bringup 统一引用，避免 launch 写死工作区绝对路径
+set(PROJECT_ROOT_CONFIG_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../config")
+if(EXISTS "${PROJECT_ROOT_CONFIG_DIR}")
+  install(DIRECTORY
+    "${PROJECT_ROOT_CONFIG_DIR}/"
+    DESTINATION share/${PROJECT_NAME}/config
+  )
+endif()
 
 
 if(BUILD_TESTING)

@@ -1,245 +1,347 @@
 import os
-from launch_ros.descriptions import ComposableNode
-from launch_ros.actions import ComposableNodeContainer
-from launch_ros.actions import Node
-from launch import LaunchDescription
-from launch.actions import Shutdown, LogInfo, ExecuteProcess
-from launch.substitutions import PathJoinSubstitution
-from launch_ros.substitutions import FindPackageShare
+
 from ament_index_python.packages import get_package_share_directory
-# 导入QoS配置类（仅用于节点内部参考，不直接作为参数传递）
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy, DurabilityPolicy
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction, Shutdown
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
+
+
+def _team_config(our_color: str):
+    color = our_color.strip().lower()
+    if color == "red":
+        return {
+            "decision_my_color": "Red",
+            "match_self_color": 2,
+            "my_hero_id": 1,
+            "my_sentinel_id": 7,
+            "infantry_3_id": 3,
+            "infantry_4_id": 4,
+            "enemy_hero_id": 101,
+        }
+    if color == "blue":
+        return {
+            "decision_my_color": "Blue",
+            "match_self_color": 0,
+            "my_hero_id": 101,
+            "my_sentinel_id": 107,
+            "infantry_3_id": 103,
+            "infantry_4_id": 104,
+            "enemy_hero_id": 1,
+        }
+    raise RuntimeError(f"our_color must be 'red' or 'blue', got: {our_color}")
+
+
+def _build_launch(context):
+    team = _team_config(LaunchConfiguration("our_color").perform(context))
+    decision_params_file = LaunchConfiguration("decision_params_file").perform(context)
+    referee_rx_mode = LaunchConfiguration("referee_rx_mode").perform(context)
+    referee_tx_mode = LaunchConfiguration("referee_tx_mode").perform(context)
+    rosbag_file = LaunchConfiguration("rosbag_file").perform(context)
+
+    bringup_share = get_package_share_directory("radar_bringup")
+    localization_share = get_package_share_directory("localization")
+    debug_map_share = get_package_share_directory("debug_map")
+
+    bringup_config = os.path.join(bringup_share, "config")
+    map_pcd_path = os.path.join(localization_share, "config", "RM2025.pcd")
+    rviz_config_path = os.path.join(localization_share, "config", "localization_rviz_config.rviz")
+
+    intra = [{"use_intra_process_comms": True}]
+
+    rosbag_player_component = ComposableNode(
+        package="rosbag_player",
+        plugin="RosbagPlayer",
+        name="rosbag_player_node",
+        parameters=[{"rosbag_file": rosbag_file}],
+        extra_arguments=intra,
+    )
+
+    localization_component = ComposableNode(
+        package="localization",
+        plugin="tdt_radar::Localization",
+        name="localization_node",
+        parameters=[
+            {
+                "use_map": True,
+                "map_frame": "rm_frame",
+                "target_pcd_path": map_pcd_path,
+            }
+        ],
+        extra_arguments=intra,
+    )
+
+    dynamic_cloud_component = ComposableNode(
+        package="dynamic_cloud",
+        plugin="tdt_radar::DynamicCloud",
+        name="dynamic_cloud_node",
+        parameters=[{"map_pcd_path": map_pcd_path}],
+        extra_arguments=intra,
+    )
+
+    cluster_component = ComposableNode(
+        package="cluster",
+        plugin="tdt_radar::Cluster",
+        name="cluster_node",
+        extra_arguments=intra,
+    )
+
+    detect_component = ComposableNode(
+        package="tdt_vision",
+        plugin="tdt_radar::Detect",
+        name="radar_detect_node",
+        parameters=[{"image_topic": "/camera_image"}],
+        extra_arguments=intra,
+    )
+
+    resolve_component = ComposableNode(
+        package="tdt_vision",
+        plugin="tdt_radar::Resolve",
+        name="radar_resolve_node",
+        parameters=[
+            {
+                "out_matrix_path": os.path.join(bringup_config, "out_matrix.yaml"),
+                "camera_params_path": os.path.join(bringup_config, "camera_params.yaml"),
+                "region_points_path": os.path.join(bringup_config, "RM2025_Points.yaml"),
+                "minimap_path": os.path.join(bringup_config, "RM2025.png"),
+            }
+        ],
+        extra_arguments=intra,
+    )
+
+    kalman_filter_component = ComposableNode(
+        package="kalman_filter",
+        plugin="tdt_radar::KalmanFilter",
+        name="kalman_filter_node",
+        parameters=[
+            {
+                "use_match_info_color": False,
+                "self_color_override": team["match_self_color"],
+            }
+        ],
+        extra_arguments=intra,
+    )
+
+    kalman_tracks_adapter_component = ComposableNode(
+        package="radar_decision_comm",
+        plugin="radar_decision_comm::KalmanTracksAdapterComponent",
+        name="kalman_tracks_adapter",
+        parameters=[
+            {
+                "our_color": team["decision_my_color"],
+            }
+        ],
+        extra_arguments=intra,
+    )
+
+    replay_container = ComposableNodeContainer(
+        name="radar_replay_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        composable_node_descriptions=[
+            rosbag_player_component,
+            localization_component,
+            dynamic_cloud_component,
+            cluster_component,
+            detect_component,
+            resolve_component,
+            kalman_filter_component,
+            kalman_tracks_adapter_component,
+        ],
+        output="both",
+        emulate_tty=True,
+        on_exit=Shutdown(),
+    )
+
+    decision_overrides = {
+        "my_color": team["decision_my_color"],
+        "derive_ids_from_my_color": True,
+        "my_hero_id": team["my_hero_id"],
+        "my_sentinel_id": team["my_sentinel_id"],
+        "infantry_3_id": team["infantry_3_id"],
+        "infantry_4_id": team["infantry_4_id"],
+        "enemy_hero_id": team["enemy_hero_id"],
+        "hero_lob_receiver_id": team["my_hero_id"],
+    }
+
+    radar_decision_comm_container = ComposableNodeContainer(
+        name="radar_decision_comm_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        output="screen",
+        composable_node_descriptions=[
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::RefereeSerialRxComponent",
+                name="referee_serial_rx",
+                parameters=[
+                    decision_params_file,
+                    {"my_color": team["decision_my_color"], "rx_mode": referee_rx_mode},
+                ],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::RadarWirelessRxComponent",
+                name="radar_wireless_rx",
+                parameters=[
+                    decision_params_file,
+                    {"my_color": team["decision_my_color"]},
+                ],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::ClientBridgeComponent",
+                name="client_bridge",
+                parameters=[decision_params_file],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::PerceptionAdapterComponent",
+                name="perception_adapter",
+                parameters=[decision_params_file],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::StateBlackboardComponent",
+                name="state_blackboard",
+                parameters=[decision_params_file],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::FusionComponent",
+                name="fusion_engine",
+                parameters=[decision_params_file],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::DecisionEngineComponent",
+                name="decision_engine",
+                parameters=[decision_params_file, decision_overrides],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::TxSchedulerComponent",
+                name="tx_scheduler",
+                parameters=[decision_params_file],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="radar_decision_comm",
+                plugin="radar_decision_comm::RefereeSerialTxComponent",
+                name="referee_serial_tx",
+                parameters=[
+                    decision_params_file,
+                    {"my_color": team["decision_my_color"], "tx_mode": referee_tx_mode},
+                ],
+                extra_arguments=intra,
+            ),
+        ],
+    )
+
+    debug_map_node = Node(
+        package="debug_map",
+        executable="debug_map_homo_node",
+        name="debug_map_homo_node",
+        output="screen",
+        parameters=[
+            {
+                "map_path": os.path.join(debug_map_share, "config", "jichuzhizao.png"),
+                "homography_path": os.path.join(debug_map_share, "config", "debug_map_homography.yaml"),
+                "auto_load_homography": True,
+                "auto_save_homography": True,
+                "target_w": 700,
+                "target_h": 375,
+                "kalman_topic": "/kalman_detect",
+                "resolve_topic": "/resolve_result",
+                "uav_topic": "/uav_positions",
+                "match_info_topic": "/match_info",
+                "debug_image_topic": "/debug_map_homo",
+                "draw_timeout_ms": 500,
+                "show_window": True,
+                "prefer_kalman": True,
+                "use_match_info_color": False,
+                "self_color_override": team["match_self_color"],
+            }
+        ],
+    )
+
+    map_pcd_publisher = Node(
+        package="pcl_ros",
+        executable="pcd_to_pointcloud",
+        name="map_pcd_publisher",
+        parameters=[
+            {
+                "file_name": map_pcd_path,
+                "frame_id": "map",
+                "publish_rate": 0.1,
+            }
+        ],
+        remappings=[("cloud", "/map_point_cloud")],
+        output="screen",
+    )
+
+    rviz_node = Node(
+        package="rviz2",
+        executable="rviz2",
+        name="rviz2",
+        output="screen",
+        arguments=["-d", rviz_config_path],
+    )
+
+    return [
+        LogInfo(msg=f"rosbag_radar_launch our_color={team['decision_my_color']}"),
+        LogInfo(msg=f"rosbag file: {rosbag_file}"),
+        replay_container,
+        radar_decision_comm_container,
+        debug_map_node,
+        map_pcd_publisher,
+        rviz_node,
+    ]
+
 
 def generate_launch_description():
-    # 定义统一的QoS配置（供节点代码内部使用的参考，不在launch参数中传递）
-    unified_qos = QoSProfile(
-        reliability=ReliabilityPolicy.BEST_EFFORT,
-        durability=DurabilityPolicy.VOLATILE,
-        history=HistoryPolicy.KEEP_LAST,
-        depth=10
+    radar_decision_share = get_package_share_directory("radar_decision_comm")
+    default_decision_params = os.path.join(
+        radar_decision_share, "config", "radar_decision_comm.yaml"
     )
 
-    # 获取各个功能包的路径
-    localization_share_dir = get_package_share_directory('localization')
-    livox_share_dir = get_package_share_directory('livox_ros2_driver')
-    dynamic_cloud_share_dir = get_package_share_directory('dynamic_cloud')
-    tdt_vision_share_dir = get_package_share_directory('tdt_vision')
-    debug_map_share_dir = get_package_share_directory('debug_map')
-    kalman_filter_share_dir = get_package_share_directory('kalman_filter')
-    hik_camera_share_dir = get_package_share_directory('hik_camera_ros2_driver')
-    # 海康相机参数文件路径
-    hik_params_file = os.path.join(hik_camera_share_dir, 'config', 'camera_params.yaml')
-    # 海康相机节点
-    def get_hik_camera_node():
-        return Node(
-            name="hik_camera_ros2_driver",
-            package="hik_camera_ros2_driver",
-            executable="hik_camera_ros2_driver_node",
-            parameters=[hik_params_file],
-            arguments=["--ros-args", "--log-level", "info"],
-            output="screen",
-        )
-
-    
-    # 地图点云文件路径
-    map_pcd_path = os.path.join(localization_share_dir, 'config', 'RM2025.pcd')
-
-    # Livox驱动配置
-    cur_config_path = os.path.join(livox_share_dir, 'config')
-    user_config_path = os.path.join(cur_config_path, 'MID360_config.json')
-
-
-    
-    # RViz配置文件路径
-    rviz_config_path = os.path.join(
-        localization_share_dir,
-        'config',
-        'radar_debug.rviz'
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument(
+                "our_color",
+                default_value="red",
+                description="our team color: red or blue",
+            ),
+            DeclareLaunchArgument(
+                "rosbag_file",
+                default_value="/home/user/DATA/rosbag.db3",
+                description="input rosbag path for replay",
+            ),
+            DeclareLaunchArgument(
+                "decision_params_file",
+                default_value=default_decision_params,
+                description="radar_decision_comm parameter file",
+            ),
+            DeclareLaunchArgument(
+                "referee_rx_mode",
+                default_value="topic",
+                description="referee_serial_rx mode during replay",
+            ),
+            DeclareLaunchArgument(
+                "referee_tx_mode",
+                default_value="topic",
+                description="referee_serial_tx mode during replay",
+            ),
+            OpaqueFunction(function=_build_launch),
+        ]
     )
-    
-    # 定义各个节点（移除参数中的qos_profile，QoS在节点代码内配置）
-    
-    def get_localization_node():
-        return ComposableNode(
-            package='localization',
-            plugin='tdt_radar::Localization',
-            name='localization_node',
-            parameters=[{
-                'use_map': True,
-                'map_frame': 'rm_frame',
-                'target_pcd_path': map_pcd_path
-            }],
-            extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
-        )
-        
-    def get_dynamic_cloud_node():
-        return ComposableNode(
-            package='dynamic_cloud',
-            plugin='tdt_radar::DynamicCloud',
-            name='dynamic_cloud_node',
-
-            parameters=[{
-                'map_pcd_path': map_pcd_path
-            }],
-
-            extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
-        )
-        
-    def get_cluster_node():
-        return ComposableNode(
-            package='cluster',
-            plugin='tdt_radar::Cluster',
-            name='cluster_node',
-            # 移除qos_profile参数
-            extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
-        )
-        
-    def get_detect_node():
-        return ComposableNode(
-            package='tdt_vision',
-            plugin='tdt_radar::Detect',
-            name='radar_detect_node',
-            parameters=[{
-                "image_topic": "/camera_image",          # 你要订阅的真实话题
-            }],
-            # 移除qos_profile参数
-            extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
-        )
-        
-    def get_resolve_node():
-        return ComposableNode(
-            package='tdt_vision',
-            plugin='tdt_radar::Resolve',
-            name='radar_resolve_node',
-            parameters=[{
-            "out_matrix_path": f"/home/user/code/T-DT_Radar-main/config/out_matrix.yaml",
-            "camera_params_path": f"/home/user/code/T-DT_Radar-main/config/camera_params.yaml",
-            "region_points_path": f"/home/user/code/T-DT_Radar-main/config/RM2025_Points.yaml",
-            "minimap_path": f"/home/user/code/T-DT_Radar-main/config/RM2025.png",
-            }],
-            # 移除qos_profile参数
-            extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
-        )
-        
-    def get_kalman_filter_node():
-        return ComposableNode(
-            package='kalman_filter',
-            plugin='tdt_radar::KalmanFilter',
-            name='kalman_filter_node',
-            # 移除qos_profile参数
-            extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
-        )
-        
-    def get_debug_map_node():
-        return ComposableNode(
-            package='debug_map',
-            plugin='debug_map::DebugMap',
-            name='debug_map_node',
-            parameters=[{
-                'map_path': os.path.join(debug_map_share_dir, 'config', 'RM2025.png')
-                
-            }],
-            extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
-        )
-    
-    def get_rosbag_player_node():
-        return ComposableNode(
-            package='rosbag_player',
-            plugin='RosbagPlayer',
-            name='rosbag_player_node',
-            parameters=[{
-                'rosbag_file': "/home/user/DATA/rosbag.db3"
-                # 移除qos_profile参数
-            }],
-            extra_arguments=[
-                {'use_intra_process_comms': True},
-                {'qos_overrides./parameter_events.publisher.reliability': 'best_effort'}
-            ]
-        )
-        
-    # 地图点云发布节点
-    def get_map_pcd_publisher(): 
-        return Node(  # ✅ 改为独立节点
-            package='pcl_ros',
-            executable='pcd_to_pointcloud',  # 独立节点需要executable参数
-            name='map_pcd_publisher',
-            parameters=[{
-                'file_name': map_pcd_path,  
-                'frame_id': 'map',
-                'publish_rate': 0.1
-            }],
-            remappings=[('cloud', '/map_point_cloud')],
-            output='screen'  # 可选：输出日志到终端
-        )
-
-    
-
-    # 创建节点容器
-    container = ComposableNodeContainer(
-        name='radar_debug_container',
-        namespace='',
-        package='rclcpp_components',
-        executable='component_container',
-        composable_node_descriptions=[
-            get_rosbag_player_node(),
-            get_localization_node(),
-            get_dynamic_cloud_node(),
-            get_debug_map_node(),
-            get_cluster_node(),
-            get_detect_node(),
-            get_resolve_node(),
-            get_kalman_filter_node(),
-            # get_radar_calib_node('tdt_vision', 'tdt_radar::Calibrate')
-        ],
-        output='both',
-        emulate_tty=True,
-        on_exit=Shutdown()
-    )
-
-    # 打印路径日志
-    log_rviz_path = LogInfo(msg=f"RViz2 config path: {rviz_config_path}")
-    log_map_path = LogInfo(msg=f"Map PCD file path: {map_pcd_path}")
-    log_debug_map_path = LogInfo(msg=f"Debug map path: {os.path.join(debug_map_share_dir, 'config', 'RM2025.png')}")
-
-    # 启动RViz2
-    rviz_node = ExecuteProcess(
-        cmd=['ros2', 'run', 'rviz2', 'rviz2', '-d', rviz_config_path],
-        output='screen',
-        on_exit=Shutdown()
-    )
-    
-    mappcd_node = get_map_pcd_publisher()
-
-
-    return LaunchDescription([
-        log_rviz_path,
-        log_map_path,
-        log_debug_map_path,
-
-        # get_hik_camera_node(),  # 启动现实相机节点
-        container,
-        mappcd_node,
-
-        rviz_node
-    ])

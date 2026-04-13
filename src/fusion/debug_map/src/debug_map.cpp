@@ -19,6 +19,22 @@
 
 namespace debug_map {
 
+namespace
+{
+
+int normalize_self_color(int raw_color, int fallback)
+{
+    if (raw_color == 0) {
+        return 0;
+    }
+    if (raw_color == 1 || raw_color == 2) {
+        return 2;
+    }
+    return (fallback == 0) ? 0 : 2;
+}
+
+}  // namespace
+
 class DebugMap : public rclcpp::Node {
 public:
     explicit DebugMap(const rclcpp::NodeOptions& options)
@@ -29,7 +45,13 @@ public:
     {
         // 1) 地图路径参数
         this->declare_parameter<std::string>("map_path", "");
+        this->declare_parameter<bool>("use_match_info_color", true);
+        this->declare_parameter<int>("self_color_override", 0);
         std::string map_path = this->get_parameter("map_path").as_string();
+        use_match_info_color_ =
+            this->get_parameter("use_match_info_color").as_bool();
+        self_color_override_ =
+            normalize_self_color(this->get_parameter("self_color_override").as_int(), 0);
 
         // 2) 加载地图
         if (map_path.empty()) {
@@ -127,15 +149,18 @@ public:
                 "/Radar2Sentry", rclcpp::SensorDataQoS());
 
         RCLCPP_INFO(this->get_logger(), "DebugMap组件初始化完成！");
+        match_info.self_color = self_color_override_;
     }
 
     void save_match_info(
         const std::shared_ptr<vision_interface::msg::MatchInfo> msg)
     {
         this->match_info = *msg;
-        if (msg->self_color == 1) {
-            match_info.self_color = 2;
-            RCLCPP_INFO(this->get_logger(), "自身颜色修正：从1改为2");
+        if (use_match_info_color_) {
+            match_info.self_color =
+                normalize_self_color(msg->self_color, self_color_override_);
+        } else {
+            match_info.self_color = self_color_override_;
         }
     }
 
@@ -480,6 +505,8 @@ private:
     double      uav_update[2];
 
     vision_interface::msg::MatchInfo match_info;
+    bool use_match_info_color_{true};
+    int self_color_override_{0};
     cv::Mat                          map;
     int                              count;
 };

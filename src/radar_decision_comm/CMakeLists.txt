@@ -16,6 +16,7 @@ find_package(ament_index_cpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
+find_package(vision_interface REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
@@ -64,6 +65,7 @@ ament_target_dependencies(${PROJECT_NAME}_core
   std_msgs
   geometry_msgs
   builtin_interfaces
+  vision_interface
   behaviortree_cpp_v3
 )
 
@@ -76,6 +78,7 @@ rclcpp_components_register_nodes(${PROJECT_NAME}_core
   "radar_decision_comm::ClientBridgeComponent"
   "radar_decision_comm::DecisionEngineComponent"
   "radar_decision_comm::FusionComponent"
+  "radar_decision_comm::KalmanTracksAdapterComponent"
   "radar_decision_comm::PerceptionAdapterComponent"
   "radar_decision_comm::RadarWirelessRxComponent"
   "radar_decision_comm::RefereeSerialRxComponent"

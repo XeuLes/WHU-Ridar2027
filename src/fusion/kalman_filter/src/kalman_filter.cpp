@@ -7,6 +7,17 @@
 
 namespace tdt_radar {  // 命名空间定义
 
+int KalmanFilter::normalized_self_color(int raw_color) const
+{
+    if (raw_color == 0) {
+        return 0;
+    }
+    if (raw_color == 2 || raw_color == 1) {
+        return 2;
+    }
+    return normalized_self_color(self_color_override_);
+}
+
 // 卡尔曼滤波器构造函数
 KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options)
     : rclcpp::Node("kalman_filter_node", node_options)  // ROS2节点初始化
@@ -55,10 +66,21 @@ KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options)
     
 
     this->declare_parameter<int>("kf_available_timeout_ms", 300);
-kf_available_timeout_ms_ =
-    this->get_parameter("kf_available_timeout_ms").as_int();
+    this->declare_parameter<bool>("use_match_info_color", true);
+    this->declare_parameter<int>("self_color_override", 2);
+    kf_available_timeout_ms_ =
+        this->get_parameter("kf_available_timeout_ms").as_int();
+    use_match_info_color_ =
+        this->get_parameter("use_match_info_color").as_bool();
+    self_color_override_ =
+        normalized_self_color(this->get_parameter("self_color_override").as_int());
+    match_info.self_color = self_color_override_;
     // 输出节点启动日志信息
-    RCLCPP_INFO(this->get_logger(), "Kalman_filter_Node has been started.");
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Kalman_filter_Node has been started. use_match_info_color=%s self_color_override=%d",
+        use_match_info_color_ ? "true" : "false",
+        self_color_override_);
 }
 
 // 匹配信息回调函数
@@ -66,6 +88,11 @@ void KalmanFilter::match_callback(
     const vision_interface::msg::MatchInfo::SharedPtr msg)
 {
     this->match_info = *msg;  // 保存匹配信息
+    if (use_match_info_color_) {
+        this->match_info.self_color = normalized_self_color(msg->self_color);
+    } else {
+        this->match_info.self_color = self_color_override_;
+    }
     // RCLCPP_INFO(this->get_logger(), "Match_info_callback");  // 日志输出
 }
 
@@ -96,7 +123,7 @@ void KalmanFilter::detect_callback(
         vision_interface::msg::DetectResult forward_msg = *msg;
 
         // 保持原逻辑：根据self_color镜像坐标
-        if (match_info.self_color == 0) {
+        if (normalized_self_color(match_info.self_color) == 0) {
             for (int i = 0; i < 7; i++) {
                 if (forward_msg.blue_x[i] != 0 || forward_msg.blue_y[i] != 0) {
                     forward_msg.blue_x[i] = 28 - forward_msg.blue_x[i];
@@ -308,7 +335,7 @@ void KalmanFilter::callback(
     }
 
     // 坐标转换：根据己方颜色调整坐标系
-    if (match_info.self_color == 0) {  // 如果己方是蓝色
+    if (normalized_self_color(match_info.self_color) == 0) {  // 如果己方是蓝色
         // 【修复】循环7次以支持UAV（索引6）
         for (int i = 0; i < 7; i++) {
             // 蓝色方坐标镜像转换
@@ -353,7 +380,7 @@ void KalmanFilter::callback(
     vision_interface::msg::Radar2Sentry radar_msg;
 
     // 如果己方是蓝色，发送敌方（红色）位置信息给哨兵
-    if (match_info.self_color == 0) {
+    if (normalized_self_color(match_info.self_color) == 0) {
         for (int i = 0; i < 6; i++) {
             radar_msg.radar_enemy_x[i] = detect_msg.red_x[i];  // 敌方x坐标
             radar_msg.radar_enemy_y[i] = detect_msg.red_y[i];  // 敌方y坐标

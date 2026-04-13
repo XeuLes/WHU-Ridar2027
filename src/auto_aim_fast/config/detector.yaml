@@ -39,6 +39,7 @@ auto_aim_node:
     detector.yolo.kpt_conf_thresh: 0.35
     detector.yolo.require_outer_corners: true
     detector.yolo.use_fp16_input: true
+    detector.yolo.swap_rb_input: false
 
     # 关键点顺序为 8 点:
     # top_1, top_2, top_3, top_4, bottom_1, bottom_2, bottom_3, bottom_4

@@ -36,6 +36,7 @@ struct YoloDetectorParams
   float kpt_conf_thresh{0.35f};
   bool require_outer_corners{true};
   bool use_fp16_input{true};
+  bool swap_rb_input{false};
   std::array<int, 4> outer_corner_indices{{0, 4, 7, 3}};  // lt lb rb rt
 };
 

@@ -87,6 +87,7 @@ decision_engine:
     groot_publisher_port: 1666
     groot_server_port: 1667
     my_color: "Red"
+    derive_ids_from_my_color: true
     my_hero_id: 1
     my_sentinel_id: 7
     infantry_3_id: 3

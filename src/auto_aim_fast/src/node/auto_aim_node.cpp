@@ -145,6 +145,7 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<double>("detector.yolo.kpt_conf_thresh", 0.35);
   this->declare_parameter<bool>("detector.yolo.require_outer_corners", true);
   this->declare_parameter<bool>("detector.yolo.use_fp16_input", true);
+  this->declare_parameter<bool>("detector.yolo.swap_rb_input", false);
   this->declare_parameter<std::vector<int64_t>>("detector.yolo.outer_corner_indices", std::vector<int64_t>{0, 4, 7, 3});
 
   // 配对模式参数
@@ -252,6 +253,8 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
       this->get_parameter("detector.yolo.require_outer_corners").as_bool();
   yp.use_fp16_input =
       this->get_parameter("detector.yolo.use_fp16_input").as_bool();
+  yp.swap_rb_input =
+      this->get_parameter("detector.yolo.swap_rb_input").as_bool();
   {
     const auto idx = this->get_parameter("detector.yolo.outer_corner_indices").as_integer_array();
     if (idx.size() == 4) {
