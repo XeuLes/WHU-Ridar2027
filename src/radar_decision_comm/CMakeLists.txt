@@ -21,8 +21,8 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(rosidl_typesupport_cpp REQUIRED)
 find_package(behaviortree_cpp_v3 REQUIRED)
 
-file(GLOB MSG_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "msg/*.msg")
-file(GLOB SRV_FILES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "srv/*.srv")
+file(GLOB MSG_FILES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "msg/*.msg")
+file(GLOB SRV_FILES CONFIGURE_DEPENDS RELATIVE ${CMAKE_CURRENT_SOURCE_DIR} "srv/*.srv")
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   ${MSG_FILES}

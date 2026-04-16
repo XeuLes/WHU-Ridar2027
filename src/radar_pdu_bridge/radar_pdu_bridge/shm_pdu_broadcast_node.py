@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import json
 import struct
+import time
 import zlib
 from multiprocessing import shared_memory
 
@@ -172,11 +173,15 @@ class ShmPduBroadcastNode(Node):
         self.declare_parameter('info_shm_name', 'radar_info_pdu_shm')
         self.declare_parameter('jam_shm_name', 'radar_jam_pdu_shm')
         self.declare_parameter('poll_period_ms', 5)
+        self.declare_parameter('missing_shm_warn_period_ms', 5000)
         self.declare_parameter('verbose', False)
 
         self.info_shm_name = self.get_parameter('info_shm_name').get_parameter_value().string_value
         self.jam_shm_name = self.get_parameter('jam_shm_name').get_parameter_value().string_value
         self.poll_period_ms = self.get_parameter('poll_period_ms').get_parameter_value().integer_value
+        self.missing_shm_warn_period_ms = (
+            self.get_parameter('missing_shm_warn_period_ms').get_parameter_value().integer_value
+        )
         self.verbose = self.get_parameter('verbose').get_parameter_value().bool_value
 
         self.pub_all = self.create_publisher(String, '/radar/all_pdu', 10)
@@ -185,14 +190,25 @@ class ShmPduBroadcastNode(Node):
 
         self.info_reader = None
         self.jam_reader = None
+        self._last_warning_times = {}
 
         self._try_open_readers()
         self.timer = self.create_timer(self.poll_period_ms / 1000.0, self._poll_once)
 
         self.get_logger().info(
             f"SHM readers initialized. info_shm={self.info_shm_name}, "
-            f"jam_shm={self.jam_shm_name}, poll={self.poll_period_ms} ms"
+            f"jam_shm={self.jam_shm_name}, poll={self.poll_period_ms} ms, "
+            f"missing_shm_warn_period={self.missing_shm_warn_period_ms} ms"
         )
+
+    def _warning_throttled(self, key: str, message: str):
+        now = time.monotonic()
+        last_warn_time = self._last_warning_times.get(key)
+        warn_period_s = max(self.missing_shm_warn_period_ms, 0) / 1000.0
+
+        if last_warn_time is None or now - last_warn_time >= warn_period_s:
+            self.get_logger().warning(message)
+            self._last_warning_times[key] = now
 
     def _try_open_readers(self):
         if self.info_reader is None:
@@ -200,7 +216,10 @@ class ShmPduBroadcastNode(Node):
                 self.info_reader = ShmRingReader(self.info_shm_name, 1, self.verbose)
                 self.get_logger().info(f'Opened info shared memory: {self.info_shm_name}')
             except FileNotFoundError:
-                self.get_logger().warning(f'Info shared memory not found yet: {self.info_shm_name}')
+                self._warning_throttled(
+                    'info_shm_missing',
+                    f'Info shared memory not found yet: {self.info_shm_name}',
+                )
             except Exception as e:
                 self.get_logger().error(f'Failed to open info shared memory: {e}')
 
@@ -209,7 +228,10 @@ class ShmPduBroadcastNode(Node):
                 self.jam_reader = ShmRingReader(self.jam_shm_name, 2, self.verbose)
                 self.get_logger().info(f'Opened jam shared memory: {self.jam_shm_name}')
             except FileNotFoundError:
-                self.get_logger().warning(f'Jam shared memory not found yet: {self.jam_shm_name}')
+                self._warning_throttled(
+                    'jam_shm_missing',
+                    f'Jam shared memory not found yet: {self.jam_shm_name}',
+                )
             except Exception as e:
                 self.get_logger().error(f'Failed to open jam shared memory: {e}')
 

@@ -22,6 +22,7 @@
 
 #include "radar_decision_comm/codec/interaction_payload_builder.hpp"
 #include "radar_decision_comm/common/interaction_cmd_ids.hpp"
+#include "radar_decision_comm/common/team_identity.hpp"
 #include "radar_decision_comm/decision/double_effect_fsm.hpp"
 #include "radar_decision_comm/decision/hero_lob_ballistics.hpp"
 #include "radar_decision_comm/decision/hero_lob_fsm.hpp"
@@ -32,6 +33,7 @@
 #include "radar_decision_comm/msg/hero_lob_assist_status.hpp"
 #include "radar_decision_comm/msg/map_publish_request.hpp"
 #include "radar_decision_comm/msg/radar_decision_command.hpp"
+#include "radar_decision_comm/msg/referee_robot_identity.hpp"
 #include "radar_decision_comm/msg/robot_interaction_request.hpp"
 
 namespace radar_decision_comm
@@ -77,20 +79,16 @@ public:
 
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
     derive_ids_from_my_color_ = this->declare_parameter<bool>("derive_ids_from_my_color", true);
+    use_referee_identity_color_ = this->declare_parameter<bool>("use_referee_identity_color", true);
+    identity_topic_ = this->declare_parameter<std::string>(
+      "identity_topic", "/radar/referee/robot_identity");
     my_hero_id_ = this->declare_parameter<int>("my_hero_id", 1);
     my_sentinel_id_ = this->declare_parameter<int>("my_sentinel_id", 7);
     infantry_3_id_ = this->declare_parameter<int>("infantry_3_id", 3);
     infantry_4_id_ = this->declare_parameter<int>("infantry_4_id", 4);
     enemy_hero_id_ = this->declare_parameter<int>("enemy_hero_id", 101);
 
-    if (derive_ids_from_my_color_) {
-      const auto ids = derive_team_ids_from_color(my_color_);
-      my_hero_id_ = ids.my_hero_id;
-      my_sentinel_id_ = ids.my_sentinel_id;
-      infantry_3_id_ = ids.infantry_3_id;
-      infantry_4_id_ = ids.infantry_4_id;
-      enemy_hero_id_ = ids.enemy_hero_id;
-    }
+    apply_my_color(my_color_);
 
     decision_rate_hz_ = this->declare_parameter<double>("decision_rate_hz", 50.0);
     map_publish_period_ms_ = this->declare_parameter<int>("map_publish_period_ms", 200);
@@ -199,6 +197,24 @@ public:
       {
         last_blackboard_ = *msg;
         have_blackboard_ = true;
+      });
+
+    identity_sub_ = this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+      identity_topic_, 10,
+      [this](const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+      {
+        if (!use_referee_identity_color_ || !msg || !msg->valid) {
+          return;
+        }
+        const auto next_color = team_identity::my_color_from_self_color(msg->self_color);
+        if (next_color != my_color_) {
+          apply_my_color(next_color);
+          RCLCPP_INFO(
+            this->get_logger(),
+            "DecisionEngineComponent switched my_color=%s from referee robot_id=%u",
+            my_color_.c_str(),
+            msg->robot_id);
+        }
       });
 
     hero_lob_window_.set_window_seconds(hero_lob_window_s_);
@@ -330,6 +346,22 @@ private:
     if (right && upper) return 2;
     if (!right && !upper) return 3;
     return 4;
+  }
+
+  void apply_my_color(const std::string & my_color)
+  {
+    my_color_ = my_color;
+    if (derive_ids_from_my_color_) {
+      const auto ids = derive_team_ids_from_color(my_color_);
+      my_hero_id_ = ids.my_hero_id;
+      my_sentinel_id_ = ids.my_sentinel_id;
+      infantry_3_id_ = ids.infantry_3_id;
+      infantry_4_id_ = ids.infantry_4_id;
+      enemy_hero_id_ = ids.enemy_hero_id;
+      hero_lob_receiver_id_ = my_hero_id_;
+    }
+    selector_cfg_.my_color = my_color_;
+    selector_cfg_.enemy_hero_id = enemy_hero_id_;
   }
 
   radar_decision_comm::msg::RobotInteractionRequest make_request(
@@ -978,16 +1010,21 @@ private:
     }
   }
 
+  // 主決策循环函数
   void on_timer()
   {
     if (!enabled_ || !have_blackboard_) {
       return;
     }
-
+    // 更新時間戳
     current_tick_now_ = Clock::now();
+    // 選擇雙倍易傷目標
     current_selected_target_ = TargetSelector::select(last_blackboard_, selector_cfg_);
+    // 更新雙倍易傷FSM輸出
     current_fsm_output_ = double_effect_fsm_.tick(build_double_effect_input());
+    // 英雄抛射辅助更新
     update_hero_lob_assist();
+    // 行爲樹黑板更新
     update_bt_blackboard();
 
     if (decision_mode_ == "rule") {
@@ -1007,6 +1044,7 @@ private:
   bool enable_double_effect_forward_{true};
   bool enable_radar_double_effect_command_{true};
   bool derive_ids_from_my_color_{true};
+  bool use_referee_identity_color_{true};
 
   int my_hero_id_{1};
   int my_sentinel_id_{7};
@@ -1058,6 +1096,7 @@ private:
 
   std::string decision_mode_{"btcpp"};
   std::string my_color_{"Red"};
+  std::string identity_topic_{"/radar/referee/robot_identity"};
   std::string bt_xml_path_;
   std::string bt_models_path_{"/tmp/radar_decision_nodes.xml"};
   std::string resolved_bt_xml_path_;
@@ -1115,6 +1154,7 @@ private:
   rclcpp::Publisher<radar_decision_comm::msg::HeroLobAssistStatus>::SharedPtr hero_lob_status_pub_;
   rclcpp::Publisher<radar_decision_comm::msg::HeroLobAssistDebug>::SharedPtr hero_lob_debug_pub_;
   rclcpp::Subscription<radar_decision_comm::msg::BattleBlackboard>::SharedPtr blackboard_sub_;
+  rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr identity_sub_;
   rclcpp::TimerBase::SharedPtr timer_;
 };
 

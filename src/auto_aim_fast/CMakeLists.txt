@@ -18,6 +18,7 @@ find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(builtin_interfaces REQUIRED)
 find_package(cv_bridge REQUIRED)
+find_package(radar_decision_comm REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 # =========================================================
@@ -185,6 +186,7 @@ add_executable(auto_aim_node
 target_include_directories(auto_aim_node PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
+  ${radar_decision_comm_INCLUDE_DIRS}
 )
 
 target_link_libraries(auto_aim_node
@@ -198,6 +200,7 @@ ament_target_dependencies(auto_aim_node
   std_msgs
   builtin_interfaces
   cv_bridge
+  radar_decision_comm
 )
 
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")

@@ -7,6 +7,17 @@
 
 namespace tdt_radar {  // 命名空间定义
 
+int KalmanFilter::effective_self_color() const
+{
+    if (use_referee_identity_color_ && has_referee_identity_color_) {
+        return referee_identity_color_;
+    }
+    if (use_match_info_color_) {
+        return normalized_self_color(match_info.self_color);
+    }
+    return normalized_self_color(self_color_override_);
+}
+
 int KalmanFilter::normalized_self_color(int raw_color) const
 {
     if (raw_color == 0) {
@@ -63,17 +74,27 @@ KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options)
             "/match_info", 10,
             std::bind(&KalmanFilter::match_callback, this,
                       std::placeholders::_1));
+
+    sub_referee_identity_ =
+        this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+            "/radar/referee/robot_identity", 10,
+            std::bind(&KalmanFilter::referee_identity_callback, this,
+                      std::placeholders::_1));
     
 
     this->declare_parameter<int>("kf_available_timeout_ms", 300);
     this->declare_parameter<bool>("use_match_info_color", true);
     this->declare_parameter<int>("self_color_override", 2);
+    this->declare_parameter<bool>("use_referee_identity_color", true);
     kf_available_timeout_ms_ =
         this->get_parameter("kf_available_timeout_ms").as_int();
     use_match_info_color_ =
         this->get_parameter("use_match_info_color").as_bool();
     self_color_override_ =
         normalized_self_color(this->get_parameter("self_color_override").as_int());
+    use_referee_identity_color_ =
+        this->get_parameter("use_referee_identity_color").as_bool();
+    referee_identity_color_ = self_color_override_;
     match_info.self_color = self_color_override_;
     // 输出节点启动日志信息
     RCLCPP_INFO(
@@ -94,6 +115,16 @@ void KalmanFilter::match_callback(
         this->match_info.self_color = self_color_override_;
     }
     // RCLCPP_INFO(this->get_logger(), "Match_info_callback");  // 日志输出
+}
+
+void KalmanFilter::referee_identity_callback(
+    const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+{
+    if (!msg || !msg->valid) {
+        return;
+    }
+    has_referee_identity_color_ = true;
+    referee_identity_color_ = normalized_self_color(msg->self_color);
 }
 
 // 检测结果回调函数
@@ -123,7 +154,7 @@ void KalmanFilter::detect_callback(
         vision_interface::msg::DetectResult forward_msg = *msg;
 
         // 保持原逻辑：根据self_color镜像坐标
-        if (normalized_self_color(match_info.self_color) == 0) {
+        if (effective_self_color() == 0) {
             for (int i = 0; i < 7; i++) {
                 if (forward_msg.blue_x[i] != 0 || forward_msg.blue_y[i] != 0) {
                     forward_msg.blue_x[i] = 28 - forward_msg.blue_x[i];
@@ -335,7 +366,7 @@ void KalmanFilter::callback(
     }
 
     // 坐标转换：根据己方颜色调整坐标系
-    if (normalized_self_color(match_info.self_color) == 0) {  // 如果己方是蓝色
+    if (effective_self_color() == 0) {  // 如果己方是蓝色
         // 【修复】循环7次以支持UAV（索引6）
         for (int i = 0; i < 7; i++) {
             // 蓝色方坐标镜像转换
@@ -380,7 +411,7 @@ void KalmanFilter::callback(
     vision_interface::msg::Radar2Sentry radar_msg;
 
     // 如果己方是蓝色，发送敌方（红色）位置信息给哨兵
-    if (normalized_self_color(match_info.self_color) == 0) {
+    if (effective_self_color() == 0) {
         for (int i = 0; i < 6; i++) {
             radar_msg.radar_enemy_x[i] = detect_msg.red_x[i];  // 敌方x坐标
             radar_msg.radar_enemy_y[i] = detect_msg.red_y[i];  // 敌方y坐标

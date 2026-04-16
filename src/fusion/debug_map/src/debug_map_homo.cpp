@@ -1,5 +1,6 @@
 #include <cv_bridge/cv_bridge.h>
 #include <geometry_msgs/msg/pose_array.hpp>
+#include <radar_decision_comm/msg/referee_robot_identity.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <sensor_msgs/msg/image.hpp>
 #include <vision_interface/msg/detect_result.hpp>
@@ -59,6 +60,8 @@ public:
     declare_parameter<bool>("prefer_kalman", true);
     declare_parameter<bool>("use_match_info_color", true);
     declare_parameter<int>("self_color_override", 0);
+    declare_parameter<bool>("use_referee_identity_color", true);
+    declare_parameter<std::string>("referee_identity_topic", "/radar/referee/robot_identity");
 
     map_path_ = get_parameter("map_path").as_string();
     target_w_ = get_parameter("target_w").as_int();
@@ -80,6 +83,8 @@ public:
     use_match_info_color_ = get_parameter("use_match_info_color").as_bool();
     self_color_override_ =
       normalize_self_color(get_parameter("self_color_override").as_int(), 0);
+    use_referee_identity_color_ = get_parameter("use_referee_identity_color").as_bool();
+    referee_identity_topic_ = get_parameter("referee_identity_topic").as_string();
 
     if (map_path_.empty()) {
       RCLCPP_FATAL(get_logger(), "parameter 'map_path' is empty");
@@ -113,6 +118,10 @@ public:
     match_info_sub_ = create_subscription<vision_interface::msg::MatchInfo>(
       match_info_topic_, 10,
       std::bind(&DebugMapHomoNode::onMatchInfo, this, std::placeholders::_1));
+
+    referee_identity_sub_ = create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+      referee_identity_topic_, 10,
+      std::bind(&DebugMapHomoNode::onRefereeIdentity, this, std::placeholders::_1));
 
     uav_sub_ = create_subscription<geometry_msgs::msg::PoseArray>(
       uav_topic_, rclcpp::SensorDataQoS(),
@@ -334,7 +343,16 @@ bool saveHomographyToFile()
   {
     if (!msg) return;
     if (!use_match_info_color_) return;
+    if (use_referee_identity_color_ && has_referee_identity_color_) return;
     std::lock_guard<std::mutex> lk(mtx_);
+    self_color_ = normalize_self_color(msg->self_color, self_color_override_);
+  }
+
+  void onRefereeIdentity(const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+  {
+    if (!use_referee_identity_color_ || !msg || !msg->valid) return;
+    std::lock_guard<std::mutex> lk(mtx_);
+    has_referee_identity_color_ = true;
     self_color_ = normalize_self_color(msg->self_color, self_color_override_);
   }
 
@@ -751,6 +769,7 @@ private:
   std::string uav_topic_;
   std::string match_info_topic_;
   std::string debug_image_topic_;
+  std::string referee_identity_topic_;
 
 
 
@@ -762,6 +781,8 @@ bool auto_save_homography_{true};
   bool show_window_{true};
   bool prefer_kalman_{true};
   bool use_match_info_color_{true};
+  bool use_referee_identity_color_{true};
+  bool has_referee_identity_color_{false};
   int self_color_override_{0};
 
   cv::Mat map_;
@@ -795,6 +816,8 @@ bool auto_save_homography_{true};
   rclcpp::Subscription<vision_interface::msg::DetectResult>::SharedPtr kalman_sub_;
   rclcpp::Subscription<vision_interface::msg::DetectResult>::SharedPtr resolve_sub_;
   rclcpp::Subscription<vision_interface::msg::MatchInfo>::SharedPtr match_info_sub_;
+  rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr
+    referee_identity_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr uav_sub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
   rclcpp::TimerBase::SharedPtr ui_timer_;

@@ -5,6 +5,8 @@
 #include <cstdint>
 #include <limits>
 
+#include "radar_decision_comm/common/team_identity.hpp"
+
 namespace radar_decision_comm
 {
 
@@ -129,6 +131,27 @@ RefereeParseResult RefereePacketParser::parse(
         out.dart_status.dart_hit_count = static_cast<uint8_t>((dart_info >> 3U) & 0x07U);
         out.dart_status.selected_target = static_cast<uint8_t>((dart_info >> 6U) & 0x07U);
       }
+      break;
+    }
+
+    case 0x0201: {
+      if (payload.empty()) {
+        out.warning = "0x0201 payload too short";
+        return out;
+      }
+
+      const uint16_t robot_id = static_cast<uint16_t>(payload[0]);
+      const int self_color = team_identity::self_color_code_from_robot_id(robot_id);
+      if (self_color < 0) {
+        out.warning = "0x0201 robot_id invalid for color derivation";
+        return out;
+      }
+
+      out.has_robot_identity = true;
+      out.robot_identity.header.stamp = stamp;
+      out.robot_identity.valid = true;
+      out.robot_identity.robot_id = robot_id;
+      out.robot_identity.self_color = static_cast<int8_t>(self_color);
       break;
     }
 

@@ -11,6 +11,7 @@
 #include "radar_decision_comm/msg/radar_mark_progress.hpp"
 #include "radar_decision_comm/msg/referee_enemy_hp.hpp"
 #include "radar_decision_comm/msg/referee_game_state.hpp"
+#include "radar_decision_comm/msg/referee_robot_identity.hpp"
 
 namespace radar_decision_comm
 {
@@ -22,12 +23,14 @@ struct RefereeParseResult
   bool has_dart_status{false};
   bool has_mark_progress{false};
   bool has_radar_sync{false};
+  bool has_robot_identity{false};
 
   radar_decision_comm::msg::RefereeGameState game_state;
   radar_decision_comm::msg::RefereeEnemyHp enemy_hp;
   radar_decision_comm::msg::DartStatus dart_status;
   radar_decision_comm::msg::RadarMarkProgress mark_progress;
   radar_decision_comm::msg::RadarDecisionSync radar_sync;
+  radar_decision_comm::msg::RefereeRobotIdentity robot_identity;
 
   std::string warning;
 };

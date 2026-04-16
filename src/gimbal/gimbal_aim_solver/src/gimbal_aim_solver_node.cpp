@@ -4,6 +4,8 @@
 #include <vector>
 #include <std_msgs/msg/bool.hpp>
 
+#include "radar_decision_comm/common/team_identity.hpp"
+
 namespace gimbal_aim_solver
 {
 
@@ -19,6 +21,10 @@ GimbalAimSolverNode::GimbalAimSolverNode(const rclcpp::NodeOptions& options)
   gimbal_angles_sub_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
     gimbal_angles_topic_, rclcpp::SensorDataQoS(),
     std::bind(&GimbalAimSolverNode::gimbalAnglesCallback, this, std::placeholders::_1));
+
+  referee_identity_sub_ = this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+    referee_identity_topic_, 10,
+    std::bind(&GimbalAimSolverNode::refereeIdentityCallback, this, std::placeholders::_1));
 
   target_angles_pub_ = this->create_publisher<std_msgs::msg::Float64MultiArray>(
     target_angles_topic_, 10);
@@ -41,9 +47,11 @@ void GimbalAimSolverNode::declareAndLoadParameters()
   this->declare_parameter<std::string>("uav_topic", "/uav_positions");
   this->declare_parameter<std::string>("gimbal_angles_topic", "/gimbal/angles");
   this->declare_parameter<std::string>("target_angles_topic", "/gimbal/rough_command_angles");
+  this->declare_parameter<std::string>("referee_identity_topic", "/radar/referee/robot_identity");
 
   this->declare_parameter<std::string>("target_side", "red");
   this->declare_parameter<std::string>("gimbal_angle_order", "yaw_pitch");
+  this->declare_parameter<bool>("use_referee_identity_target_side", true);
 
   this->declare_parameter<bool>("publish_debug", true);
   this->declare_parameter<bool>("use_increment_output", false);
@@ -77,9 +85,12 @@ void GimbalAimSolverNode::declareAndLoadParameters()
   uav_topic_ = this->get_parameter("uav_topic").as_string();
   gimbal_angles_topic_ = this->get_parameter("gimbal_angles_topic").as_string();
   target_angles_topic_ = this->get_parameter("target_angles_topic").as_string();
+  referee_identity_topic_ = this->get_parameter("referee_identity_topic").as_string();
 
   target_side_ = this->get_parameter("target_side").as_string();
   gimbal_angle_order_ = this->get_parameter("gimbal_angle_order").as_string();
+  use_referee_identity_target_side_ =
+    this->get_parameter("use_referee_identity_target_side").as_bool();
 
   publish_debug_ = this->get_parameter("publish_debug").as_bool();
   use_increment_output_ = this->get_parameter("use_increment_output").as_bool();
@@ -132,6 +143,27 @@ void GimbalAimSolverNode::declareAndLoadParameters()
   const double pitch_max_deg = this->get_parameter("pitch_max_deg").as_double();
 
   angle_solver_.setLimits(yaw_min_deg, yaw_max_deg, pitch_min_deg, pitch_max_deg);
+}
+
+void GimbalAimSolverNode::refereeIdentityCallback(
+  const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+{
+  if (!use_referee_identity_target_side_ || !msg || !msg->valid) {
+    return;
+  }
+
+  const std::string next_target_side =
+    radar_decision_comm::team_identity::enemy_target_side_from_self_color(msg->self_color);
+  if (next_target_side == target_side_) {
+    return;
+  }
+
+  target_side_ = next_target_side;
+  RCLCPP_INFO(
+    this->get_logger(),
+    "gimbal_aim_solver switched target_side=%s from referee robot_id=%u",
+    target_side_.c_str(),
+    msg->robot_id);
 }
 
 bool GimbalAimSolverNode::isFinitePoint(const Eigen::Vector3d& p) const

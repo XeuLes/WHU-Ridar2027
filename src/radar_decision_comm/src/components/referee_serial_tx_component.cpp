@@ -11,9 +11,11 @@
 #include "radar_decision_comm/codec/radar_command_payload_builder.hpp"
 #include "radar_decision_comm/codec/referee_encoder.hpp"
 #include "radar_decision_comm/common/interaction_cmd_ids.hpp"
+#include "radar_decision_comm/common/team_identity.hpp"
 #include "radar_decision_comm/io/serial_port.hpp"
 #include "radar_decision_comm/msg/map_publish_request.hpp"
 #include "radar_decision_comm/msg/radar_decision_command.hpp"
+#include "radar_decision_comm/msg/referee_robot_identity.hpp"
 #include "radar_decision_comm/msg/robot_interaction_request.hpp"
 #include "radar_decision_comm/srv/force_send.hpp"
 #include "radar_decision_comm/srv/reopen_port.hpp"
@@ -42,6 +44,9 @@ public:
     publish_debug_frames_ = this->declare_parameter<bool>("publish_debug_frames", true);
     debug_raw_frame_topic_ = this->declare_parameter<std::string>(
       "debug_raw_frame_topic", "/radar/debug/referee_tx_raw_bytes");
+    use_referee_identity_color_ = this->declare_parameter<bool>("use_referee_identity_color", true);
+    identity_topic_ = this->declare_parameter<std::string>(
+      "identity_topic", "/radar/referee/robot_identity");
 
     input_map_request_topic_ = this->declare_parameter<std::string>(
       "input_map_request_topic", "/radar/tx/map_robot_data");
@@ -77,6 +82,24 @@ public:
       {
         if (!enabled_) return;
         handle_radar_command(*msg);
+      });
+
+    identity_sub_ = this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+      identity_topic_, 10,
+      [this](const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+      {
+        if (!use_referee_identity_color_ || !msg || !msg->valid) {
+          return;
+        }
+        const std::string next_color = team_identity::my_color_from_self_color(msg->self_color);
+        if (next_color != my_color_) {
+          my_color_ = next_color;
+          RCLCPP_INFO(
+            this->get_logger(),
+            "RefereeSerialTxComponent switched my_color=%s from referee robot_id=%u",
+            my_color_.c_str(),
+            msg->robot_id);
+        }
       });
 
     reopen_port_srv_ = this->create_service<radar_decision_comm::srv::ReopenPort>(
@@ -292,6 +315,7 @@ private:
   bool enable_crc8_{true};
   bool enable_crc16_{true};
   bool publish_debug_frames_{true};
+  bool use_referee_identity_color_{true};
 
   int baudrate_{115200};
   int timeout_ms_{2};
@@ -307,6 +331,7 @@ private:
   std::string map_0305_layout_{"legacy24"};
   std::string device_;
   std::string debug_raw_frame_topic_;
+  std::string identity_topic_;
   std::string input_map_request_topic_;
   std::string input_robot_interaction_topic_;
   std::string input_radar_command_topic_;
@@ -318,6 +343,7 @@ private:
   rclcpp::Subscription<radar_decision_comm::msg::MapPublishRequest>::SharedPtr map_sub_;
   rclcpp::Subscription<radar_decision_comm::msg::RobotInteractionRequest>::SharedPtr interaction_sub_;
   rclcpp::Subscription<radar_decision_comm::msg::RadarDecisionCommand>::SharedPtr radar_cmd_sub_;
+  rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr identity_sub_;
   rclcpp::Service<radar_decision_comm::srv::ReopenPort>::SharedPtr reopen_port_srv_;
   rclcpp::Service<radar_decision_comm::srv::ForceSend>::SharedPtr force_send_srv_;
 };

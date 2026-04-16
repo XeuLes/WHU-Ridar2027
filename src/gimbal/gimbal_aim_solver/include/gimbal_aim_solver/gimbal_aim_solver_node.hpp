@@ -15,6 +15,7 @@
 #include "gimbal_aim_solver/extrinsic_transformer.hpp"
 #include "gimbal_aim_solver/gimbal_geometry.hpp"
 #include "gimbal_aim_solver/types.hpp"
+#include "radar_decision_comm/msg/referee_robot_identity.hpp"
 
 namespace gimbal_aim_solver
 {
@@ -29,6 +30,8 @@ private:
 
   void uavCallback(const geometry_msgs::msg::PoseArray::SharedPtr msg);
   void gimbalAnglesCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg);
+  void refereeIdentityCallback(
+    const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg);
 
   bool selectTargetWorldPoint(const geometry_msgs::msg::PoseArray::SharedPtr& msg,
                               Eigen::Vector3d& p_world) ;
@@ -48,6 +51,7 @@ private:
 
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr uav_sub_;
   rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr gimbal_angles_sub_;
+  rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr referee_identity_sub_;
   rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr target_angles_pub_;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr gimbal_enable_pub_;
 
@@ -60,11 +64,13 @@ private:
   std::string uav_topic_;
   std::string gimbal_angles_topic_;
   std::string target_angles_topic_;
+  std::string referee_identity_topic_;
 
   std::string target_side_;
   std::string gimbal_angle_order_;
 
   bool publish_debug_{true};
+  bool use_referee_identity_target_side_{true};
 
   // 当前角是否参与输出
   bool use_increment_output_{false};

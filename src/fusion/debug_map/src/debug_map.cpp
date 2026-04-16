@@ -11,6 +11,7 @@
 #include <std_msgs/msg/header.hpp>
 
 #include <geometry_msgs/msg/pose_array.hpp>
+#include <radar_decision_comm/msg/referee_robot_identity.hpp>
 
 #include <vision_interface/msg/detect_result.hpp>
 #include <vision_interface/msg/match_info.hpp>
@@ -47,11 +48,14 @@ public:
         this->declare_parameter<std::string>("map_path", "");
         this->declare_parameter<bool>("use_match_info_color", true);
         this->declare_parameter<int>("self_color_override", 0);
+        this->declare_parameter<bool>("use_referee_identity_color", true);
         std::string map_path = this->get_parameter("map_path").as_string();
         use_match_info_color_ =
             this->get_parameter("use_match_info_color").as_bool();
         self_color_override_ =
             normalize_self_color(this->get_parameter("self_color_override").as_int(), 0);
+        use_referee_identity_color_ =
+            this->get_parameter("use_referee_identity_color").as_bool();
 
         // 2) 加载地图
         if (map_path.empty()) {
@@ -132,6 +136,12 @@ public:
                 std::bind(&DebugMap::save_match_info, this,
                           std::placeholders::_1));
 
+        referee_identity_sub =
+            this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+                "/radar/referee/robot_identity", 10,
+                std::bind(&DebugMap::save_referee_identity, this,
+                          std::placeholders::_1));
+
         // 新增：订阅最终融合的UAV三维坐标（只用xy画地图）
         uav_sub = this->create_subscription<geometry_msgs::msg::PoseArray>(
             "/uav_positions", rclcpp::SensorDataQoS(),
@@ -156,12 +166,26 @@ public:
         const std::shared_ptr<vision_interface::msg::MatchInfo> msg)
     {
         this->match_info = *msg;
-        if (use_match_info_color_) {
+        if (use_referee_identity_color_ && has_referee_identity_color_) {
+            match_info.self_color = referee_identity_color_;
+        } else if (use_match_info_color_) {
             match_info.self_color =
                 normalize_self_color(msg->self_color, self_color_override_);
         } else {
             match_info.self_color = self_color_override_;
         }
+    }
+
+    void save_referee_identity(
+        const std::shared_ptr<radar_decision_comm::msg::RefereeRobotIdentity> msg)
+    {
+        if (!use_referee_identity_color_ || !msg || !msg->valid) {
+            return;
+        }
+        has_referee_identity_color_ = true;
+        referee_identity_color_ =
+            normalize_self_color(msg->self_color, self_color_override_);
+        match_info.self_color = referee_identity_color_;
     }
 
     // 订阅最终融合UAV结果：poses[0]=blue UAV, poses[1]=red UAV
@@ -475,6 +499,8 @@ private:
         camera_detect_sub;
     rclcpp::Subscription<vision_interface::msg::MatchInfo>::SharedPtr
         match_info_sub;
+    rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr
+        referee_identity_sub;
     rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr uav_sub;
 
     // publishers
@@ -506,7 +532,10 @@ private:
 
     vision_interface::msg::MatchInfo match_info;
     bool use_match_info_color_{true};
+    bool use_referee_identity_color_{true};
+    bool has_referee_identity_color_{false};
     int self_color_override_{0};
+    int referee_identity_color_{0};
     cv::Mat                          map;
     int                              count;
 };

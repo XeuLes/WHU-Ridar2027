@@ -7,7 +7,9 @@
 #include <std_msgs/msg/string.hpp>
 
 #include "radar_decision_comm/codec/wireless_packet_parser.hpp"
+#include "radar_decision_comm/common/team_identity.hpp"
 #include "radar_decision_comm/msg/enemy_world_state.hpp"
+#include "radar_decision_comm/msg/referee_robot_identity.hpp"
 #include "radar_decision_comm/msg/wireless_enemy_ammo.hpp"
 #include "radar_decision_comm/msg/wireless_enemy_buffs.hpp"
 #include "radar_decision_comm/msg/wireless_enemy_hp.hpp"
@@ -27,6 +29,9 @@ public:
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
     input_pdu_topic_ = this->declare_parameter<std::string>("input_pdu_topic", "/radar/all_pdu");
     input_queue_depth_ = this->declare_parameter<int>("input_queue_depth", 50);
+    use_referee_identity_color_ = this->declare_parameter<bool>("use_referee_identity_color", true);
+    identity_topic_ = this->declare_parameter<std::string>(
+      "identity_topic", "/radar/referee/robot_identity");
 
     parser_.set_my_color(my_color_);
 
@@ -51,6 +56,25 @@ public:
           return;
         }
         handle_pdu_message(msg->data);
+      });
+
+    identity_sub_ = this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+      identity_topic_, 10,
+      [this](const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+      {
+        if (!use_referee_identity_color_ || !msg || !msg->valid) {
+          return;
+        }
+        const std::string next_color = team_identity::my_color_from_self_color(msg->self_color);
+        if (next_color != my_color_) {
+          my_color_ = next_color;
+          parser_.set_my_color(my_color_);
+          RCLCPP_INFO(
+            this->get_logger(),
+            "RadarWirelessRxComponent switched my_color=%s from referee robot_id=%u",
+            my_color_.c_str(),
+            msg->robot_id);
+        }
       });
 
     RCLCPP_INFO(
@@ -127,7 +151,9 @@ private:
 
   bool enabled_{true};
   std::string my_color_{"Red"};
+  bool use_referee_identity_color_{true};
   std::string input_pdu_topic_{"/radar/all_pdu"};
+  std::string identity_topic_{"/radar/referee/robot_identity"};
   int input_queue_depth_{50};
 
   WirelessPacketParser parser_;
@@ -139,6 +165,7 @@ private:
   rclcpp::Publisher<radar_decision_comm::msg::WirelessEnemyBuffs>::SharedPtr enemy_buffs_pub_;
   rclcpp::Publisher<radar_decision_comm::msg::WirelessInterferenceKey>::SharedPtr interference_key_pub_;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr pdu_sub_;
+  rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr identity_sub_;
 };
 
 }  // namespace radar_decision_comm

@@ -12,12 +12,14 @@
 #include "radar_decision_comm/codec/referee_decoder.hpp"
 #include "radar_decision_comm/codec/referee_encoder.hpp"
 #include "radar_decision_comm/codec/referee_packet_parser.hpp"
+#include "radar_decision_comm/common/team_identity.hpp"
 #include "radar_decision_comm/io/serial_port.hpp"
 #include "radar_decision_comm/msg/dart_status.hpp"
 #include "radar_decision_comm/msg/radar_decision_sync.hpp"
 #include "radar_decision_comm/msg/radar_mark_progress.hpp"
 #include "radar_decision_comm/msg/referee_enemy_hp.hpp"
 #include "radar_decision_comm/msg/referee_game_state.hpp"
+#include "radar_decision_comm/msg/referee_robot_identity.hpp"
 #include "radar_decision_comm/srv/reopen_port.hpp"
 
 namespace radar_decision_comm
@@ -59,6 +61,8 @@ public:
     rx_mode_ = this->declare_parameter<std::string>("rx_mode", "mock");
     debug_raw_bytes_topic_ = this->declare_parameter<std::string>(
       "debug_raw_bytes_topic", "/radar/debug/referee_raw_bytes");
+    output_identity_topic_ = this->declare_parameter<std::string>(
+      "output_identity_topic", "/radar/referee/robot_identity");
 
     parser_.set_my_color(my_color_);
     parser_.set_legacy_mark_progress(legacy_mark_progress_);
@@ -75,6 +79,8 @@ public:
       "/radar/referee/mark_progress", 10);
     radar_sync_pub_ = this->create_publisher<radar_decision_comm::msg::RadarDecisionSync>(
       "/radar/referee/radar_decision_sync", 10);
+    robot_identity_pub_ = this->create_publisher<radar_decision_comm::msg::RefereeRobotIdentity>(
+      output_identity_topic_, 10);
 
     reopen_port_srv_ = this->create_service<radar_decision_comm::srv::ReopenPort>(
       "~/reopen_port",
@@ -214,6 +220,21 @@ private:
     if (result.has_radar_sync) {
       radar_sync_pub_->publish(result.radar_sync);
     }
+    if (result.has_robot_identity) {
+      robot_identity_pub_->publish(result.robot_identity);
+
+      const std::string derived_color =
+        team_identity::my_color_from_self_color(result.robot_identity.self_color);
+      if (derived_color != my_color_) {
+        my_color_ = derived_color;
+        parser_.set_my_color(my_color_);
+        RCLCPP_INFO(
+          this->get_logger(),
+          "Referee identity updated from 0x0201: robot_id=%u my_color=%s",
+          result.robot_identity.robot_id,
+          my_color_.c_str());
+      }
+    }
   }
 
   void ingest_bytes(const std::vector<uint8_t> & bytes, const std::string & source_tag)
@@ -332,6 +353,7 @@ private:
   std::string my_color_{"Red"};
   std::string rx_mode_{"mock"};
   std::string debug_raw_bytes_topic_{"/radar/debug/referee_raw_bytes"};
+  std::string output_identity_topic_{"/radar/referee/robot_identity"};
 
   RefereePacketParser parser_;
   RefereeDecoder decoder_;
@@ -346,6 +368,7 @@ private:
   rclcpp::Publisher<radar_decision_comm::msg::DartStatus>::SharedPtr dart_status_pub_;
   rclcpp::Publisher<radar_decision_comm::msg::RadarMarkProgress>::SharedPtr mark_progress_pub_;
   rclcpp::Publisher<radar_decision_comm::msg::RadarDecisionSync>::SharedPtr radar_sync_pub_;
+  rclcpp::Publisher<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr robot_identity_pub_;
   rclcpp::Subscription<std_msgs::msg::UInt8MultiArray>::SharedPtr raw_bytes_sub_;
   rclcpp::Service<radar_decision_comm::srv::ReopenPort>::SharedPtr reopen_port_srv_;
   rclcpp::TimerBase::SharedPtr mock_timer_;

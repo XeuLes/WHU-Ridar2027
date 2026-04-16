@@ -3,6 +3,7 @@
 #include "auto_aim_fast/pipeline/frame.hpp"
 #include "auto_aim_fast/tracking/target_tracker.hpp"
 #include "auto_aim_fast/legacy/detector.hpp"
+#include "radar_decision_comm/common/team_identity.hpp"
 
 #include <opencv2/core.hpp>
 #include <algorithm>
@@ -64,6 +65,8 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
 {
   this->declare_parameter<std::string>("image_topic", "/camera0/image");
   this->declare_parameter<std::string>("camera_info_topic", "/camera0/camera_info");
+  this->declare_parameter<bool>("use_referee_identity_color", true);
+  this->declare_parameter<std::string>("referee_identity_topic", "/radar/referee/robot_identity");
 
   this->declare_parameter<bool>("qos.use_sensor_data_qos", true);
   this->declare_parameter<int>("qos.depth", 1);
@@ -160,6 +163,8 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
 
   const auto image_topic = this->get_parameter("image_topic").as_string();
   const auto info_topic = this->get_parameter("camera_info_topic").as_string();
+  use_referee_identity_color_ = this->get_parameter("use_referee_identity_color").as_bool();
+  referee_identity_topic_ = this->get_parameter("referee_identity_topic").as_string();
 
   // tracker inject
   tracking::TrackerParams tp;
@@ -230,6 +235,7 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   dp.max_connect_angle =
       static_cast<float>(this->get_parameter("detector.max_connect_angle").as_double());
 
+  detector_params_ = dp;
   pipeline_.setDetectorParams(dp);
 
   const auto detector_mode_str = this->get_parameter("detector.mode").as_string();
@@ -266,6 +272,7 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
       };
     }
   }
+  yolo_params_ = yp;
   pipeline_.setYoloDetectorParams(yp);
 
   // camera fallback
@@ -298,6 +305,10 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
     info_topic, makeInfoQoS(),
     std::bind(&AutoAimNode::onCameraInfo, this, std::placeholders::_1));
 
+  sub_identity_ = this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+    referee_identity_topic_, 10,
+    std::bind(&AutoAimNode::onRefereeIdentity, this, std::placeholders::_1));
+
   pipeline_.start();
 
   const int publish_hz = std::max(1, static_cast<int>(this->get_parameter("publish_hz").as_int()));
@@ -314,6 +325,39 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
               this->get_parameter("detector.mode").as_string().c_str(),
               this->get_parameter("debug.publish_debug_image").as_bool() ? 1 : 0,
               this->get_parameter("debug.publish_binary_image").as_bool() ? 1 : 0);
+}
+
+void AutoAimNode::onRefereeIdentity(
+  const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+{
+  if (!use_referee_identity_color_ || !msg || !msg->valid) {
+    return;
+  }
+
+  const int next_target_color =
+    radar_decision_comm::team_identity::enemy_auto_aim_target_color_from_self_color(
+      msg->self_color);
+  const bool next_swap_rb =
+    radar_decision_comm::team_identity::enemy_yolo_swap_rb_from_self_color(
+      msg->self_color);
+
+  if (detector_params_.target_color == next_target_color &&
+      yolo_params_.swap_rb_input == next_swap_rb)
+  {
+    return;
+  }
+
+  detector_params_.target_color = next_target_color;
+  yolo_params_.swap_rb_input = next_swap_rb;
+  pipeline_.setDetectorParams(detector_params_);
+  pipeline_.setYoloDetectorParams(yolo_params_);
+
+  RCLCPP_INFO(
+    this->get_logger(),
+    "AutoAimNode switched target_color=%d swap_rb_input=%s from referee robot_id=%u",
+    detector_params_.target_color,
+    yolo_params_.swap_rb_input ? "true" : "false",
+    msg->robot_id);
 }
 
 AutoAimNode::~AutoAimNode()

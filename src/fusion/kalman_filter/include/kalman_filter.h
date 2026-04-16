@@ -1,5 +1,6 @@
 #pragma once
 
+#include <radar_decision_comm/msg/referee_robot_identity.hpp>
 #include <rclcpp/publisher.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
 #include <vision_interface/msg/detect_result.hpp>
@@ -30,6 +31,8 @@ private:
         sub_lidar_;
     rclcpp::Subscription<vision_interface::msg::MatchInfo>::SharedPtr
         sub_match_;
+    rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr
+        sub_referee_identity_;
     rclcpp::Publisher<vision_interface::msg::Radar2Sentry>::SharedPtr
         radar_pub_;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr
@@ -42,8 +45,11 @@ private:
     lidar_callback(const vision_interface::msg::RadarWarn::SharedPtr msg);
     void
     match_callback(const vision_interface::msg::MatchInfo::SharedPtr msg);
+    void referee_identity_callback(
+        const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg);
     bool is_kf_available_now(const rclcpp::Time& now_time) const;
     int normalized_self_color(int raw_color) const;
+    int effective_self_color() const;
     std::vector<Kalman_filter_plus>  KFs;
     vision_interface::msg::RadarWarn lidar_detect;
     vision_interface::msg::MatchInfo match_info;
@@ -52,5 +58,8 @@ private:
     int kf_available_timeout_ms_{300};   // 可调
     bool use_match_info_color_{true};
     int self_color_override_{2};
+    bool use_referee_identity_color_{true};
+    int referee_identity_color_{2};
+    bool has_referee_identity_color_{false};
 };
 }  // namespace tdt_radar

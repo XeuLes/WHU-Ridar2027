@@ -9,6 +9,8 @@
 
 #include <vision_interface/msg/detect_result.hpp>
 
+#include "radar_decision_comm/common/team_identity.hpp"
+#include "radar_decision_comm/msg/referee_robot_identity.hpp"
 #include "radar_decision_comm/msg/tracked_robot.hpp"
 #include "radar_decision_comm/msg/tracked_robot_array.hpp"
 
@@ -53,6 +55,9 @@ public:
       "output_our_tracks_topic", "/radar/perception/our_tracks");
     output_enemy_tracks_topic_ = this->declare_parameter<std::string>(
       "output_enemy_tracks_topic", "/radar/perception/enemy_tracks");
+    use_referee_identity_color_ = this->declare_parameter<bool>("use_referee_identity_color", true);
+    identity_topic_ = this->declare_parameter<std::string>(
+      "identity_topic", "/radar/referee/robot_identity");
 
     our_pub_ = this->create_publisher<radar_decision_comm::msg::TrackedRobotArray>(
       output_our_tracks_topic_, 10);
@@ -67,6 +72,16 @@ public:
           return;
         }
         publish_tracks(*msg);
+      });
+
+    identity_sub_ = this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+      identity_topic_, 10,
+      [this](const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+      {
+        if (!use_referee_identity_color_ || !msg || !msg->valid) {
+          return;
+        }
+        our_color_ = team_identity::my_color_from_self_color(msg->self_color);
       });
 
     RCLCPP_INFO(
@@ -148,15 +163,18 @@ private:
 
   bool enabled_{true};
   std::string our_color_{"Red"};
+  bool use_referee_identity_color_{true};
   float fixed_confidence_{1.0F};
   uint32_t direct_source_mask_{0x01U};
   std::string input_detect_topic_{"/kalman_detect"};
   std::string output_our_tracks_topic_{"/radar/perception/our_tracks"};
   std::string output_enemy_tracks_topic_{"/radar/perception/enemy_tracks"};
+  std::string identity_topic_{"/radar/referee/robot_identity"};
 
   rclcpp::Publisher<radar_decision_comm::msg::TrackedRobotArray>::SharedPtr our_pub_;
   rclcpp::Publisher<radar_decision_comm::msg::TrackedRobotArray>::SharedPtr enemy_pub_;
   rclcpp::Subscription<vision_interface::msg::DetectResult>::SharedPtr detect_sub_;
+  rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr identity_sub_;
 };
 
 }  // namespace radar_decision_comm

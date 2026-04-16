@@ -34,7 +34,7 @@ def generate_launch_description():
         parameters=[
             params_file,
             # Force dual camera; all cam0/cam1 details can be in the yaml.
-            {"camera_count": 2},
+            {"camera_count": 3},
         ],
         arguments=["--ros-args", "--log-level", log_level],
         output="screen",
