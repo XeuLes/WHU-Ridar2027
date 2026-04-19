@@ -570,10 +570,12 @@ for (const auto& b : result) {
     detect_result.blue_uav_bbox_y = 0.0f;
     detect_result.blue_uav_bbox_w = 0.0f;
     detect_result.blue_uav_bbox_h = 0.0f;
+    detect_result.blue_uav_conf = 0.0f;
     detect_result.red_uav_bbox_x = 0.0f;
     detect_result.red_uav_bbox_y = 0.0f;
     detect_result.red_uav_bbox_w = 0.0f;
     detect_result.red_uav_bbox_h = 0.0f;
+    detect_result.red_uav_conf = 0.0f;
     
     size_t array_limit = detect_result.blue_x.size(); 
 
@@ -923,6 +925,7 @@ for (const auto& b : result) {
         detect_result.blue_uav_bbox_y = static_cast<float>(best_blue->bbox.y);
         detect_result.blue_uav_bbox_w = static_cast<float>(best_blue->bbox.width);
         detect_result.blue_uav_bbox_h = static_cast<float>(best_blue->bbox.height);
+        detect_result.blue_uav_conf = best_blue->confidence;
     }
 
     if (can_send && best_red != nullptr) {
@@ -932,6 +935,7 @@ for (const auto& b : result) {
         detect_result.red_uav_bbox_y = static_cast<float>(best_red->bbox.y);
         detect_result.red_uav_bbox_w = static_cast<float>(best_red->bbox.width);
         detect_result.red_uav_bbox_h = static_cast<float>(best_red->bbox.height);
+        detect_result.red_uav_conf = best_red->confidence;
     }
 
     if (debug) {
@@ -949,7 +953,7 @@ for (const auto& b : result) {
             cv::rectangle(img, candidate.bbox, color_bgr, 2);
             cv::rectangle(img, candidate.roi, cv::Scalar(0, 255, 255), 2);
             cv::circle(img, candidate.roi_center, 4, cv::Scalar(0, 255, 0), -1);
-            cv::putText(img, label,
+            cv::putText(img, label + cv::format(" %.2f", candidate.confidence),
                         cv::Point(candidate.bbox.x, std::max(candidate.bbox.y - 6, 0)),
                         cv::FONT_HERSHEY_SIMPLEX, 0.8, color_bgr, 2);
         }

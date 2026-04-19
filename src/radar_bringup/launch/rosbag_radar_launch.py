@@ -105,6 +105,13 @@ def _build_launch(context):
                 "camera_params_path": os.path.join(bringup_config, "camera_params.yaml"),
                 "region_points_path": os.path.join(bringup_config, "RM2025_Points.yaml"),
                 "minimap_path": os.path.join(bringup_config, "RM2025.png"),
+                "uav_publish_default_output": False,
+                "uav_default_out_blue_x": 0.0,
+                "uav_default_out_blue_y": 0.0,
+                "uav_default_out_blue_z": 0.0,
+                "uav_default_out_red_x": 0.0,
+                "uav_default_out_red_y": 0.0,
+                "uav_default_out_red_z": 0.0,
             }
         ],
         extra_arguments=intra,
@@ -135,6 +142,21 @@ def _build_launch(context):
         extra_arguments=intra,
     )
 
+    debug_map_component = ComposableNode(
+        package="debug_map",
+        plugin="debug_map::DebugMap",
+        name="debug_map_node",
+        parameters=[
+            {
+                "map_path": os.path.join(debug_map_share, "config", "RM2025.png"),
+                "use_match_info_color": False,
+                "self_color_override": team["match_self_color"],
+                "use_referee_identity_color": False,
+            }
+        ],
+        extra_arguments=intra,
+    )
+
     replay_container = ComposableNodeContainer(
         name="radar_replay_container",
         namespace="",
@@ -149,6 +171,7 @@ def _build_launch(context):
             resolve_component,
             kalman_filter_component,
             kalman_tracks_adapter_component,
+            debug_map_component,
         ],
         output="both",
         emulate_tty=True,
@@ -248,33 +271,6 @@ def _build_launch(context):
         ],
     )
 
-    debug_map_node = Node(
-        package="debug_map",
-        executable="debug_map_homo_node",
-        name="debug_map_homo_node",
-        output="screen",
-        parameters=[
-            {
-                "map_path": os.path.join(debug_map_share, "config", "jichuzhizao.png"),
-                "homography_path": os.path.join(debug_map_share, "config", "debug_map_homography.yaml"),
-                "auto_load_homography": True,
-                "auto_save_homography": True,
-                "target_w": 700,
-                "target_h": 375,
-                "kalman_topic": "/kalman_detect",
-                "resolve_topic": "/resolve_result",
-                "uav_topic": "/uav_positions",
-                "match_info_topic": "/match_info",
-                "debug_image_topic": "/debug_map_homo",
-                "draw_timeout_ms": 500,
-                "show_window": True,
-                "prefer_kalman": True,
-                "use_match_info_color": False,
-                "self_color_override": team["match_self_color"],
-            }
-        ],
-    )
-
     map_pcd_publisher = Node(
         package="pcl_ros",
         executable="pcd_to_pointcloud",
@@ -303,7 +299,6 @@ def _build_launch(context):
         LogInfo(msg=f"rosbag file: {rosbag_file}"),
         replay_container,
         radar_decision_comm_container,
-        debug_map_node,
         map_pcd_publisher,
         rviz_node,
     ]

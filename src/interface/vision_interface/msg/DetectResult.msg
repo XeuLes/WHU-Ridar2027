@@ -9,11 +9,13 @@ float32 blue_uav_bbox_x
 float32 blue_uav_bbox_y
 float32 blue_uav_bbox_w
 float32 blue_uav_bbox_h
+float32 blue_uav_conf
 
 float32 red_uav_bbox_x
 float32 red_uav_bbox_y
 float32 red_uav_bbox_w
 float32 red_uav_bbox_h
+float32 red_uav_conf
 
 # UAV light bar targets (vertical pairs) - up to 2 targets per UAV
 uint8 blue_uav_light_count     # number of blue team light bar pairs (0-2)

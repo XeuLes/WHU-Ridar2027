@@ -163,6 +163,13 @@ def _build_launch(context):
                 "region_points_path": resolve_region_points_yaml,
                 "minimap_path": resolve_minimap_png,
                 "is_test": True,
+                "uav_publish_default_output": False,
+                "uav_default_out_blue_x": 0.0,
+                "uav_default_out_blue_y": 0.0,
+                "uav_default_out_blue_z": 0.0,
+                "uav_default_out_red_x": 0.0,
+                "uav_default_out_red_y": 0.0,
+                "uav_default_out_red_z": 0.0,
             }
         ],
         extra_arguments=intra,

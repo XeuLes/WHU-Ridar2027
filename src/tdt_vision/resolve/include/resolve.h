@@ -1,8 +1,11 @@
 #ifndef RADAR_RESOLVE_H
 #define RADAR_RESOLVE_H
 
+#include <deque>
+#include <limits>
 #include <memory>
 #include <mutex>
+#include <utility>
 #include <vector>
 
 #include <rclcpp/rclcpp.hpp>
@@ -50,6 +53,20 @@ public:
     uint8_t robot_hp[16]{};
 
 private:
+    struct UavFrustumMeasurement {
+        bool valid{false};
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        double cluster_z_median{0.0};
+        double ray_dist_median{std::numeric_limits<double>::infinity()};
+        double ray_dist_spread{std::numeric_limits<double>::infinity()};
+        double depth_median{0.0};
+        int cluster_size{0};
+        std::vector<cv::Point2f> debug_uvs;
+        std::vector<cv::Point2f> cluster_uvs;
+    };
+
     // existing outputs
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
         pub;  // camera_point3D
@@ -75,10 +92,11 @@ private:
 
     // parameters
     bool is_test_{false};
+    bool uav_publish_default_output_{true};
 
-    double uav_default_out_x_{0.0};
-    double uav_default_out_y_{0.0};
-    double uav_default_out_z_{0.0};
+    double uav_default_out_x_[2]{0.0, 0.0};
+    double uav_default_out_y_[2]{0.0, 0.0};
+    double uav_default_out_z_[2]{0.0, 0.0};
 
     int    uav_other_timeout_ms_{500};
     double uav_default_z_{1.95};
@@ -96,14 +114,32 @@ private:
     double uav_cluster_tolerance_{0.60};
     int    uav_cluster_min_size_{6};
     int    uav_cluster_max_size_{2000};
-    double uav_cluster_score_dist_weight_{0.02};
+    double uav_cluster_score_dist_weight_{0.02};  // legacy param, kept for compatibility
+    double uav_cluster_score_ray_weight_{1.0};
+    double uav_cluster_score_spread_weight_{0.6};
     double uav_cluster_score_size_weight_{0.08};
+    double uav_center_ray_min_depth_{0.2};
+    double uav_rep_ray_weight_{1.0};
+    double uav_rep_depth_weight_{0.8};
+    double uav_quality_ray_sigma_{0.45};
+    double uav_quality_spread_sigma_{0.25};
+    double uav_quality_size_ref_{12.0};
+    double uav_quality_measurement_threshold_{0.60};
+    double uav_quality_z_prior_threshold_{0.75};
+    double uav_z_prior_alpha_{0.90};
+    int    uav_z_prior_window_ms_{1200};
+    int    uav_z_prior_update_min_interval_ms_{250};
 
     // 3.4 z-plane filter params (per UAV: 0=blue, 1=red)
     double uav_z_ema_alpha_{0.90};
     double uav_z_jump_max_{0.80};
     bool   uav_z_filt_inited_[2]{false, false};
     double uav_z_plane_filt_[2]{0.0, 0.0};
+    bool   uav_z_prior_inited_[2]{false, false};
+    double uav_z_prior_[2]{0.0, 0.0};
+    rclcpp::Time uav_z_prior_last_update_[2]{rclcpp::Time(0, 0, RCL_ROS_TIME),
+                                             rclcpp::Time(0, 0, RCL_ROS_TIME)};
+    std::deque<std::pair<rclcpp::Time, double>> uav_z_prior_samples_[2];
 
     // 2.1A KF (per UAV)
     bool         uav_kf_inited_[2]{false, false};
@@ -136,14 +172,18 @@ private:
     // helpers
     float GetFilteredZPlane(int idx, double z_raw);
     cv::Rect2f BuildUavRoiFromBbox(float x, float y, float w, float h) const;
+    double ClampUavZ(double z) const;
+    bool BuildUavCenterRay(const cv::Point2f& pixel,
+                           cv::Vec3d& origin_world,
+                           cv::Vec3d& dir_world) const;
+    double EvaluateUavMeasurementQuality(double conf,
+                                         const UavFrustumMeasurement& meas) const;
+    double GetUavFallbackZ(int idx) const;
+    void UpdateUavZPrior(int idx, double z_raw, const rclcpp::Time& stamp);
     bool SolveUavFrustumMeasurement(
         const cv::Rect2f& roi,
         const std::vector<pcl::PointXYZ>& points,
-        double& out_x,
-        double& out_y,
-        double& out_z,
-        std::vector<cv::Point2f>* debug_uvs = nullptr,
-        std::vector<cv::Point2f>* selected_cluster_uvs = nullptr) const;
+        UavFrustumMeasurement& out) const;
     void  UavKalmanReset(int idx);
     void  UavKalmanInit(int idx, double x, double y, double z,
                         const rclcpp::Time& stamp);
