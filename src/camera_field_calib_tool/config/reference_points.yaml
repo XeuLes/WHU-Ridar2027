@@ -1,8 +1,8 @@
 %YAML:1.0
 reference_points:
-  - {name: "Table3_center_near_radar", pos: [10.54, 6.42, 0.80]}
-  - {name: "Yellow_line_corner_near_radar", pos: [10.37, 3.88, 0.0]}
-  - {name: "Table7_marker7_bottom", pos: [16.6, 6.38, 1.58]}
-  - {name: "Table5_center_far_from_radar", pos: [17.28, 3.42, 1.80]}
-  - {name: "Table11_top_near_radar", pos: [23.92, 6.28, 1.80]}
-  - {name: "Yellow_line_corner_far_from_radar", pos: [22.28, 3.88, 0.0]}
+  - {name: "left_biaoshiban1_youxiaojiao", pos: [12.74, 10.63, 1.60]}
+  - {name: "left_biaoshiban2_youxiaojiao", pos: [16.78, 10.63, 1.60]}
+  - {name: "center_highest_right", pos: [19.43, 3.73, 2.40]}
+  - {name: "yuanchu_muban", pos: [20.47, 1.25, 1.54]}
+  - {name: "yellow_right_zhuozihoumian_corner", pos: [13.30, 3.68, 0.00]}
+  - {name: "center_highest_left", pos: [19.43, 4.33, 2.40]}

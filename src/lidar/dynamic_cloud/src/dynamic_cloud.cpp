@@ -412,6 +412,10 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     };
 
     // 1. 转换ROS消息到PCL
+    if (msg->data.empty() || msg->width == 0 || msg->height == 0) {
+        return;
+    }
+
     pcl::PointCloud<pcl::PointXYZ> receive_cloud;
     pcl::fromROSMsg(*msg, receive_cloud);
     

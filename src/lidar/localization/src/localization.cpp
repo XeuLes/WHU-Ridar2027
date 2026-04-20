@@ -99,7 +99,7 @@ public:
         this->declare_parameter<double>("tf_publish_rate_hz", 20.0);
 
         // GICP worker 频率
-        this->declare_parameter<double>("gicp_worker_rate_hz", 1.0);
+        this->declare_parameter<double>("gicp_worker_rate_hz", 20.0);
 
         // ---------------------------------------------------------
         // 2. 读取参数
@@ -132,7 +132,7 @@ public:
 
         this->get_parameter("gicp_worker_rate_hz", gicp_worker_rate_hz_);
         if (gicp_worker_rate_hz_ <= 0.0) {
-            gicp_worker_rate_hz_ = 1.0;
+            gicp_worker_rate_hz_ = 20.0;
         }
 
         // ---------------------------------------------------------
@@ -260,23 +260,52 @@ private:
         RCLCPP_INFO(this->get_logger(), "Localization status -> %s", status_str);
     }
 
-    void publishMapOnce()
+    void updateLatestScanMapCloud(const pcl::PointCloud<pcl::PointXYZ>::Ptr& cloud_rm)
     {
-        if (!target_cloud_ || target_cloud_->empty()) {
+        std::lock_guard<std::mutex> lock(map_mutex_);
+        latest_scan_map_cloud_ = cloud_rm;
+    }
+
+    void publishMap(const rclcpp::Time& stamp)
+    {
+        pcl::PointCloud<pcl::PointXYZ>::Ptr map_cloud;
+        bool use_live_scan_map = false;
+
+        {
+            std::lock_guard<std::mutex> lock(map_mutex_);
+            if (gicp_timeout_reached_ &&
+                latest_scan_map_cloud_ &&
+                !latest_scan_map_cloud_->empty()) {
+                map_cloud = latest_scan_map_cloud_;
+                use_live_scan_map = true;
+            }
+        }
+
+        if (!map_cloud) {
+            map_cloud = target_cloud_;
+        }
+
+        if (!map_cloud || map_cloud->empty()) {
             RCLCPP_WARN(this->get_logger(), "地图为空，跳过发布");
             return;
         }
 
         sensor_msgs::msg::PointCloud2 target_msg;
-        pcl::toROSMsg(*target_cloud_, target_msg);
+        pcl::toROSMsg(*map_cloud, target_msg);
         target_msg.header.frame_id = "rm_frame";
-        target_msg.header.stamp = this->now();
+        target_msg.header.stamp = stamp;
 
         publisher_->publish(target_msg);
 
-        RCLCPP_INFO(this->get_logger(),
-                    "已发布地图到 /livox/map, points=%zu",
-                    target_cloud_->size());
+        RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
+                            "已发布%s到 /livox/map, points=%zu",
+                            use_live_scan_map ? "实时扫描点云" : "先验地图",
+                            map_cloud->size());
+    }
+
+    void publishMapOnce()
+    {
+        publishMap(this->now());
     }
 
     Eigen::Matrix4f makeTransformFromXYZRPY(
@@ -529,10 +558,18 @@ private:
             last_msg_stamp_ = msg_stamp;
         }
 
+        if (gicp_timeout_reached_) {
+            return;
+        }
+
+        if (msg->data.empty() || msg->width == 0 || msg->height == 0) {
+            return;
+        }
+
         pcl::PointCloud<pcl::PointXYZ>::Ptr source_cloud(new pcl::PointCloud<pcl::PointXYZ>());
         pcl::fromROSMsg(*msg, *source_cloud);
 
-        if (has_aligned_ || gicp_timeout_reached_) {
+        if (has_aligned_) {
             return;
         }
 
@@ -548,20 +585,6 @@ private:
             gicp_started_ = true;
             gicp_start_time_ = this->now();
             RCLCPP_INFO(this->get_logger(), "开始 GICP 自动配准计时");
-        }
-
-        if (enable_gicp_total_timeout_) {
-            const double elapsed = (this->now() - gicp_start_time_).seconds();
-            if (elapsed > gicp_total_timeout_sec_) {
-                if (!gicp_timeout_reached_) {
-                    gicp_timeout_reached_ = true;
-                    publishLocalizationStatus(LocalizationStatus::INIT_ONLY);
-                    RCLCPP_WARN(this->get_logger(),
-                                "GICP 总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，继续使用初值",
-                                elapsed, gicp_total_timeout_sec_);
-                }
-                return;
-            }
         }
 
         grid_map_.clear();
@@ -610,6 +633,17 @@ private:
             return;
         }
 
+        pcl::PointCloud<pcl::PointXYZ>::Ptr live_scan_map_source(new pcl::PointCloud<pcl::PointXYZ>());
+        for (const auto& cloud : accumulated_clouds_) {
+            for (const auto& point : cloud->points) {
+                if (point.x > roi_min_x_ && point.x < roi_max_x_ &&
+                    point.y > roi_min_y_ && point.y < roi_max_y_ &&
+                    point.z < roi_max_z_) {
+                    live_scan_map_source->push_back(point);
+                }
+            }
+        }
+
         pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_source(new pcl::PointCloud<pcl::PointXYZ>());
         downsample_cloud(roi_cloud, downsampled_source, static_cast<float>(downsample_leaf_size_));
 
@@ -623,13 +657,31 @@ private:
         {
             const Eigen::Matrix4f T = getCurrentTfTransform();
             pcl::PointCloud<pcl::PointXYZ>::Ptr rm_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+            pcl::PointCloud<pcl::PointXYZ>::Ptr live_map_rm_cloud(new pcl::PointCloud<pcl::PointXYZ>());
             pcl::transformPointCloud(*downsampled_source, *rm_cloud, T);
+            pcl::transformPointCloud(*live_scan_map_source, *live_map_rm_cloud, T);
 
             sensor_msgs::msg::PointCloud2 rm_msg;
             pcl::toROSMsg(*rm_cloud, rm_msg);
             rm_msg.header.frame_id = "rm_frame";
             rm_msg.header.stamp = msg_stamp;
             filter_rm_publisher_->publish(rm_msg);
+
+            updateLatestScanMapCloud(live_map_rm_cloud);
+        }
+
+        {
+            const double elapsed = (this->now() - gicp_start_time_).seconds();
+            if (enable_gicp_total_timeout_ &&
+                elapsed > gicp_total_timeout_sec_) {
+                gicp_timeout_reached_ = true;
+                publishLocalizationStatus(LocalizationStatus::INIT_ONLY);
+                RCLCPP_WARN(this->get_logger(),
+                            "GICP 总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，/livox/map 切换为实时扫描点云",
+                            elapsed, gicp_total_timeout_sec_);
+                publishMap(msg_stamp);
+                return;
+            }
         }
 
         {
@@ -667,8 +719,9 @@ private:
                     gicp_timeout_reached_ = true;
                     publishLocalizationStatus(LocalizationStatus::INIT_ONLY);
                     RCLCPP_WARN(this->get_logger(),
-                                "GICP worker 检测到总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，继续使用初值",
+                                "GICP worker 检测到总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，/livox/map 切换为实时扫描点云",
                                 elapsed, gicp_total_timeout_sec_);
+                    publishMapOnce();
                 }
                 gicp_running_ = false;
                 return;
@@ -756,7 +809,7 @@ private:
     double gicp_success_fitness_threshold_{0.2};
 
     double tf_publish_rate_hz_{20.0};
-    double gicp_worker_rate_hz_{1.0};
+    double gicp_worker_rate_hz_{20.0};
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud_;
     std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> accumulated_clouds_;
@@ -774,10 +827,12 @@ private:
     std::map<std::pair<int, int>, Grid> grid_map_;
 
     std::mutex data_mutex_;
+    std::mutex map_mutex_;
     mutable std::mutex tf_mutex_;
     mutable std::mutex stamp_mutex_;
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr current_source_for_gicp_;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr latest_scan_map_cloud_;
     bool new_data_available_{false};
     std::atomic<bool> gicp_running_{false};
     rclcpp::Time last_msg_stamp_{0, 0, RCL_ROS_TIME};

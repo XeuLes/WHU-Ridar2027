@@ -40,6 +40,10 @@ void Cluster::process_cluster(
         std::chrono::steady_clock::now();
 
     // 转换ROS点云到PCL格式
+    if (msg->data.empty() || msg->width == 0 || msg->height == 0) {
+        return;
+    }
+
     pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(
         new pcl::PointCloud<pcl::PointXYZ>);
     pcl::fromROSMsg(*msg, *cloud);

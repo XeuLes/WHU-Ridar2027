@@ -346,6 +346,16 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
 void Detect::uavIntersectionDebugCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
+    if (msg->data.empty() || msg->width == 0 || msg->height == 0) {
+        std::lock_guard<std::mutex> lk(uav_intersection_mutex_);
+        uav_intersection_points_.clear();
+        uav_intersection_stamp_ =
+            (msg->header.stamp.sec == 0 && msg->header.stamp.nanosec == 0)
+                ? this->now()
+                : rclcpp::Time(msg->header.stamp);
+        return;
+    }
+
     pcl::PointCloud<pcl::PointXYZ> cloud;
     pcl::fromROSMsg(*msg, cloud);
 
@@ -369,6 +379,16 @@ void Detect::uavIntersectionDebugCallback(
 void Detect::uavClusterDebugCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
+    if (msg->data.empty() || msg->width == 0 || msg->height == 0) {
+        std::lock_guard<std::mutex> lk(uav_intersection_mutex_);
+        uav_cluster_points_.clear();
+        uav_cluster_stamp_ =
+            (msg->header.stamp.sec == 0 && msg->header.stamp.nanosec == 0)
+                ? this->now()
+                : rclcpp::Time(msg->header.stamp);
+        return;
+    }
+
     pcl::PointCloud<pcl::PointXYZ> cloud;
     pcl::fromROSMsg(*msg, cloud);
 

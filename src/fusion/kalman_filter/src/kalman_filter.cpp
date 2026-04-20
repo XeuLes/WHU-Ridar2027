@@ -225,6 +225,10 @@ void KalmanFilter::callback(
         time = this->now();
     }
 
+    if (msg->data.empty() || msg->width == 0 || msg->height == 0) {
+        return;
+    }
+
     last_lidar_cluster_stamp_ = time;
     kf_available_ = true;
 

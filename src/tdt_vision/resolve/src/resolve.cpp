@@ -354,6 +354,15 @@ void Resolve::callback(const geometry_msgs::msg::Vector3::SharedPtr msg)
 void Resolve::UavOtherCloudCallback(
     const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 {
+    if (msg->data.empty() || msg->width == 0 || msg->height == 0) {
+        std::lock_guard<std::mutex> lk(uav_other_mutex_);
+        uav_other_points_.clear();
+        uav_other_stamp_ = is_stamp_zero(msg->header.stamp)
+                               ? this->now()
+                               : rclcpp::Time(msg->header.stamp);
+        return;
+    }
+
     pcl::PointCloud<pcl::PointXYZ> cloud;
     pcl::fromROSMsg(*msg, cloud);
 
