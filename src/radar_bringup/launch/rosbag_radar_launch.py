@@ -38,6 +38,8 @@ def _build_launch(context):
     decision_params_file = LaunchConfiguration("decision_params_file").perform(context)
     referee_rx_mode = LaunchConfiguration("referee_rx_mode").perform(context)
     referee_tx_mode = LaunchConfiguration("referee_tx_mode").perform(context)
+    referee_serial_device = LaunchConfiguration("referee_serial_device").perform(context)
+    referee_serial_baudrate = int(LaunchConfiguration("referee_serial_baudrate").perform(context))
     rosbag_file = LaunchConfiguration("rosbag_file").perform(context)
 
     bringup_share = get_package_share_directory("radar_bringup")
@@ -198,11 +200,17 @@ def _build_launch(context):
         composable_node_descriptions=[
             ComposableNode(
                 package="radar_decision_comm",
-                plugin="radar_decision_comm::RefereeSerialRxComponent",
-                name="referee_serial_rx",
+                plugin="radar_decision_comm::RefereeSerialBridgeComponent",
+                name="referee_serial_bridge",
                 parameters=[
                     decision_params_file,
-                    {"my_color": team["decision_my_color"], "rx_mode": referee_rx_mode},
+                    {
+                        "my_color": team["decision_my_color"],
+                        "rx_mode": referee_rx_mode,
+                        "tx_mode": referee_tx_mode,
+                        "device": referee_serial_device,
+                        "baudrate": referee_serial_baudrate,
+                    },
                 ],
                 extra_arguments=intra,
             ),
@@ -256,16 +264,6 @@ def _build_launch(context):
                 plugin="radar_decision_comm::TxSchedulerComponent",
                 name="tx_scheduler",
                 parameters=[decision_params_file],
-                extra_arguments=intra,
-            ),
-            ComposableNode(
-                package="radar_decision_comm",
-                plugin="radar_decision_comm::RefereeSerialTxComponent",
-                name="referee_serial_tx",
-                parameters=[
-                    decision_params_file,
-                    {"my_color": team["decision_my_color"], "tx_mode": referee_tx_mode},
-                ],
                 extra_arguments=intra,
             ),
         ],
@@ -336,6 +334,16 @@ def generate_launch_description():
                 "referee_tx_mode",
                 default_value="topic",
                 description="referee_serial_tx mode during replay",
+            ),
+            DeclareLaunchArgument(
+                "referee_serial_device",
+                default_value="/dev/ttyUSB0",
+                description="referee serial device path for bridge mode",
+            ),
+            DeclareLaunchArgument(
+                "referee_serial_baudrate",
+                default_value="115200",
+                description="referee serial baudrate for bridge mode",
             ),
             OpaqueFunction(function=_build_launch),
         ]

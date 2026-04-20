@@ -8,6 +8,40 @@
     enemy_hero_id: 101
     enemy_sentinel_id: 107
 
+referee_serial_bridge:
+  ros__parameters:
+    enabled: true
+    device: "/dev/ttyUSB0"
+    baudrate: 115200
+    timeout_ms: 2
+    reconnect_interval_ms: 1000
+    rx_thread_priority: 80
+    tx_thread_priority: 80
+    enable_crc8_check: true
+    enable_crc16_check: true
+    enable_crc8: true
+    enable_crc16: true
+    publish_raw_debug: false
+    publish_debug_frames: true
+    publish_rate_hz: 100.0
+    debug_mock_publish: true
+    debug_mock_rate_hz: 2.0
+    my_color: "Red"
+    legacy_mark_progress: true
+    legacy_dart_bits: true
+    use_referee_identity_color: true
+    send_queue_depth: 128
+    rx_mode: "serial"          # mock / topic / serial
+    tx_mode: "serial"          # topic / serial
+    map_0305_layout: "legacy24"
+    debug_raw_bytes_topic: "/radar/debug/referee_raw_bytes"
+    debug_raw_frame_topic: "/radar/debug/referee_tx_raw_bytes"
+    output_identity_topic: "/radar/referee/robot_identity"
+    identity_topic: "/radar/referee/robot_identity"
+    input_map_request_topic: "/radar/tx/map_robot_data"
+    input_robot_interaction_topic: "/radar/tx/robot_interaction"
+    input_radar_command_topic: "/radar/tx/radar_cmd"
+
 referee_serial_rx:
   ros__parameters:
     enabled: true

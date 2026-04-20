@@ -80,6 +80,7 @@ rclcpp_components_register_nodes(${PROJECT_NAME}_core
   "radar_decision_comm::FusionComponent"
   "radar_decision_comm::KalmanTracksAdapterComponent"
   "radar_decision_comm::PerceptionAdapterComponent"
+  "radar_decision_comm::RefereeSerialBridgeComponent"
   "radar_decision_comm::RadarWirelessRxComponent"
   "radar_decision_comm::RefereeSerialRxComponent"
   "radar_decision_comm::RefereeSerialTxComponent"

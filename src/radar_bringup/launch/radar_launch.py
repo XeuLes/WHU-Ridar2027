@@ -43,6 +43,8 @@ def _build_launch(context):
     team = _team_config(LaunchConfiguration("our_color").perform(context))
     referee_rx_mode = LaunchConfiguration("referee_rx_mode").perform(context)
     referee_tx_mode = LaunchConfiguration("referee_tx_mode").perform(context)
+    referee_serial_device = LaunchConfiguration("referee_serial_device").perform(context)
+    referee_serial_baudrate = int(LaunchConfiguration("referee_serial_baudrate").perform(context))
     decision_params_file = LaunchConfiguration("decision_params_file").perform(context)
     pdu_poll_period_ms = int(LaunchConfiguration("pdu_poll_period_ms").perform(context))
 
@@ -255,13 +257,16 @@ def _build_launch(context):
         composable_node_descriptions=[
             ComposableNode(
                 package="radar_decision_comm",
-                plugin="radar_decision_comm::RefereeSerialRxComponent",
-                name="referee_serial_rx",
+                plugin="radar_decision_comm::RefereeSerialBridgeComponent",
+                name="referee_serial_bridge",
                 parameters=[
                     decision_params_file,
                     {
                         "my_color": team["decision_my_color"],
                         "rx_mode": referee_rx_mode,
+                        "tx_mode": referee_tx_mode,
+                        "device": referee_serial_device,
+                        "baudrate": referee_serial_baudrate,
                     },
                 ],
                 extra_arguments=intra,
@@ -318,19 +323,6 @@ def _build_launch(context):
                 plugin="radar_decision_comm::TxSchedulerComponent",
                 name="tx_scheduler",
                 parameters=[decision_params_file],
-                extra_arguments=intra,
-            ),
-            ComposableNode(
-                package="radar_decision_comm",
-                plugin="radar_decision_comm::RefereeSerialTxComponent",
-                name="referee_serial_tx",
-                parameters=[
-                    decision_params_file,
-                    {
-                        "my_color": team["decision_my_color"],
-                        "tx_mode": referee_tx_mode,
-                    },
-                ],
                 extra_arguments=intra,
             ),
         ],
@@ -480,6 +472,7 @@ def _build_launch(context):
         LogInfo(msg=f"radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"decision params file: {decision_params_file}"),
         LogInfo(msg=f"referee rx_mode={referee_rx_mode} tx_mode={referee_tx_mode}"),
+        LogInfo(msg=f"referee serial device={referee_serial_device} baudrate={referee_serial_baudrate}"),
         auto_aim_node,
         gimbal_solver_node,
         laser_aim_node,
@@ -511,13 +504,23 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "referee_rx_mode",
-                default_value="topic",
+                default_value="serial",
                 description="referee_serial_rx mode: mock/topic/serial",
             ),
             DeclareLaunchArgument(
                 "referee_tx_mode",
-                default_value="topic",
+                default_value="serial",
                 description="referee_serial_tx mode: topic/serial",
+            ),
+            DeclareLaunchArgument(
+                "referee_serial_device",
+                default_value="/dev/ttyUSB20",
+                description="referee serial device path, distinct from gimbal serial device",
+            ),
+            DeclareLaunchArgument(
+                "referee_serial_baudrate",
+                default_value="115200",
+                description="referee serial baudrate",
             ),
             DeclareLaunchArgument(
                 "decision_params_file",

@@ -18,8 +18,8 @@ def generate_launch_description():
         composable_node_descriptions=[
             ComposableNode(
                 package='radar_decision_comm',
-                plugin='radar_decision_comm::RefereeSerialRxComponent',
-                name='referee_serial_rx',
+                plugin='radar_decision_comm::RefereeSerialBridgeComponent',
+                name='referee_serial_bridge',
                 parameters=[params_file],
                 extra_arguments=intra
             ),
@@ -69,13 +69,6 @@ def generate_launch_description():
                 package='radar_decision_comm',
                 plugin='radar_decision_comm::TxSchedulerComponent',
                 name='tx_scheduler',
-                parameters=[params_file],
-                extra_arguments=intra
-            ),
-            ComposableNode(
-                package='radar_decision_comm',
-                plugin='radar_decision_comm::RefereeSerialTxComponent',
-                name='referee_serial_tx',
                 parameters=[params_file],
                 extra_arguments=intra
             ),
