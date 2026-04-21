@@ -21,6 +21,7 @@ setup(
         'console_scripts': [
             'pdu_subscriber_node = radar_pdu_bridge.pdu_subscriber_node:main',
             'shm_pdu_broadcast_node = radar_pdu_bridge.shm_pdu_broadcast_node:main',
+            'radar_decision_sync_shm_node = radar_pdu_bridge.radar_decision_sync_shm_node:main',
         ],
     },
 )

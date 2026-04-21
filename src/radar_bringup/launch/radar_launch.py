@@ -460,6 +460,13 @@ def _build_launch(context):
         ],
     )
 
+    radar_decision_sync_shm_node = Node(
+        package="radar_pdu_bridge",
+        executable="radar_decision_sync_shm_node",
+        name="radar_decision_sync_shm_node",
+        output="screen",
+    )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -481,6 +488,7 @@ def _build_launch(context):
         livox_driver_node,
         cloud_integrator_node,
         shm_pdu_broadcast_node,
+        radar_decision_sync_shm_node,
         radar_hot_path_container,
         radar_debug_container,
         radar_decision_comm_container,
