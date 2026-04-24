@@ -4,9 +4,11 @@
 #include <pcl/point_types.h>
 #include <pcl_conversions/pcl_conversions.h>
 #include <cmath>
+#include <filesystem>
 #include <rclcpp/logging.hpp>
 #include <rclcpp/utilities.hpp>
 #include <future>
+#include <sstream>
 #include "uav_light_detector.h"
 
 // ==================== 全局常量定义 ====================
@@ -16,6 +18,66 @@
 #define MAX_ARMORS 20     // 单车最大装甲板数量
 
 namespace tdt_radar {
+
+namespace {
+
+std::string shellQuote(const std::string& value)
+{
+    std::string quoted = "'";
+    for (char ch : value) {
+        if (ch == '\'') {
+            quoted += "'\\''";
+        } else {
+            quoted.push_back(ch);
+        }
+    }
+    quoted.push_back('\'');
+    return quoted;
+}
+
+bool fileExists(const std::string& path)
+{
+    if (path.empty()) {
+        return false;
+    }
+
+    std::error_code ec;
+    return std::filesystem::exists(path, ec);
+}
+
+int buildTensorRTEngine(
+    const std::string& onnx_path,
+    const std::string& engine_path,
+    int min_batch,
+    int opt_batch,
+    int max_batch,
+    const std::string& shape,
+    const std::string& input_name,
+    bool fp16,
+    const std::vector<std::string>& extra_args = {})
+{
+    std::ostringstream command;
+    command << "python3 src/utils/onnx2trt.py"
+            << " --onnx " << shellQuote(onnx_path)
+            << " --saveEngine " << shellQuote(engine_path)
+            << " --Shape " << shellQuote(shape)
+            << " --minBatch " << min_batch
+            << " --optBatch " << opt_batch
+            << " --maxBatch " << max_batch
+            << " --input_name " << shellQuote(input_name);
+
+    if (fp16) {
+        command << " --fp16";
+    }
+
+    for (const auto& arg : extra_args) {
+        command << " --extraArg " << shellQuote(arg);
+    }
+
+    return std::system(command.str().c_str());
+}
+
+}  // namespace
 
 unsigned int count_img = 0;  // 全局图像帧计数器
 
@@ -296,18 +358,50 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
 
 
     // 6. 加载UAV检测器
-    std::ifstream file_uav(uav_path.c_str());
-    if (!file_uav.good()) {
-        system("python3 src/utils/onnx2trt.py --onnx=model/ONNX/uav.onnx --saveEngine=model/TensorRT/uav.engine --minBatch 1 --optBatch 5 --maxBatch 12 --Shape=1280x1280 --input_name=images");
-    } else {
-        file_uav.close();
+    constexpr float kUavConfThreshold = 0.20f;
+    constexpr float kUavNmsThreshold = 0.25f;
+    constexpr int kUavMinBatch = 1;
+    constexpr int kUavOptBatch = 4;
+    constexpr int kUavMaxBatch = 8;
+    const std::string uav_onnx_path = "model/ONNX/uav.onnx";
+    if (!fileExists(uav_path)) {
+        if (!fileExists(uav_onnx_path)) {
+            RCLCPP_ERROR(
+                this->get_logger(),
+                "[INIT] ❌ UAV engine missing and ONNX not found. engine=%s onnx=%s",
+                uav_path.c_str(), uav_onnx_path.c_str());
+        } else {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "[INIT] UAV engine missing, rebuilding with FP16 dynamic batch profile %d/%d/%d: %s",
+                kUavMinBatch, kUavOptBatch, kUavMaxBatch, uav_path.c_str());
+            const int build_ret = buildTensorRTEngine(
+                uav_onnx_path,
+                uav_path,
+                kUavMinBatch,
+                kUavOptBatch,
+                kUavMaxBatch,
+                "1280x1280",
+                "images",
+                true,
+                {"--profilingVerbosity=detailed"});
+            if (build_ret != 0 || !fileExists(uav_path)) {
+                RCLCPP_ERROR(
+                    this->get_logger(),
+                    "[INIT] ❌ Failed to build UAV engine. return=%d target=%s",
+                    build_ret, uav_path.c_str());
+            }
+        }
     }
 
     RCLCPP_INFO(this->get_logger(), "[INIT] Loading UAV detector from: %s", uav_path.c_str());
-    auto tmp_uav = uav::load(uav_path, 0.6f, 0.65f);
+    auto tmp_uav = uav::load(uav_path, kUavConfThreshold, kUavNmsThreshold);
     if (tmp_uav != nullptr) {
         this->uav_detector = tmp_uav;
-        RCLCPP_INFO(this->get_logger(), "[INIT] ✓ UAV detector loaded successfully! conf=0.5, nms=0.45");
+        RCLCPP_INFO(
+            this->get_logger(),
+            "[INIT] ✓ UAV detector loaded successfully! conf=%.2f, nms=%.2f",
+            kUavConfThreshold, kUavNmsThreshold);
     } else {
         RCLCPP_ERROR(this->get_logger(), "[INIT] ❌ FAILED to load UAV detector from: %s", uav_path.c_str());
         RCLCPP_ERROR(this->get_logger(), "[INIT] Check if file exists, has correct format, or is corrupted");
