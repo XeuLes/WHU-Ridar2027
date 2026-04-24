@@ -14,6 +14,9 @@ add_definitions(-Wall -Werror)
 ## 导出编译命令，供clangd等工具使用
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+## OpenCV 依赖（去畸变/增强节点）
+find_package(OpenCV REQUIRED)
+
 ###########################################################################
 # 2. ROS 2 依赖管理
 ###########################################################################
@@ -72,11 +75,28 @@ rclcpp_components_register_node(${PROJECT_NAME}
 )
 
 ###########################################################################
+# 4.1 图像去畸变组件
+###########################################################################
+ament_auto_add_library(hik_camera_rectifier_component SHARED
+  src/hik_camera_rectifier_node.cpp
+)
+
+target_include_directories(hik_camera_rectifier_component PUBLIC
+  ${OpenCV_INCLUDE_DIRS}
+)
+
+target_link_libraries(hik_camera_rectifier_component
+  ${OpenCV_LIBS}
+)
+
+rclcpp_components_register_node(hik_camera_rectifier_component
+  PLUGIN "hik_camera_ros2_driver::HikCameraRectifierNode"
+  EXECUTABLE hik_camera_rectifier_node
+)
+
+###########################################################################
 # 5. 图像增强节点配置（依赖OpenCV）
 ###########################################################################
-## 查找OpenCV依赖
-find_package(OpenCV REQUIRED)
-
 ## 生成图像增强节点可执行文件
 add_executable(image_enhancer_node
   src/image_enhancer_node.cpp

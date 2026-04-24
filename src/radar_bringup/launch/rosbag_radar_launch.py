@@ -104,7 +104,7 @@ def _build_launch(context):
         parameters=[
             {
                 "out_matrix_path": os.path.join(bringup_config, "out_matrix.yaml"),
-                "camera_params_path": os.path.join(bringup_config, "camera_params.yaml"),
+                "camera_params_path": os.path.join(bringup_config, "camera_params_rect.yaml"),
                 "region_points_path": os.path.join(bringup_config, "RM2025_Points.yaml"),
                 "minimap_path": os.path.join(bringup_config, "RM2025.png"),
                 "uav_publish_default_output": False,
@@ -312,7 +312,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "our_color",
-                default_value="red",
+                default_value="blue",
                 description="our team color: red or blue",
             ),
             DeclareLaunchArgument(

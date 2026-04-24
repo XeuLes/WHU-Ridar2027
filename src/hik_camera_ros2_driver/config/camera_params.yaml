@@ -6,7 +6,7 @@
     camera_serials:
       - "DA7548411"
       - "DA8686636"
-      - "DA9784629"
+      - "DA9784540"
     use_sensor_data_qos: false
 
     # ---------------- cam0（第一台相机） ----------------
@@ -30,7 +30,7 @@
     cam1.camera_topic: "camera1/image"
 
     cam1.acquisition_frame_rate: 100.0
-    cam1.exposure_time: 2000
+    cam1.exposure_time: 20000
     cam1.gain: 20.0
 
     # ---------------- cam2（第三台相机） ----------------
@@ -41,6 +41,6 @@
     cam2.frame_id: "camera2_optical_frame"
     cam2.camera_topic: "camera2/image"
 
-    cam2.acquisition_frame_rate: 30.0
-    cam2.exposure_time: 5000
+    cam2.acquisition_frame_rate: 200.0
+    cam2.exposure_time: 20000
     cam2.gain: 15.0

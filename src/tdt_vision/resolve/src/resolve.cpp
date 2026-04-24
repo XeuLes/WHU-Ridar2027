@@ -46,6 +46,83 @@ static double compute_mad(const std::vector<double>& values, double center)
     return compute_median(std::move(abs_dev));
 }
 
+static cv::Mat makeCameraMatrix64(const cv::Mat& camera_matrix)
+{
+    cv::Mat K;
+    camera_matrix.convertTo(K, CV_64F);
+    return K;
+}
+
+static bool pixelToRectifiedRay(const cv::Point2f& pixel,
+                                const cv::Mat& camera_matrix,
+                                cv::Vec3d& ray_camera)
+{
+    if (camera_matrix.empty()) {
+        return false;
+    }
+
+    const cv::Mat K = makeCameraMatrix64(camera_matrix);
+    const double fx = K.at<double>(0, 0);
+    const double fy = K.at<double>(1, 1);
+    const double cx = K.at<double>(0, 2);
+    const double cy = K.at<double>(1, 2);
+    if (std::abs(fx) < 1e-9 || std::abs(fy) < 1e-9) {
+        return false;
+    }
+
+    ray_camera = cv::Vec3d((pixel.x - cx) / fx, (pixel.y - cy) / fy, 1.0);
+    const double norm = cv::norm(ray_camera);
+    if (norm <= 1e-9) {
+        return false;
+    }
+    ray_camera /= norm;
+    return true;
+}
+
+static void projectPointsRectified(const std::vector<cv::Point3f>& world_points,
+                                   const cv::Mat& world_rvec,
+                                   const cv::Mat& world_tvec,
+                                   const cv::Mat& camera_matrix,
+                                   std::vector<cv::Point2f>& image_points)
+{
+    image_points.clear();
+    image_points.reserve(world_points.size());
+
+    cv::Mat R;
+    cv::Rodrigues(world_rvec, R);
+    R.convertTo(R, CV_64F);
+
+    cv::Mat tvec;
+    world_tvec.convertTo(tvec, CV_64F);
+    if (tvec.rows == 1 && tvec.cols == 3) {
+        tvec = tvec.t();
+    }
+
+    const cv::Mat K = makeCameraMatrix64(camera_matrix);
+    const double fx = K.at<double>(0, 0);
+    const double fy = K.at<double>(1, 1);
+    const double cx = K.at<double>(0, 2);
+    const double cy = K.at<double>(1, 2);
+
+    for (const auto& point : world_points) {
+        cv::Mat pw = (cv::Mat_<double>(3, 1) << point.x, point.y, point.z);
+        cv::Mat pc = R * pw + tvec;
+        const double z = pc.at<double>(2, 0);
+        if (std::abs(z) < 1e-9) {
+            image_points.emplace_back(
+                std::numeric_limits<float>::quiet_NaN(),
+                std::numeric_limits<float>::quiet_NaN());
+            continue;
+        }
+
+        const double x = pc.at<double>(0, 0) / z;
+        const double y = pc.at<double>(1, 0) / z;
+        image_points.emplace_back(
+            static_cast<float>(fx * x + cx),
+            static_cast<float>(fy * y + cy));
+    }
+}
+
 Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     : Node("radar_resolve_node", node_options)
 { 
@@ -430,14 +507,8 @@ bool Resolve::BuildUavCenterRay(const cv::Point2f& pixel,
         return false;
     }
 
-    std::vector<cv::Point2f> src{pixel};
-    std::vector<cv::Point2f> undistorted;
-    cv::undistortPoints(src,
-                        undistorted,
-                        parser_->camera_matrix,
-                        parser_->dist_coeffs);
-    if (undistorted.empty() || !std::isfinite(undistorted[0].x) ||
-        !std::isfinite(undistorted[0].y)) {
+    cv::Vec3d cam_dir_vec;
+    if (!pixelToRectifiedRay(pixel, parser_->camera_matrix, cam_dir_vec)) {
         return false;
     }
 
@@ -456,7 +527,7 @@ bool Resolve::BuildUavCenterRay(const cv::Point2f& pixel,
     }
 
     const cv::Mat cam_dir =
-        (cv::Mat_<double>(3, 1) << undistorted[0].x, undistorted[0].y, 1.0);
+        (cv::Mat_<double>(3, 1) << cam_dir_vec[0], cam_dir_vec[1], cam_dir_vec[2]);
     const cv::Mat world_dir_mat = rot64.t() * cam_dir;
     const cv::Mat cam_origin_mat = -rot64.t() * tvec64;
 
@@ -583,12 +654,11 @@ bool Resolve::SolveUavFrustumMeasurement(
     }
 
     std::vector<cv::Point2f> image_points;
-    cv::projectPoints(world_points,
-                      parser_->world_rvec,
-                      parser_->world_tvec,
-                      parser_->camera_matrix,
-                      parser_->dist_coeffs,
-                      image_points);
+    projectPointsRectified(world_points,
+                           parser_->world_rvec,
+                           parser_->world_tvec,
+                           parser_->camera_matrix,
+                           image_points);
 
     const float margin = static_cast<float>(std::max(0.0, uav_proj_pixel_margin_));
     const cv::Rect2f expanded_roi(

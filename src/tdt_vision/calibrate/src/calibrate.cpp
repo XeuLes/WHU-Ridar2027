@@ -1,8 +1,68 @@
 #include "calibrate.h"
+#include <algorithm>
+#include <initializer_list>
 #include <string>
 
 // 雷达相关功能的命名空间
 namespace tdt_radar {
+
+namespace {
+
+bool readMatrixFromNode(const cv::FileNode& node, cv::Mat& out)
+{
+    if (node.empty()) {
+        return false;
+    }
+
+    node >> out;
+    if (!out.empty()) {
+        return true;
+    }
+
+    const cv::FileNode data = node["data"];
+    if (data.empty() || !data.isSeq()) {
+        return false;
+    }
+
+    std::vector<double> values;
+    values.reserve(data.size());
+    for (auto it = data.begin(); it != data.end(); ++it) {
+        double value = 0.0;
+        (*it) >> value;
+        values.push_back(value);
+    }
+    if (values.empty()) {
+        return false;
+    }
+
+    int rows = static_cast<int>(node["rows"]);
+    int cols = static_cast<int>(node["cols"]);
+    if (rows <= 0 || cols <= 0) {
+        rows = 1;
+        cols = static_cast<int>(values.size());
+    }
+    if (static_cast<size_t>(rows * cols) != values.size()) {
+        return false;
+    }
+
+    out = cv::Mat(rows, cols, CV_64F);
+    std::copy(values.begin(), values.end(), out.ptr<double>(0));
+    return true;
+}
+
+bool readFirstAvailableMatrix(cv::FileStorage& fs,
+                              cv::Mat& out,
+                              std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        if (readMatrixFromNode(fs[key], out)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+}  // namespace
 
 /**
  * @brief Calibrate类构造函数，初始化校准节点及相关资源
@@ -51,8 +111,17 @@ Calibrate::Calibrate(const rclcpp::NodeOptions& options)
     if (!fs.isOpened()) {
         RCLCPP_ERROR(this->get_logger(), "[FATAL] 无法打开 camera_params: %s", camera_params_path.c_str());
     } else {
-        fs["camera_matrix"] >> camera_matrix;
-        fs["dist_coeffs"] >> dist_coeffs;
+        if (!readFirstAvailableMatrix(fs, camera_matrix,
+                                      {"camera_matrix", "K"})) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "[FATAL] camera_params 缺少 camera_matrix/K: %s",
+                         camera_params_path.c_str());
+        }
+        if (!readFirstAvailableMatrix(fs, dist_coeffs,
+                                      {"dist_coeffs", "dist_coeff",
+                                       "distortion_coefficients", "D"})) {
+            dist_coeffs = cv::Mat::zeros(1, 5, CV_64F);
+        }
         fs.release();
     }
 

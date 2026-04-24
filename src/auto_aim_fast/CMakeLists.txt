@@ -13,6 +13,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_components REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
@@ -176,25 +177,25 @@ ament_target_dependencies(auto_aim_fast_core
 )
 
 # -----------------------------
-# Node executable
+# Node component
 # -----------------------------
-add_executable(auto_aim_node
-  src/main.cpp
+add_library(auto_aim_fast_component SHARED
   src/node/auto_aim_node.cpp
 )
 
-target_include_directories(auto_aim_node PUBLIC
+target_include_directories(auto_aim_fast_component PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>
   ${radar_decision_comm_INCLUDE_DIRS}
 )
 
-target_link_libraries(auto_aim_node
+target_link_libraries(auto_aim_fast_component
   auto_aim_fast_core
 )
 
-ament_target_dependencies(auto_aim_node
+ament_target_dependencies(auto_aim_fast_component
   rclcpp
+  rclcpp_components
   sensor_msgs
   geometry_msgs
   std_msgs
@@ -204,14 +205,19 @@ ament_target_dependencies(auto_aim_node
 )
 
 rosidl_get_typesupport_target(cpp_typesupport_target ${PROJECT_NAME} "rosidl_typesupport_cpp")
-target_link_libraries(auto_aim_node ${cpp_typesupport_target})
+target_link_libraries(auto_aim_fast_component ${cpp_typesupport_target})
+
+rclcpp_components_register_node(auto_aim_fast_component
+  PLUGIN "auto_aim_fast::AutoAimNode"
+  EXECUTABLE auto_aim_node
+)
 
 # -----------------------------
 # Install
 # -----------------------------
 install(TARGETS
   auto_aim_fast_core
-  auto_aim_node
+  auto_aim_fast_component
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION lib/${PROJECT_NAME}

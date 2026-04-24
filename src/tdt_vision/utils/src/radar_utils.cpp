@@ -2,12 +2,127 @@
 
 #include <yaml-cpp/yaml.h>
 
+#include <algorithm>
+#include <initializer_list>
 #include <stdexcept>
 
 // 定义装甲板高度常量（单位：米）
 #define ARMOR_HEIGHT 0.15
 
 namespace tdt_radar {
+
+namespace {
+
+bool readMatrixFromNode(const cv::FileNode& node, cv::Mat& out)
+{
+    if (node.empty()) {
+        return false;
+    }
+
+    node >> out;
+    if (!out.empty()) {
+        return true;
+    }
+
+    const cv::FileNode data = node["data"];
+    if (data.empty() || !data.isSeq()) {
+        return false;
+    }
+
+    std::vector<double> values;
+    values.reserve(data.size());
+    for (auto it = data.begin(); it != data.end(); ++it) {
+        double value = 0.0;
+        (*it) >> value;
+        values.push_back(value);
+    }
+    if (values.empty()) {
+        return false;
+    }
+
+    int rows = static_cast<int>(node["rows"]);
+    int cols = static_cast<int>(node["cols"]);
+    if (rows <= 0 || cols <= 0) {
+        rows = 1;
+        cols = static_cast<int>(values.size());
+    }
+    if (static_cast<size_t>(rows * cols) != values.size()) {
+        return false;
+    }
+
+    out = cv::Mat(rows, cols, CV_64F);
+    std::copy(values.begin(), values.end(),
+              out.ptr<double>(0));
+    return true;
+}
+
+bool readFirstAvailableMatrix(cv::FileStorage& fs,
+                              cv::Mat& out,
+                              std::initializer_list<const char*> keys)
+{
+    for (const char* key : keys) {
+        if (readMatrixFromNode(fs[key], out)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+cv::Mat makeCameraMatrix3x3(const cv::Mat& camera_matrix)
+{
+    cv::Mat K;
+    camera_matrix.convertTo(K, CV_64F);
+    if (K.rows == 3 && K.cols == 3) {
+        return K;
+    }
+    throw std::runtime_error("camera_matrix must be 3x3");
+}
+
+void projectPointsNoDistortion(const std::vector<cv::Point3f>& world_points,
+                               const cv::Mat& world_rvec,
+                               const cv::Mat& world_tvec,
+                               const cv::Mat& camera_matrix,
+                               std::vector<cv::Point2f>& image_points)
+{
+    image_points.clear();
+    image_points.reserve(world_points.size());
+
+    cv::Mat R;
+    cv::Rodrigues(world_rvec, R);
+    R.convertTo(R, CV_64F);
+
+    cv::Mat tvec;
+    world_tvec.convertTo(tvec, CV_64F);
+    if (tvec.rows == 1 && tvec.cols == 3) {
+        tvec = tvec.t();
+    }
+
+    const cv::Mat K = makeCameraMatrix3x3(camera_matrix);
+    const double fx = K.at<double>(0, 0);
+    const double fy = K.at<double>(1, 1);
+    const double cx = K.at<double>(0, 2);
+    const double cy = K.at<double>(1, 2);
+
+    for (const auto& point : world_points) {
+        cv::Mat pw = (cv::Mat_<double>(3, 1) << point.x, point.y, point.z);
+        cv::Mat pc = R * pw + tvec;
+        const double z = pc.at<double>(2, 0);
+        if (std::abs(z) < 1e-9) {
+            image_points.emplace_back(
+                std::numeric_limits<float>::quiet_NaN(),
+                std::numeric_limits<float>::quiet_NaN());
+            continue;
+        }
+
+        const double x = pc.at<double>(0, 0) / z;
+        const double y = pc.at<double>(1, 0) / z;
+        image_points.emplace_back(
+            static_cast<float>(fx * x + cx),
+            static_cast<float>(fy * y + cy));
+    }
+}
+
+}  // namespace
 
 /**
  * @brief 判断2D点是否在屏幕范围内
@@ -49,8 +164,17 @@ parser::parser(const std::string& out_matrix_path,
             throw std::runtime_error("Failed to open camera_params yaml: " +
                                      camera_params_path_);
         }
-        fs1["camera_matrix"] >> this->camera_matrix;
-        fs1["dist_coeffs"] >> this->dist_coeffs;
+        if (!readFirstAvailableMatrix(fs1, this->camera_matrix,
+                                      {"camera_matrix", "K"})) {
+            throw std::runtime_error(
+                "Missing camera_matrix/K in camera params: " +
+                camera_params_path_);
+        }
+        if (!readFirstAvailableMatrix(fs1, this->dist_coeffs,
+                                      {"dist_coeffs", "dist_coeff",
+                                       "distortion_coefficients", "D"})) {
+            this->dist_coeffs = cv::Mat::zeros(1, 5, CV_64F);
+        }
         fs1.release();
     }
 
@@ -180,8 +304,8 @@ cv::Point2f parser::get_2d(cv::Point2f& input_point, float height)
 
     // 投影到图像得到 2D 对应点
     std::vector<cv::Point2f> image_points;
-    cv::projectPoints(world_points, world_rvec, world_tvec,
-                      camera_matrix, dist_coeffs, image_points);
+    projectPointsNoDistortion(world_points, world_rvec, world_tvec,
+                              camera_matrix, image_points);
 
     // 参考点在世界2D（忽略 z）
     std::vector<cv::Point2f> world_points2D;
@@ -256,8 +380,8 @@ Parser_Points::Float2Int(std::vector<cv::Point2f>& FloatPoint)
 void Parser_Points::World2Camera()
 {
     std::vector<cv::Point2f> temp_2D;
-    cv::projectPoints(Points_3D, world_rvec, world_tvec,
-                      camera_matrix, dist_coeffs, temp_2D);
+    projectPointsNoDistortion(Points_3D, world_rvec, world_tvec,
+                              camera_matrix, temp_2D);
     Points_2D = Float2Int(temp_2D);
 }
 
@@ -277,8 +401,17 @@ Parser_Points::Parser_Points(const std::string& points_name,
             throw std::runtime_error("Failed to open camera_params yaml: " +
                                      camera_params_path_);
         }
-        fs["camera_matrix"] >> this->camera_matrix;
-        fs["dist_coeffs"] >> this->dist_coeffs;
+        if (!readFirstAvailableMatrix(fs, this->camera_matrix,
+                                      {"camera_matrix", "K"})) {
+            throw std::runtime_error(
+                "Missing camera_matrix/K in camera params: " +
+                camera_params_path_);
+        }
+        if (!readFirstAvailableMatrix(fs, this->dist_coeffs,
+                                      {"dist_coeffs", "dist_coeff",
+                                       "distortion_coefficients", "D"})) {
+            this->dist_coeffs = cv::Mat::zeros(1, 5, CV_64F);
+        }
         fs.release();
     }
 

@@ -13,6 +13,7 @@
 // cv_bridge for publishing debug images
 #include <cv_bridge/cv_bridge.h>
 #include <sensor_msgs/image_encodings.hpp>
+#include <rclcpp_components/register_node_macro.hpp>
 
 namespace auto_aim_fast
 {
@@ -63,6 +64,8 @@ static rclcpp::QoS makeInfoQoS()
 AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
 : rclcpp::Node("auto_aim_node", options)
 {
+  cv::setNumThreads(3);
+
   this->declare_parameter<std::string>("image_topic", "/camera0/image");
   this->declare_parameter<std::string>("camera_info_topic", "/camera0/camera_info");
   this->declare_parameter<bool>("use_referee_identity_color", true);
@@ -613,3 +616,5 @@ void AutoAimNode::onReport()
 }
 
 }  // namespace auto_aim_fast
+
+RCLCPP_COMPONENTS_REGISTER_NODE(auto_aim_fast::AutoAimNode)

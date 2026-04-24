@@ -4,7 +4,8 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer
+from launch_ros.descriptions import ComposableNode
 
 
 def generate_launch_description():
@@ -29,6 +30,7 @@ def generate_launch_description():
     yolo_use_fp16 = LaunchConfiguration("yolo_use_fp16")
     yolo_class_id = LaunchConfiguration("yolo_class_id")
     yolo_swap_rb_input = LaunchConfiguration("yolo_swap_rb_input")
+    intra = [{"use_intra_process_comms": True}]
 
     stdout_linebuf_envvar = SetEnvironmentVariable("RCUTILS_LOGGING_BUFFERED_STREAM", "1")
     colorized_output_envvar = SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1")
@@ -118,40 +120,62 @@ def generate_launch_description():
         default_value="false",
         description="Swap R/B channels before YOLO inference",
     )
-    hik_camera_node = Node(
-        package="hik_camera_ros2_driver",
-        executable="hik_camera_ros2_driver_node",
-        name="hik_camera_ros2_driver",
-        output="screen",
-        parameters=[hik_params_file],
-        arguments=["--ros-args", "--log-level", log_level],
-    )
-
-    auto_aim_node = Node(
-        package="auto_aim_fast",
-        executable="auto_aim_node",
-        name="auto_aim_node",
-        output="screen",
-        parameters=[
-            tracker_file,
-            camera_file,
-            detector_file,
-            qos_file,
-            info_file,
-            {
-                "detector.mode": detector_mode,
-                "detector.yolo.engine_path": yolo_engine_path,
-                "detector.yolo.input_w": yolo_input_w,
-                "detector.yolo.input_h": yolo_input_h,
-                "detector.yolo.conf_thresh": yolo_conf_thresh,
-                "detector.yolo.kpt_conf_thresh": yolo_kpt_conf_thresh,
-                "detector.yolo.max_det": yolo_max_det,
-                "detector.yolo.use_fp16_input": yolo_use_fp16,
-                "detector.yolo.target_class_id": yolo_class_id,
-                "detector.yolo.swap_rb_input": yolo_swap_rb_input,
-            },
+    pipeline_container = ComposableNodeContainer(
+        name="auto_aim_pipeline_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        composable_node_descriptions=[
+            ComposableNode(
+                package="hik_camera_ros2_driver",
+                plugin="hik_camera_ros2_driver::HikCameraRos2DriverNode",
+                name="hik_camera_ros2_driver",
+                parameters=[hik_params_file],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="hik_camera_ros2_driver",
+                plugin="hik_camera_ros2_driver::HikCameraRectifierNode",
+                name="camera1_rectifier",
+                parameters=[
+                    {
+                        "input_image_topic": "/camera1/image",
+                        "input_camera_info_topic": "/camera1/camera_info",
+                        "output_image_topic": "/camera1_rect/image",
+                        "output_camera_info_topic": "/camera1_rect/camera_info",
+                        "use_sensor_data_qos": True,
+                    }
+                ],
+                extra_arguments=intra,
+            ),
+            ComposableNode(
+                package="auto_aim_fast",
+                plugin="auto_aim_fast::AutoAimNode",
+                name="auto_aim_node",
+                parameters=[
+                    tracker_file,
+                    camera_file,
+                    detector_file,
+                    qos_file,
+                    info_file,
+                    {
+                        "detector.mode": detector_mode,
+                        "detector.yolo.engine_path": yolo_engine_path,
+                        "detector.yolo.input_w": yolo_input_w,
+                        "detector.yolo.input_h": yolo_input_h,
+                        "detector.yolo.conf_thresh": yolo_conf_thresh,
+                        "detector.yolo.kpt_conf_thresh": yolo_kpt_conf_thresh,
+                        "detector.yolo.max_det": yolo_max_det,
+                        "detector.yolo.use_fp16_input": yolo_use_fp16,
+                        "detector.yolo.target_class_id": yolo_class_id,
+                        "detector.yolo.swap_rb_input": yolo_swap_rb_input,
+                    },
+                ],
+                extra_arguments=intra,
+            ),
         ],
         arguments=["--ros-args", "--log-level", log_level],
+        output="screen",
     )
 
     ld = LaunchDescription()
@@ -174,6 +198,5 @@ def generate_launch_description():
     ld.add_action(declare_yolo_use_fp16)
     ld.add_action(declare_yolo_class_id)
     ld.add_action(declare_yolo_swap_rb)
-    ld.add_action(hik_camera_node)
-    ld.add_action(auto_aim_node)
+    ld.add_action(pipeline_container)
     return ld

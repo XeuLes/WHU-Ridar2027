@@ -212,17 +212,28 @@ bool GimbalAimSolverNode::selectTargetWorldPoint(
     msg->poses[0].position.y,
     msg->poses[0].position.z);
 
+  const auto is_zero_point = [](const Eigen::Vector3d& p) {
+    constexpr double kZeroPointEps = 1e-6;
+    return std::abs(p.x()) <= kZeroPointEps &&
+           std::abs(p.y()) <= kZeroPointEps &&
+           std::abs(p.z()) <= kZeroPointEps;
+  };
+
   const bool red_valid = isFinitePoint(red_p);
   const bool blue_valid = isFinitePoint(blue_p);
+  const bool red_zero = is_zero_point(red_p);
+  const bool blue_zero = is_zero_point(blue_p);
 
   if (target_side_ == "red") {
-    if (!red_valid) {
+    if (!red_valid || red_zero) {
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 1000,
         "target_side=red but red position invalid. "
-        "red=(%.3f, %.3f, %.3f), blue_valid=%s",
+        "red=(%.3f, %.3f, %.3f), red_zero=%s, blue_valid=%s, blue_zero=%s",
         red_p.x(), red_p.y(), red_p.z(),
-        blue_valid ? "true" : "false");
+        red_zero ? "true" : "false",
+        blue_valid ? "true" : "false",
+        blue_zero ? "true" : "false");
       return false;
     }
 
@@ -231,13 +242,15 @@ bool GimbalAimSolverNode::selectTargetWorldPoint(
   }
 
   if (target_side_ == "blue") {
-    if (!blue_valid) {
+    if (!blue_valid || blue_zero) {
       RCLCPP_WARN_THROTTLE(
         this->get_logger(), *this->get_clock(), 1000,
         "target_side=blue but blue position invalid. "
-        "blue=(%.3f, %.3f, %.3f), red_valid=%s",
+        "blue=(%.3f, %.3f, %.3f), blue_zero=%s, red_valid=%s, red_zero=%s",
         blue_p.x(), blue_p.y(), blue_p.z(),
-        red_valid ? "true" : "false");
+        blue_zero ? "true" : "false",
+        red_valid ? "true" : "false",
+        red_zero ? "true" : "false");
       return false;
     }
 

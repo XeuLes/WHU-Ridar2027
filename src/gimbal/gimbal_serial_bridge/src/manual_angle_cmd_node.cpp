@@ -3,6 +3,7 @@
 #include <std_msgs/msg/bool.hpp>
 
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -14,6 +15,7 @@
 #include <termios.h>
 #include <unistd.h>
 #include <poll.h>
+#include <fcntl.h>
 
 using namespace std::chrono_literals;
 
@@ -24,7 +26,7 @@ public:
         : Node("manual_angle_cmd_node", options)
     {
         // 改为手动累计量输出话题，不再直发最终控制话题
-        declare_parameter<std::string>("cmd_topic", "/gimbal/command_angles");
+        declare_parameter<std::string>("cmd_topic", "/gimbal/command_angles_manual");
         declare_parameter<std::string>("enable_topic", "/gimbal/enable");
 
         declare_parameter<double>("yaw_deg", 0.0);
@@ -135,15 +137,31 @@ private:
 
     void keyboardLoop()
     {
-        if (!::isatty(STDIN_FILENO)) {
-            RCLCPP_WARN(
+        int kb_fd = STDIN_FILENO;
+        bool close_kb_fd = false;
+
+        if (!::isatty(kb_fd)) {
+            kb_fd = ::open("/dev/tty", O_RDWR | O_NOCTTY);
+            if (kb_fd < 0 || !::isatty(kb_fd)) {
+                if (kb_fd >= 0) {
+                    ::close(kb_fd);
+                }
+                RCLCPP_WARN(
+                    get_logger(),
+                    "No TTY available for keyboard control. Start this node from a foreground terminal.");
+                return;
+            }
+            close_kb_fd = true;
+            RCLCPP_INFO(
                 get_logger(),
-                "STDIN is not a TTY. Keyboard AWSD control is disabled. Start this node in a foreground terminal.");
-            return;
+                "STDIN is not a TTY. Falling back to /dev/tty for keyboard control.");
         }
 
         termios oldt {};
-        if (tcgetattr(STDIN_FILENO, &oldt) != 0) {
+        if (tcgetattr(kb_fd, &oldt) != 0) {
+            if (close_kb_fd) {
+                ::close(kb_fd);
+            }
             RCLCPP_WARN(get_logger(), "tcgetattr failed, keyboard control disabled.");
             return;
         }
@@ -153,18 +171,24 @@ private:
         newt.c_cc[VMIN] = 0;
         newt.c_cc[VTIME] = 0;
 
-        if (tcsetattr(STDIN_FILENO, TCSANOW, &newt) != 0) {
+        if (tcsetattr(kb_fd, TCSANOW, &newt) != 0) {
+            if (close_kb_fd) {
+                ::close(kb_fd);
+            }
             RCLCPP_WARN(get_logger(), "tcsetattr failed, keyboard control disabled.");
             return;
         }
 
-        auto restore = [&]() {
-            tcsetattr(STDIN_FILENO, TCSANOW, &oldt);
+        auto restore = [&, kb_fd, close_kb_fd]() {
+            tcsetattr(kb_fd, TCSANOW, &oldt);
+            if (close_kb_fd) {
+                ::close(kb_fd);
+            }
         };
 
         while (!quit_.load()) {
             pollfd pfd {};
-            pfd.fd = STDIN_FILENO;
+            pfd.fd = kb_fd;
             pfd.events = POLLIN;
 
             const int pr = ::poll(&pfd, 1, 100);
@@ -182,7 +206,7 @@ private:
             }
 
             char ch = 0;
-            const ssize_t n = ::read(STDIN_FILENO, &ch, 1);
+            const ssize_t n = ::read(kb_fd, &ch, 1);
             if (n <= 0) {
                 continue;
             }

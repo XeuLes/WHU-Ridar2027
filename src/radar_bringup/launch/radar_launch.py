@@ -62,7 +62,7 @@ def _build_launch(context):
     hik_params_file = os.path.join(hik_share, "config", "camera_params.yaml")
     map_pcd_path = os.path.join(localization_share, "config", "基础制造_rm_frame.pcd")
     camera_extrinsic_yaml = os.path.join(bringup_config, "out_matrix_gc.yaml")
-    resolve_camera_params_yaml = os.path.join(bringup_config, "camera_params.yaml")
+    resolve_camera_params_yaml = os.path.join(bringup_config, "camera_params_rect.yaml")
     resolve_region_points_yaml = os.path.join(bringup_config, "GCZX_Points.yaml")
     resolve_minimap_png = os.path.join(bringup_config, "jichuzhizao.png")
     camera_to_lidar_yaml = os.path.join(localization_share, "config", "camera_to_lidar.yaml")
@@ -83,6 +83,23 @@ def _build_launch(context):
 
     intra = [{"use_intra_process_comms": True}]
 
+    def make_rectifier_component(camera_name: str):
+        return ComposableNode(
+            package="hik_camera_ros2_driver",
+            plugin="hik_camera_ros2_driver::HikCameraRectifierNode",
+            name=f"{camera_name}_rectifier",
+            parameters=[
+                {
+                    "input_image_topic": f"/{camera_name}/image",
+                    "input_camera_info_topic": f"/{camera_name}/camera_info",
+                    "output_image_topic": f"/{camera_name}_rect/image",
+                    "output_camera_info_topic": f"/{camera_name}_rect/camera_info",
+                    "use_sensor_data_qos": True,
+                }
+            ],
+            extra_arguments=intra,
+        )
+
     hik_camera_component = ComposableNode(
         package="hik_camera_ros2_driver",
         plugin="hik_camera_ros2_driver::HikCameraRos2DriverNode",
@@ -95,9 +112,13 @@ def _build_launch(context):
         package="tdt_vision",
         plugin="tdt_radar::Detect",
         name="radar_detect_node",
-        parameters=[{"image_topic": "/camera0/image"}],
+        parameters=[{"image_topic": "/camera0_rect/image"}],
         extra_arguments=intra,
     )
+
+    camera0_rectifier_component = make_rectifier_component("camera0")
+    camera1_rectifier_component = make_rectifier_component("camera1")
+    camera2_rectifier_component = make_rectifier_component("camera2")
 
     localization_component = ComposableNode(
         package="localization",
@@ -205,6 +226,24 @@ def _build_launch(context):
         extra_arguments=intra,
     )
 
+    auto_aim_component = ComposableNode(
+        package="auto_aim_fast",
+        plugin="auto_aim_fast::AutoAimNode",
+        name="auto_aim_node",
+        parameters=[
+            auto_aim_tracker_cfg,
+            auto_aim_camera_cfg,
+            auto_aim_detector_cfg,
+            auto_aim_qos_cfg,
+            auto_aim_info_cfg,
+            {
+                "detector.target_color": team["aim_target_color"],
+                "detector.yolo.swap_rb_input": team["aim_swap_rb_input"],
+            },
+        ],
+        extra_arguments=intra,
+    )
+
     radar_hot_path_container = ComposableNodeContainer(
         name="radar_hot_path_container",
         namespace="",
@@ -213,6 +252,10 @@ def _build_launch(context):
         composable_node_descriptions=[
             hik_camera_component,
             detect_component,
+            camera0_rectifier_component,
+            camera1_rectifier_component,
+            camera2_rectifier_component,
+            auto_aim_component,
         ],
         output="both",
         emulate_tty=True,
@@ -326,25 +369,6 @@ def _build_launch(context):
                 extra_arguments=intra,
             ),
         ],
-    )
-
-    auto_aim_node = Node(
-        package="auto_aim_fast",
-        executable="auto_aim_node",
-        name="auto_aim_node",
-        output="screen",
-        parameters=[
-            auto_aim_tracker_cfg,
-            auto_aim_camera_cfg,
-            auto_aim_detector_cfg,
-            auto_aim_qos_cfg,
-            auto_aim_info_cfg,
-            {
-                "detector.target_color": team["aim_target_color"],
-                "detector.yolo.swap_rb_input": team["aim_swap_rb_input"],
-            },
-        ],
-        arguments=["--ros-args", "--log-level", "info"],
     )
 
     gimbal_solver_node = Node(
@@ -480,7 +504,6 @@ def _build_launch(context):
         LogInfo(msg=f"decision params file: {decision_params_file}"),
         LogInfo(msg=f"referee rx_mode={referee_rx_mode} tx_mode={referee_tx_mode}"),
         LogInfo(msg=f"referee serial device={referee_serial_device} baudrate={referee_serial_baudrate}"),
-        auto_aim_node,
         gimbal_solver_node,
         laser_aim_node,
         gimbal_bridge_node,
@@ -507,7 +530,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "our_color",
-                default_value="red",
+                default_value="blue",
                 description="our team color: red or blue",
             ),
             DeclareLaunchArgument(

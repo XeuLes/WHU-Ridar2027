@@ -4,7 +4,8 @@ from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
 
 
 def generate_launch_description():
@@ -16,6 +17,7 @@ def generate_launch_description():
     log_level = LaunchConfiguration("log_level")
     enhancer_input_topic = LaunchConfiguration("enhancer_input_topic")
     enhancer_output_topic = LaunchConfiguration("enhancer_output_topic")
+    intra = [{"use_intra_process_comms": True}]
     
     # 明确写死RViz配置文件路径（固定为config目录下的camera.rviz）
     rviz_config_path = os.path.join(bringup_dir, "config", "camera.rviz")
@@ -39,22 +41,51 @@ def generate_launch_description():
 
     declare_enhancer_input_cmd = DeclareLaunchArgument(
         "enhancer_input_topic", 
-        default_value="/camera/image",  # 默认与相机输出话题匹配
+        default_value="/camera1_rect/image",
         description="图像增强节点的输入话题"
     )
 
     declare_enhancer_output_cmd = DeclareLaunchArgument(
         "enhancer_output_topic", 
-        default_value="/camera/enhance", 
+        default_value="/camera1_rect/enhance", 
         description="图像增强节点的输出话题"
     )
 
-    # 相机驱动节点
-    start_hik_camera_cmd = Node(
-        name="hik_camera_ros2_driver",
-        package="hik_camera_ros2_driver",
-        executable="hik_camera_ros2_driver_node",
-        parameters=[params_file],
+    def rectifier_component(camera_name):
+        return ComposableNode(
+            package="hik_camera_ros2_driver",
+            plugin="hik_camera_ros2_driver::HikCameraRectifierNode",
+            name=f"{camera_name}_rectifier",
+            parameters=[
+                {
+                    "input_image_topic": f"/{camera_name}/image",
+                    "input_camera_info_topic": f"/{camera_name}/camera_info",
+                    "output_image_topic": f"/{camera_name}_rect/image",
+                    "output_camera_info_topic": f"/{camera_name}_rect/camera_info",
+                    "use_sensor_data_qos": True,
+                }
+            ],
+            extra_arguments=intra,
+        )
+
+    # 相机驱动+去畸变组件容器
+    start_hik_camera_cmd = ComposableNodeContainer(
+        name="hik_camera_with_rectifier_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        composable_node_descriptions=[
+            ComposableNode(
+                package="hik_camera_ros2_driver",
+                plugin="hik_camera_ros2_driver::HikCameraRos2DriverNode",
+                name="hik_camera_ros2_driver",
+                parameters=[params_file],
+                extra_arguments=intra,
+            ),
+            rectifier_component("camera0"),
+            rectifier_component("camera1"),
+            rectifier_component("camera2"),
+        ],
         arguments=["--ros-args", "--log-level", log_level],
         output="screen",
     )
