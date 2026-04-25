@@ -128,22 +128,20 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
       yp.max_det = yolo_params_.max_det;
       yp.target_class_id = yolo_params_.target_class_id;
       yp.conf_thresh = yolo_params_.conf_thresh;
+      yp.nms_thresh = yolo_params_.nms_thresh;
       yp.kpt_conf_thresh = yolo_params_.kpt_conf_thresh;
+      yp.min_w_ratio = yolo_params_.min_w_ratio;
+      yp.min_h_ratio = yolo_params_.min_h_ratio;
+      yp.min_area_ratio = yolo_params_.min_area_ratio;
       yp.require_outer_corners = yolo_params_.require_outer_corners;
       yp.use_fp16_input = yolo_params_.use_fp16_input;
+      yp.swap_rb_input = yolo_params_.swap_rb_input;
       yp.outer_corner_indices = yolo_params_.outer_corner_indices;
       yolo_init_ok_ = yolo_detector_->init(yp);
     }
 
     if (yolo_init_ok_ && yolo_detector_->isReady()) {
-      cv::Mat yolo_input = pre.bgr;
-      cv::Mat swapped;
-      if (yolo_params_.swap_rb_input) {
-        cv::cvtColor(pre.bgr, swapped, cv::COLOR_BGR2RGB);
-        yolo_input = swapped;
-      }
-
-      pairs = yolo_detector_->detectDetailed(yolo_input);
+      pairs = yolo_detector_->detectDetailed(pre.bgr);
 
       cv::Mat dbg = pre.bgr.clone();
       for (const auto & pr : pairs) {

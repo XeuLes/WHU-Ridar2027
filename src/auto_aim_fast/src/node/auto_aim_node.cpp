@@ -148,7 +148,11 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("detector.yolo.max_det", 300);
   this->declare_parameter<int>("detector.yolo.target_class_id", 0);
   this->declare_parameter<double>("detector.yolo.conf_thresh", 0.45);
+  this->declare_parameter<double>("detector.yolo.nms_thresh", 0.45);
   this->declare_parameter<double>("detector.yolo.kpt_conf_thresh", 0.35);
+  this->declare_parameter<double>("detector.yolo.min_w_ratio", 0.045);
+  this->declare_parameter<double>("detector.yolo.min_h_ratio", 0.055);
+  this->declare_parameter<double>("detector.yolo.min_area_ratio", 0.0025);
   this->declare_parameter<bool>("detector.yolo.require_outer_corners", true);
   this->declare_parameter<bool>("detector.yolo.use_fp16_input", true);
   this->declare_parameter<bool>("detector.yolo.swap_rb_input", false);
@@ -256,8 +260,16 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   yp.target_class_id = this->get_parameter("detector.yolo.target_class_id").as_int();
   yp.conf_thresh =
       static_cast<float>(this->get_parameter("detector.yolo.conf_thresh").as_double());
+  yp.nms_thresh =
+      static_cast<float>(this->get_parameter("detector.yolo.nms_thresh").as_double());
   yp.kpt_conf_thresh =
       static_cast<float>(this->get_parameter("detector.yolo.kpt_conf_thresh").as_double());
+  yp.min_w_ratio =
+      static_cast<float>(this->get_parameter("detector.yolo.min_w_ratio").as_double());
+  yp.min_h_ratio =
+      static_cast<float>(this->get_parameter("detector.yolo.min_h_ratio").as_double());
+  yp.min_area_ratio =
+      static_cast<float>(this->get_parameter("detector.yolo.min_area_ratio").as_double());
   yp.require_outer_corners =
       this->get_parameter("detector.yolo.require_outer_corners").as_bool();
   yp.use_fp16_input =

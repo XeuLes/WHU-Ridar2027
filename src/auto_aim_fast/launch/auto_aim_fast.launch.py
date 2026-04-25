@@ -25,6 +25,7 @@ def generate_launch_description():
     yolo_input_w = LaunchConfiguration("yolo_input_w")
     yolo_input_h = LaunchConfiguration("yolo_input_h")
     yolo_conf_thresh = LaunchConfiguration("yolo_conf_thresh")
+    yolo_nms_thresh = LaunchConfiguration("yolo_nms_thresh")
     yolo_kpt_conf_thresh = LaunchConfiguration("yolo_kpt_conf_thresh")
     yolo_max_det = LaunchConfiguration("yolo_max_det")
     yolo_use_fp16 = LaunchConfiguration("yolo_use_fp16")
@@ -77,7 +78,7 @@ def generate_launch_description():
     )
     declare_yolo_engine_path = DeclareLaunchArgument(
         "yolo_engine_path",
-        default_value=os.path.join(aim_share, "model", "best-fp16.engine"),
+        default_value=os.path.join(aim_share, "model", "auto_aim_iter2.engine"),
         description="TensorRT engine path for YOLO pose detector",
     )
     declare_yolo_input_w = DeclareLaunchArgument(
@@ -92,8 +93,13 @@ def generate_launch_description():
     )
     declare_yolo_conf_thresh = DeclareLaunchArgument(
         "yolo_conf_thresh",
-        default_value="0.35",
+        default_value="0.45",
         description="YOLO object confidence threshold",
+    )
+    declare_yolo_nms_thresh = DeclareLaunchArgument(
+        "yolo_nms_thresh",
+        default_value="0.45",
+        description="YOLO NMS IoU threshold for raw pose output",
     )
     declare_yolo_kpt_conf_thresh = DeclareLaunchArgument(
         "yolo_kpt_conf_thresh",
@@ -102,7 +108,7 @@ def generate_launch_description():
     )
     declare_yolo_max_det = DeclareLaunchArgument(
         "yolo_max_det",
-        default_value="32",
+        default_value="300",
         description="YOLO max detections per frame",
     )
     declare_yolo_use_fp16 = DeclareLaunchArgument(
@@ -117,7 +123,7 @@ def generate_launch_description():
     )
     declare_yolo_swap_rb = DeclareLaunchArgument(
         "yolo_swap_rb_input",
-        default_value="false",
+        default_value="true",
         description="Swap R/B channels before YOLO inference",
     )
     pipeline_container = ComposableNodeContainer(
@@ -164,6 +170,7 @@ def generate_launch_description():
                         "detector.yolo.input_w": yolo_input_w,
                         "detector.yolo.input_h": yolo_input_h,
                         "detector.yolo.conf_thresh": yolo_conf_thresh,
+                        "detector.yolo.nms_thresh": yolo_nms_thresh,
                         "detector.yolo.kpt_conf_thresh": yolo_kpt_conf_thresh,
                         "detector.yolo.max_det": yolo_max_det,
                         "detector.yolo.use_fp16_input": yolo_use_fp16,
@@ -193,6 +200,7 @@ def generate_launch_description():
     ld.add_action(declare_yolo_input_w)
     ld.add_action(declare_yolo_input_h)
     ld.add_action(declare_yolo_conf_thresh)
+    ld.add_action(declare_yolo_nms_thresh)
     ld.add_action(declare_yolo_kpt_conf_thresh)
     ld.add_action(declare_yolo_max_det)
     ld.add_action(declare_yolo_use_fp16)

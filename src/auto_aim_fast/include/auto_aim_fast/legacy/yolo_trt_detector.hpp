@@ -26,9 +26,14 @@ public:
     int max_det = 300;
     int target_class_id = 0;
     float conf_thresh = 0.45f;
+    float nms_thresh = 0.45f;
     float kpt_conf_thresh = 0.35f;
+    float min_w_ratio = 0.045f;
+    float min_h_ratio = 0.055f;
+    float min_area_ratio = 0.0025f;
     bool require_outer_corners = true;
     bool use_fp16_input = true;
+    bool swap_rb_input = false;
     std::array<int, 4> outer_corner_indices = {0, 4, 7, 3}; // lt, lb, rb, rt from 8 kpts
   };
 
@@ -59,6 +64,13 @@ private:
   struct Logger : public nvinfer1::ILogger
   {
     void log(Severity severity, const char* msg) noexcept override;
+  };
+
+  enum class OutputFormat
+  {
+    POST_NMS_XYXY = 0,
+    RAW_ULTRALYTICS_POSE = 1,
+    RAW_ULTRALYTICS_DETECT = 2
   };
 
   struct LetterboxMeta
@@ -97,6 +109,8 @@ private:
   size_t output_bytes_ = 0;
   int output_det_count_ = 0;
   int output_det_stride_ = 0;
+  int output_class_count_ = 1;
+  OutputFormat output_format_ = OutputFormat::POST_NMS_XYXY;
 
   void* d_input_ = nullptr;
   void* d_output_ = nullptr;
@@ -114,4 +128,16 @@ extern "C" bool yolo_letterbox_bgr8_to_half(
   float scale,
   float pad_x,
   float pad_y,
+  bool swap_rb,
+  cudaStream_t stream);
+
+extern "C" bool yolo_letterbox_bgr8_to_float(
+  const cv::cuda::GpuMat& d_bgr,
+  void* d_out,
+  int dst_w,
+  int dst_h,
+  float scale,
+  float pad_x,
+  float pad_y,
+  bool swap_rb,
   cudaStream_t stream);

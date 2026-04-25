@@ -83,7 +83,7 @@ laser_aim_controller_node:
     camera_cx: 837.89
     camera_cy: 625.51
 
-    laser_pixel_uv: [803.0, 137.0]
+    laser_pixel_uv: [923.0, 368.0]
 
     # ==================== pixel zone ====================
     pixel_far_error_px: 300.0

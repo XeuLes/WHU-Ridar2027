@@ -27,7 +27,7 @@ public:
     topic_ = this->declare_parameter<std::string>("topic", "/camera1/image");
     save_dir_ = this->declare_parameter<std::string>("save_dir", "/tmp/camera1_frames");
     image_format_ = this->declare_parameter<std::string>("image_format", "jpg");   // jpg/png
-    save_every_n_ = this->declare_parameter<int>("save_every_n", 1);                // 每N帧存1张
+    save_every_n_ = this->declare_parameter<int>("save_every_n", 30);                // 每N帧存1张
     jpeg_quality_ = this->declare_parameter<int>("jpeg_quality", 95);               // jpg质量
     png_compression_ = this->declare_parameter<int>("png_compression", 3);          // png压缩级别 0~9
     use_timestamp_name_ = this->declare_parameter<bool>("use_timestamp_name", false);
@@ -221,7 +221,7 @@ int main(int argc, char ** argv)
   return 0;
 } 
 // ros2 run hik_camera_ros2_driver image_saver_node --ros-args 
-//   -p save_dir:=/home/user/DATA/jiguangmokuai/image1 
+//   -p save_dir:=/home/user/DATA/jiguangmokuai_2/image1 
 //   -p save_every_n:=1
 
 

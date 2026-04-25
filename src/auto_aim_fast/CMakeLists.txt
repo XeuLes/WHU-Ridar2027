@@ -227,7 +227,7 @@ install(DIRECTORY include/
   DESTINATION include/
 )
 
-install(DIRECTORY launch config msg
+install(DIRECTORY launch config msg model
   DESTINATION share/${PROJECT_NAME}
 )
 

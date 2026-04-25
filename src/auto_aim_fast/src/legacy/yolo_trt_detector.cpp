@@ -23,6 +23,7 @@ extern "C" bool yolo_letterbox_bgr8_to_half(
   float scale,
   float pad_x,
   float pad_y,
+  bool swap_rb,
   cudaStream_t stream);
 
 extern "C" bool yolo_letterbox_bgr8_to_float(
@@ -33,6 +34,7 @@ extern "C" bool yolo_letterbox_bgr8_to_float(
   float scale,
   float pad_x,
   float pad_y,
+  bool swap_rb,
   cudaStream_t stream);
 
 namespace auto_aim_fast
@@ -44,6 +46,8 @@ constexpr int kExpectedKptNum = 8;
 constexpr int kExpectedKptDim = 3;
 constexpr int kPerDetBase = 6;
 constexpr int kExpectedStride = kPerDetBase + kExpectedKptNum * kExpectedKptDim;  // 30
+constexpr int kRawBoxFields = 4;
+constexpr int kRawKptFields = kExpectedKptNum * kExpectedKptDim;
 
 float clampf(float v, float lo, float hi)
 {
@@ -100,9 +104,53 @@ size_t dataTypeBytes(nvinfer1::DataType t)
   }
 }
 
-bool isLikelyStride(int x)
+bool isLikelyPostNmsStride(int x)
 {
   return x >= kExpectedStride && x <= 256;
+}
+
+int rawPoseClassCount(int stride)
+{
+  return stride - kRawBoxFields - kRawKptFields;
+}
+
+int rawDetectClassCount(int stride)
+{
+  return stride - kRawBoxFields;
+}
+
+bool isLikelyRawPoseStride(int x)
+{
+  const int class_count = rawPoseClassCount(x);
+  return class_count >= 1 && class_count <= 128;
+}
+
+bool isLikelyRawDetectStride(int x)
+{
+  const int class_count = rawDetectClassCount(x);
+  return class_count >= 1 && class_count <= 128;
+}
+
+bool isLikelyOutputStride(int x)
+{
+  return isLikelyPostNmsStride(x) || isLikelyRawPoseStride(x) || isLikelyRawDetectStride(x);
+}
+
+float boxIou(const std::array<float, 4>& a, const std::array<float, 4>& b)
+{
+  const float ix1 = std::max(a[0], b[0]);
+  const float iy1 = std::max(a[1], b[1]);
+  const float ix2 = std::min(a[2], b[2]);
+  const float iy2 = std::min(a[3], b[3]);
+  const float iw = std::max(0.0f, ix2 - ix1);
+  const float ih = std::max(0.0f, iy2 - iy1);
+  const float inter = iw * ih;
+
+  const float area_a = std::max(0.0f, a[2] - a[0]) * std::max(0.0f, a[3] - a[1]);
+  const float area_b = std::max(0.0f, b[2] - b[0]) * std::max(0.0f, b[3] - b[1]);
+  const float denom = area_a + area_b - inter;
+  if (denom <= 1e-6f) return 0.0f;
+  return inter / denom;
 }
 
 }  // namespace
@@ -132,11 +180,14 @@ bool YoloPoseTrtDetector::init(const Params& params)
   }
 
   std::fprintf(stderr,
-               "[YoloPoseTrtDetector] init engine=%s input=(%d,%d) conf=%.3f kpt_conf=%.3f class_id=%d max_det=%d\n",
+               "[YoloPoseTrtDetector] init engine=%s input=(%d,%d) conf=%.3f nms=%.3f kpt_conf=%.3f min_ratio=(%.4f,%.4f,%.5f) class_id=%d max_det=%d swap_rb=%d\n",
                params_.engine_path.c_str(),
                params_.input_w, params_.input_h,
-               params_.conf_thresh, params_.kpt_conf_thresh,
-               params_.target_class_id, params_.max_det);
+               params_.conf_thresh, params_.nms_thresh,
+               params_.kpt_conf_thresh,
+               params_.min_w_ratio, params_.min_h_ratio, params_.min_area_ratio,
+               params_.target_class_id, params_.max_det,
+               params_.swap_rb_input ? 1 : 0);
 
   if (!loadEngine()) return false;
   if (!allocateBuffers()) return false;
@@ -268,11 +319,11 @@ bool YoloPoseTrtDetector::loadEngine()
   int det_count = 0;
   int det_stride = 0;
 
-  if (isLikelyStride(d2) && d1 > 0) {
+  if (isLikelyOutputStride(d2) && d1 > 0) {
     det_count = d1;
     det_stride = d2;
     transposed = false;
-  } else if (isLikelyStride(d1) && d2 > 0) {
+  } else if (isLikelyOutputStride(d1) && d2 > 0) {
     det_count = d2;
     det_stride = d1;
     transposed = true;
@@ -288,8 +339,41 @@ bool YoloPoseTrtDetector::loadEngine()
   if (det_count <= 0) det_count = params_.max_det;
   if (det_stride <= 0) det_stride = kExpectedStride;
 
-  if (det_stride < kPerDetBase) {
+  if (det_stride < kRawBoxFields) {
     std::fprintf(stderr, "[YoloPoseTrtDetector] invalid output stride=%d\n", det_stride);
+    return false;
+  }
+
+  const int raw_class_count = rawPoseClassCount(det_stride);
+  const int raw_detect_class_count = rawDetectClassCount(det_stride);
+  const bool raw_possible = isLikelyRawPoseStride(det_stride);
+  const bool raw_detect_possible = isLikelyRawDetectStride(det_stride);
+  const bool post_nms_possible = isLikelyPostNmsStride(det_stride);
+
+  constexpr int kRawAnchorCountHint = 1024;
+  if (raw_possible && (det_count > std::max(1, params_.max_det) ||
+                       det_count > kRawAnchorCountHint ||
+                       !post_nms_possible)) {
+    output_format_ = OutputFormat::RAW_ULTRALYTICS_POSE;
+    output_class_count_ = raw_class_count;
+  } else if (raw_detect_possible && (det_count > std::max(1, params_.max_det) ||
+                                     det_count > kRawAnchorCountHint ||
+                                     (!post_nms_possible && !raw_possible))) {
+    output_format_ = OutputFormat::RAW_ULTRALYTICS_DETECT;
+    output_class_count_ = raw_detect_class_count;
+  } else if (post_nms_possible) {
+    output_format_ = OutputFormat::POST_NMS_XYXY;
+    output_class_count_ = std::max(1, raw_class_count);
+  } else if (raw_possible) {
+    output_format_ = OutputFormat::RAW_ULTRALYTICS_POSE;
+    output_class_count_ = raw_class_count;
+  } else if (raw_detect_possible) {
+    output_format_ = OutputFormat::RAW_ULTRALYTICS_DETECT;
+    output_class_count_ = raw_detect_class_count;
+  } else {
+    std::fprintf(stderr,
+                 "[YoloPoseTrtDetector] unsupported output stride=%d for YOLO model\n",
+                 det_stride);
     return false;
   }
 
@@ -297,10 +381,15 @@ bool YoloPoseTrtDetector::loadEngine()
   output_det_stride_ = transposed ? -det_stride : det_stride;
 
   std::fprintf(stderr,
-               "[YoloPoseTrtDetector] parsed layout=%s det_count=%d det_stride=%d\n",
+               "[YoloPoseTrtDetector] parsed layout=%s format=%s det_count=%d det_stride=%d classes=%d\n",
                transposed ? "[1,C,N]" : "[1,N,C]",
+               output_format_ == OutputFormat::RAW_ULTRALYTICS_POSE
+                 ? "raw-ultralytics-pose"
+                 : (output_format_ == OutputFormat::RAW_ULTRALYTICS_DETECT
+                   ? "raw-ultralytics-detect" : "post-nms-xyxy"),
                output_det_count_,
-               std::abs(output_det_stride_));
+               std::abs(output_det_stride_),
+               output_class_count_);
 
   return true;
 }
@@ -418,11 +507,11 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::detectDetailed
   if (input_dtype == nvinfer1::DataType::kHALF) {
     preprocess_ok = yolo_letterbox_bgr8_to_half(
       d_bgr_, d_input_, params_.input_w, params_.input_h,
-      meta.scale, meta.pad_x, meta.pad_y, stream_);
+      meta.scale, meta.pad_x, meta.pad_y, params_.swap_rb_input, stream_);
   } else if (input_dtype == nvinfer1::DataType::kFLOAT) {
     preprocess_ok = yolo_letterbox_bgr8_to_float(
       d_bgr_, d_input_, params_.input_w, params_.input_h,
-      meta.scale, meta.pad_x, meta.pad_y, stream_);
+      meta.scale, meta.pad_x, meta.pad_y, params_.swap_rb_input, stream_);
   } else {
     std::fprintf(stderr, "[YoloPoseTrtDetector] unsupported input dtype for preprocess\n");
     return out;
@@ -477,11 +566,15 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::detectDetailed
     for (float v : host_output) raw_max = std::max(raw_max, v);
 
     std::fprintf(stderr,
-                 "[YoloPoseTrtDetector][DBG] frame=%d src=%dx%d scale=%.6f pad=(%.3f, %.3f) layout=%s det_count=%d stride=%d output_dtype=%s raw_max=%.6f\n",
+                 "[YoloPoseTrtDetector][DBG] frame=%d src=%dx%d scale=%.6f pad=(%.3f, %.3f) layout=%s format=%s det_count=%d stride=%d output_dtype=%s raw_max=%.6f\n",
                  s_debug_frame,
                  bgr.cols, bgr.rows,
                  meta.scale, meta.pad_x, meta.pad_y,
                  transposed ? "[1,C,N]" : "[1,N,C]",
+                 output_format_ == OutputFormat::RAW_ULTRALYTICS_POSE
+                   ? "raw-ultralytics-pose"
+                   : (output_format_ == OutputFormat::RAW_ULTRALYTICS_DETECT
+                     ? "raw-ultralytics-detect" : "post-nms-xyxy"),
                  output_det_count_, stride_abs,
                  dtypeToStr(output_dtype),
                  raw_max);
@@ -503,11 +596,22 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::detectDetailed
 
     const int det_print = std::min(output_det_count_, 3);
     for (int i = 0; i < det_print; ++i) {
-      std::fprintf(stderr,
-                   "[YoloPoseTrtDetector][DBG] det[%d] x1=%.3f y1=%.3f x2=%.3f y2=%.3f score=%.6f cls=%.3f\n",
-                   i,
-                   getDetValDbg(i, 0), getDetValDbg(i, 1), getDetValDbg(i, 2), getDetValDbg(i, 3),
-                   getDetValDbg(i, 4), getDetValDbg(i, 5));
+      if (output_format_ == OutputFormat::RAW_ULTRALYTICS_POSE ||
+          output_format_ == OutputFormat::RAW_ULTRALYTICS_DETECT) {
+        std::fprintf(stderr,
+                     "[YoloPoseTrtDetector][DBG] raw det[%d] cx=%.3f cy=%.3f w=%.3f h=%.3f class0=%.6f\n",
+                     i,
+                     getDetValDbg(i, 0), getDetValDbg(i, 1),
+                     getDetValDbg(i, 2), getDetValDbg(i, 3),
+                     getDetValDbg(i, 4));
+      } else {
+        std::fprintf(stderr,
+                     "[YoloPoseTrtDetector][DBG] det[%d] x1=%.3f y1=%.3f x2=%.3f y2=%.3f score=%.6f cls=%.3f\n",
+                     i,
+                     getDetValDbg(i, 0), getDetValDbg(i, 1),
+                     getDetValDbg(i, 2), getDetValDbg(i, 3),
+                     getDetValDbg(i, 4), getDetValDbg(i, 5));
+      }
     }
   }
 
@@ -522,14 +626,6 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::parseOutput(
 
   const bool transposed = output_det_stride_ < 0;
   const int stride_abs = std::abs(output_det_stride_);
-  const int kpt_offset = kPerDetBase;
-
-  if (stride_abs < kExpectedStride) {
-    std::fprintf(stderr,
-                 "[YoloPoseTrtDetector] output stride too small for pose: %d\n",
-                 stride_abs);
-    return out;
-  }
 
   auto getDetVal = [&](int det_i, int field_j) -> float {
     if (!transposed) {
@@ -539,38 +635,26 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::parseOutput(
     }
   };
 
-  float max_score_seen = -1.0f;
-  static int s_accept_dbg = 0;
-  static int s_reject_dbg = 0;
+  struct DecodedDetection
+  {
+    std::array<float, 4> box_net{};  // x1, y1, x2, y2 in network input coordinates
+    float score = 0.0f;
+    int cls = 0;
+    bool has_keypoints = false;
+    std::array<cv::Point2f, kExpectedKptNum> kpts_net{};
+    std::array<float, kExpectedKptNum> kpt_scores{};
+  };
 
-  for (int i = 0; i < output_det_count_; ++i) {
-    const float score = getDetVal(i, 4);
-    const int cls = static_cast<int>(std::round(getDetVal(i, 5)));
-    max_score_seen = std::max(max_score_seen, score);
-
-    if (score < params_.conf_thresh) {
-      continue;
-    }
-
-    if (params_.target_class_id >= 0 && cls != params_.target_class_id) {
-      if (s_reject_dbg < 20) {
-        ++s_reject_dbg;
-        std::fprintf(stderr,
-                     "[YoloPoseTrtDetector][DBG] reject det[%d]: class=%d expect=%d score=%.6f\n",
-                     i, cls, params_.target_class_id, score);
-      }
-      continue;
-    }
-
+  auto makePair = [&](const DecodedDetection& det, int det_i) -> SimpleLightDetector::PairResult {
     SimpleLightDetector::PairResult pr;
     pr.pair_type = 200;
-    pr.confidence = score;
+    pr.confidence = det.score;
 
-    const cv::Point2f lt = undoLetterbox(getDetVal(i, 0), getDetVal(i, 1), meta);
-    const cv::Point2f rb = undoLetterbox(getDetVal(i, 2), getDetVal(i, 3), meta);
+    const cv::Point2f lt = undoLetterbox(det.box_net[0], det.box_net[1], meta);
+    const cv::Point2f rb = undoLetterbox(det.box_net[2], det.box_net[3], meta);
 
     pr.center.x = 0.5f * (lt.x + rb.x);
-    pr.center.y = lt.y + 0.9f * (rb.y - lt.y);
+    pr.center.y = 0.5f * (lt.y + rb.y);
     pr.width = std::max(1.f, rb.x - lt.x);
     pr.height = std::max(1.f, rb.y - lt.y);
     pr.angle = 0.0f;
@@ -582,23 +666,60 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::parseOutput(
     std::vector<cv::Point2f> top_pts;
     std::vector<cv::Point2f> bottom_pts;
 
-    for (int k = 0; k < kExpectedKptNum; ++k) {
-      const float kx = getDetVal(i, kpt_offset + k * 3 + 0);
-      const float ky = getDetVal(i, kpt_offset + k * 3 + 1);
-      const float kv = getDetVal(i, kpt_offset + k * 3 + 2);
+    if (det.has_keypoints) {
+      for (int k = 0; k < kExpectedKptNum; ++k) {
+        const cv::Point2f p = undoLetterbox(det.kpts_net[k].x, det.kpts_net[k].y, meta);
+        const float kv = det.kpt_scores[k];
 
-      const cv::Point2f p = undoLetterbox(kx, ky, meta);
-      pr.keypoints[k] = p;
-      pr.keypoint_scores[k] = kv;
+        pr.keypoints[k] = p;
+        pr.keypoint_scores[k] = kv;
 
-      if (kv >= params_.kpt_conf_thresh) {
-        ++valid_kpt;
-        if (k < 4) top_pts.push_back(p);
-        else bottom_pts.push_back(p);
+        if (kv >= params_.kpt_conf_thresh) {
+          ++valid_kpt;
+          if (k < 4) top_pts.push_back(p);
+          else bottom_pts.push_back(p);
+        }
       }
     }
 
     pr.has_keypoints = (valid_kpt > 0);
+
+    const auto& idx = params_.outer_corner_indices;
+    bool outer_idx_valid = true;
+    bool outer_score_valid = true;
+    for (int id : idx) {
+      if (id < 0 || id >= kExpectedKptNum) {
+        outer_idx_valid = false;
+        outer_score_valid = false;
+        break;
+      }
+      if (pr.keypoint_scores[static_cast<size_t>(id)] < params_.kpt_conf_thresh) {
+        outer_score_valid = false;
+      }
+    }
+
+    if (det.has_keypoints && outer_idx_valid && outer_score_valid) {
+      pr.precise_left_top = pr.keypoints[static_cast<size_t>(idx[0])];
+      pr.precise_left_bottom = pr.keypoints[static_cast<size_t>(idx[1])];
+      pr.precise_right_bottom = pr.keypoints[static_cast<size_t>(idx[2])];
+      pr.precise_right_top = pr.keypoints[static_cast<size_t>(idx[3])];
+      pr.has_precise_corners = true;
+
+      pr.center = (pr.precise_left_top + pr.precise_left_bottom +
+                   pr.precise_right_bottom + pr.precise_right_top) * 0.25f;
+    } else if (det.has_keypoints && params_.require_outer_corners) {
+      if (det_i >= 0) {
+        static int s_outer_reject_dbg = 0;
+        if (s_outer_reject_dbg < 20) {
+          ++s_outer_reject_dbg;
+          std::fprintf(stderr,
+                       "[YoloPoseTrtDetector][DBG] reject det[%d]: outer corners invalid idx=%d score=%d\n",
+                       det_i, outer_idx_valid ? 1 : 0, outer_score_valid ? 1 : 0);
+        }
+      }
+      pr.confidence = -1.0f;
+      return pr;
+    }
 
     if (!top_pts.empty()) {
       pr.light1_center = meanPoints(top_pts);
@@ -612,14 +733,210 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::parseOutput(
       pr.light2_center = cv::Point2f(pr.center.x, pr.center.y + 0.25f * pr.height);
     }
 
-    if (s_accept_dbg < 30) {
-      ++s_accept_dbg;
+    return pr;
+  };
+
+  float max_score_seen = -1.0f;
+  static int s_accept_dbg = 0;
+  static int s_reject_dbg = 0;
+  // static int s_size_reject_dbg = 0;
+
+  auto passesSizeGate = [&](const DecodedDetection& det, int det_i) -> bool {
+    (void)det_i;
+    const cv::Point2f p1 = undoLetterbox(det.box_net[0], det.box_net[1], meta);
+    const cv::Point2f p2 = undoLetterbox(det.box_net[2], det.box_net[3], meta);
+
+    const float w = std::abs(p2.x - p1.x);
+    const float h = std::abs(p2.y - p1.y);
+    const float area = w * h;
+
+    const float min_w = std::max(0.0f, params_.min_w_ratio) * static_cast<float>(meta.src_w);
+    const float min_h = std::max(0.0f, params_.min_h_ratio) * static_cast<float>(meta.src_h);
+    const float min_area =
+      std::max(0.0f, params_.min_area_ratio) *
+      static_cast<float>(meta.src_w) * static_cast<float>(meta.src_h);
+
+    const bool ok = w >= min_w && h >= min_h && area >= min_area;
+    // if (!ok && s_size_reject_dbg < 30) {
+    //   ++s_size_reject_dbg;
+    //   std::fprintf(stderr,
+    //                "[YoloPoseTrtDetector][DBG] reject det[%d]: size gate wh=(%.1f,%.1f) area=%.1f min=(%.1f,%.1f,%.1f)\n",
+    //                det_i, w, h, area, min_w, min_h, min_area);
+    // }
+    return ok;
+  };
+
+  if (output_format_ == OutputFormat::RAW_ULTRALYTICS_POSE ||
+      output_format_ == OutputFormat::RAW_ULTRALYTICS_DETECT) {
+    const bool has_pose = output_format_ == OutputFormat::RAW_ULTRALYTICS_POSE;
+    const int class_count = output_class_count_;
+    const int kpt_offset = kRawBoxFields + class_count;
+
+    if (has_pose && stride_abs < kpt_offset + kRawKptFields) {
       std::fprintf(stderr,
-                   "[YoloPoseTrtDetector][DBG] accept det[%d]: score=%.6f cls=%d center=(%.1f,%.1f) wh=(%.1f,%.1f) valid_kpt=%d\n",
-                   i, score, cls, pr.center.x, pr.center.y, pr.width, pr.height, valid_kpt);
+                   "[YoloPoseTrtDetector] raw pose stride too small: stride=%d classes=%d\n",
+                   stride_abs, class_count);
+      return out;
     }
 
-    out.push_back(pr);
+    const int max_det = std::max(1, params_.max_det);
+    std::vector<DecodedDetection> candidates;
+    candidates.reserve(static_cast<size_t>(std::min(output_det_count_, max_det * 8)));
+
+    for (int i = 0; i < output_det_count_; ++i) {
+      int cls = 0;
+      float score = -1.0f;
+
+      if (params_.target_class_id >= 0 && params_.target_class_id < class_count) {
+        cls = params_.target_class_id;
+        score = getDetVal(i, kRawBoxFields + cls);
+      } else {
+        for (int c = 0; c < class_count; ++c) {
+          const float cls_score = getDetVal(i, kRawBoxFields + c);
+          if (cls_score > score) {
+            score = cls_score;
+            cls = c;
+          }
+        }
+      }
+
+      max_score_seen = std::max(max_score_seen, score);
+      if (score < params_.conf_thresh) continue;
+
+      const float cx = getDetVal(i, 0);
+      const float cy = getDetVal(i, 1);
+      const float w = getDetVal(i, 2);
+      const float h = getDetVal(i, 3);
+      if (w <= 0.0f || h <= 0.0f) continue;
+
+      DecodedDetection det;
+      det.score = score;
+      det.cls = cls;
+      det.has_keypoints = has_pose;
+      det.box_net = {
+        cx - 0.5f * w,
+        cy - 0.5f * h,
+        cx + 0.5f * w,
+        cy + 0.5f * h
+      };
+
+      if (!passesSizeGate(det, i)) continue;
+
+      if (has_pose) {
+        for (int k = 0; k < kExpectedKptNum; ++k) {
+          det.kpts_net[static_cast<size_t>(k)] = {
+            getDetVal(i, kpt_offset + k * 3 + 0),
+            getDetVal(i, kpt_offset + k * 3 + 1)
+          };
+          det.kpt_scores[static_cast<size_t>(k)] =
+            getDetVal(i, kpt_offset + k * 3 + 2);
+        }
+      }
+
+      candidates.push_back(det);
+    }
+
+    std::sort(candidates.begin(), candidates.end(),
+              [](const auto& a, const auto& b) { return a.score > b.score; });
+
+    const float nms_thresh = clampf(params_.nms_thresh, 0.0f, 1.0f);
+    std::vector<DecodedDetection> kept;
+    kept.reserve(static_cast<size_t>(max_det));
+
+    for (const auto& cand : candidates) {
+      bool suppressed = false;
+      for (const auto& prev : kept) {
+        if (cand.cls != prev.cls) continue;
+        if (boxIou(cand.box_net, prev.box_net) > nms_thresh) {
+          suppressed = true;
+          break;
+        }
+      }
+      if (suppressed) continue;
+
+      kept.push_back(cand);
+      if (static_cast<int>(kept.size()) >= max_det) break;
+    }
+
+    for (size_t i = 0; i < kept.size(); ++i) {
+      auto pr = makePair(kept[i], static_cast<int>(i));
+      if (pr.confidence < 0.0f) continue;
+
+      if (s_accept_dbg < 30) {
+        ++s_accept_dbg;
+        std::fprintf(stderr,
+                     "[YoloPoseTrtDetector][DBG] accept raw %s[%zu]: score=%.6f cls=%d center=(%.1f,%.1f) wh=(%.1f,%.1f) precise=%d\n",
+                     has_pose ? "pose" : "detect",
+                     i, pr.confidence, kept[i].cls, pr.center.x, pr.center.y,
+                     pr.width, pr.height, pr.has_precise_corners ? 1 : 0);
+      }
+
+      out.push_back(pr);
+    }
+  } else {
+    const int kpt_offset = kPerDetBase;
+
+    if (stride_abs < kExpectedStride) {
+      std::fprintf(stderr,
+                   "[YoloPoseTrtDetector] post-NMS output stride too small for pose: %d\n",
+                   stride_abs);
+      return out;
+    }
+
+    for (int i = 0; i < output_det_count_; ++i) {
+      const float score = getDetVal(i, 4);
+      const int cls = static_cast<int>(std::round(getDetVal(i, 5)));
+      max_score_seen = std::max(max_score_seen, score);
+
+      if (score < params_.conf_thresh) {
+        continue;
+      }
+
+      if (params_.target_class_id >= 0 && cls != params_.target_class_id) {
+        if (s_reject_dbg < 20) {
+          ++s_reject_dbg;
+          std::fprintf(stderr,
+                       "[YoloPoseTrtDetector][DBG] reject det[%d]: class=%d expect=%d score=%.6f\n",
+                       i, cls, params_.target_class_id, score);
+        }
+        continue;
+      }
+
+      DecodedDetection det;
+      det.score = score;
+      det.cls = cls;
+      det.has_keypoints = true;
+      det.box_net = {
+        getDetVal(i, 0),
+        getDetVal(i, 1),
+        getDetVal(i, 2),
+        getDetVal(i, 3)
+      };
+
+      if (!passesSizeGate(det, i)) continue;
+
+      for (int k = 0; k < kExpectedKptNum; ++k) {
+        det.kpts_net[static_cast<size_t>(k)] = {
+          getDetVal(i, kpt_offset + k * 3 + 0),
+          getDetVal(i, kpt_offset + k * 3 + 1)
+        };
+        det.kpt_scores[static_cast<size_t>(k)] =
+          getDetVal(i, kpt_offset + k * 3 + 2);
+      }
+
+      auto pr = makePair(det, i);
+      if (pr.confidence < 0.0f) continue;
+
+      if (s_accept_dbg < 30) {
+        ++s_accept_dbg;
+        std::fprintf(stderr,
+                     "[YoloPoseTrtDetector][DBG] accept det[%d]: score=%.6f cls=%d center=(%.1f,%.1f) wh=(%.1f,%.1f) precise=%d\n",
+                     i, score, cls, pr.center.x, pr.center.y,
+                     pr.width, pr.height, pr.has_precise_corners ? 1 : 0);
+      }
+
+      out.push_back(pr);
+    }
   }
 
   std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) {

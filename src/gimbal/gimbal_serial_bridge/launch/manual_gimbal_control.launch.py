@@ -2,7 +2,8 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration
-from launch_ros.actions import Node
+from launch_ros.actions import ComposableNodeContainer, Node
+from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
 from ament_index_python.packages import get_package_share_directory
 import os
@@ -10,10 +11,22 @@ import os
 
 def generate_launch_description():
     pkg_share = get_package_share_directory("gimbal_serial_bridge")
+    hik_share = get_package_share_directory("hik_camera_ros2_driver")
+    aim_share = get_package_share_directory("auto_aim_fast")
     default_bridge_params = os.path.join(pkg_share, "config", "gimbal_serial_bridge.yaml")
+    default_hik_params = os.path.join(hik_share, "config", "camera_params.yaml")
+    default_tracker_params = os.path.join(aim_share, "config", "tracker.yaml")
+    default_camera_params = os.path.join(aim_share, "config", "camera.yaml")
+    default_detector_params = os.path.join(aim_share, "config", "detector.yaml")
+    default_qos_params = os.path.join(aim_share, "config", "qos.yaml")
+    default_info_params = os.path.join(aim_share, "config", "camera_info.yaml")
+    default_yolo_engine = os.path.join(aim_share, "model", "auto_aim_iter2.engine")
 
     start_bridge = LaunchConfiguration("start_bridge")
+    start_camera = LaunchConfiguration("start_camera")
+    start_auto_aim = LaunchConfiguration("start_auto_aim")
     bridge_params_file = LaunchConfiguration("bridge_params_file")
+    hik_params_file = LaunchConfiguration("hik_params_file")
     cmd_topic = LaunchConfiguration("cmd_topic")
     enable_topic = LaunchConfiguration("enable_topic")
     yaw_deg = LaunchConfiguration("yaw_deg")
@@ -25,6 +38,24 @@ def generate_launch_description():
     yaw_index = LaunchConfiguration("yaw_index")
     pitch_index = LaunchConfiguration("pitch_index")
     publish_dim = LaunchConfiguration("publish_dim")
+    tracker_params = LaunchConfiguration("tracker_params")
+    camera_params = LaunchConfiguration("camera_params")
+    detector_params = LaunchConfiguration("detector_params")
+    qos_params = LaunchConfiguration("qos_params")
+    camera_info_params = LaunchConfiguration("camera_info_params")
+    detector_mode = LaunchConfiguration("detector_mode")
+    yolo_engine_path = LaunchConfiguration("yolo_engine_path")
+    yolo_input_w = LaunchConfiguration("yolo_input_w")
+    yolo_input_h = LaunchConfiguration("yolo_input_h")
+    yolo_conf_thresh = LaunchConfiguration("yolo_conf_thresh")
+    yolo_nms_thresh = LaunchConfiguration("yolo_nms_thresh")
+    yolo_kpt_conf_thresh = LaunchConfiguration("yolo_kpt_conf_thresh")
+    yolo_max_det = LaunchConfiguration("yolo_max_det")
+    yolo_use_fp16 = LaunchConfiguration("yolo_use_fp16")
+    yolo_class_id = LaunchConfiguration("yolo_class_id")
+    yolo_swap_rb_input = LaunchConfiguration("yolo_swap_rb_input")
+
+    intra = [{"use_intra_process_comms": True}]
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -33,9 +64,24 @@ def generate_launch_description():
             description="Whether to start the gimbal_serial_bridge_node together with manual control",
         ),
         DeclareLaunchArgument(
+            "start_camera",
+            default_value="true",
+            description="Whether to start the Hik camera driver and camera1 rectifier",
+        ),
+        DeclareLaunchArgument(
+            "start_auto_aim",
+            default_value="true",
+            description="Whether to start auto_aim_fast together with manual control",
+        ),
+        DeclareLaunchArgument(
             "bridge_params_file",
             default_value=default_bridge_params,
             description="Parameter file for gimbal_serial_bridge_node",
+        ),
+        DeclareLaunchArgument(
+            "hik_params_file",
+            default_value=default_hik_params,
+            description="Hik camera parameter file",
         ),
         DeclareLaunchArgument(
             "cmd_topic",
@@ -59,12 +105,12 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "step_deg",
-            default_value="0.5",
+            default_value="0.05",
             description="Keyboard increment step in degrees",
         ),
         DeclareLaunchArgument(
             "publish_hz",
-            default_value="20.0",
+            default_value="200.0",
             description="Periodic publish rate",
         ),
         DeclareLaunchArgument(
@@ -91,6 +137,86 @@ def generate_launch_description():
             "publish_dim",
             default_value="2",
             description="Float64MultiArray size",
+        ),
+        DeclareLaunchArgument(
+            "tracker_params",
+            default_value=default_tracker_params,
+            description="auto_aim tracker params",
+        ),
+        DeclareLaunchArgument(
+            "camera_params",
+            default_value=default_camera_params,
+            description="auto_aim camera intrinsics fallback",
+        ),
+        DeclareLaunchArgument(
+            "detector_params",
+            default_value=default_detector_params,
+            description="auto_aim detector params",
+        ),
+        DeclareLaunchArgument(
+            "qos_params",
+            default_value=default_qos_params,
+            description="auto_aim qos/debug params",
+        ),
+        DeclareLaunchArgument(
+            "camera_info_params",
+            default_value=default_info_params,
+            description="auto_aim camera_info params",
+        ),
+        DeclareLaunchArgument(
+            "detector_mode",
+            default_value="yolo",
+            description="auto_aim detector mode: legacy or yolo",
+        ),
+        DeclareLaunchArgument(
+            "yolo_engine_path",
+            default_value=default_yolo_engine,
+            description="TensorRT engine path for YOLO pose detector",
+        ),
+        DeclareLaunchArgument(
+            "yolo_input_w",
+            default_value="640",
+            description="YOLO TensorRT input width",
+        ),
+        DeclareLaunchArgument(
+            "yolo_input_h",
+            default_value="640",
+            description="YOLO TensorRT input height",
+        ),
+        DeclareLaunchArgument(
+            "yolo_conf_thresh",
+            default_value="0.45",
+            description="YOLO object confidence threshold",
+        ),
+        DeclareLaunchArgument(
+            "yolo_nms_thresh",
+            default_value="0.45",
+            description="YOLO NMS IoU threshold for raw pose output",
+        ),
+        DeclareLaunchArgument(
+            "yolo_kpt_conf_thresh",
+            default_value="0.35",
+            description="YOLO keypoint confidence threshold",
+        ),
+        DeclareLaunchArgument(
+            "yolo_max_det",
+            default_value="300",
+            description="YOLO max detections per frame",
+        ),
+        DeclareLaunchArgument(
+            "yolo_use_fp16",
+            default_value="true",
+            description="Use FP16 TensorRT inference",
+        ),
+        DeclareLaunchArgument(
+            "yolo_class_id",
+            default_value="0",
+            description="Target class id for YOLO detector",
+        ),
+        DeclareLaunchArgument(
+            "yolo_swap_rb_input",
+            default_value="true",
+            description="Swap R/B channels before YOLO inference",
         ),
         LogInfo(msg="Manual gimbal control: W/S pitch, A/D yaw, Q quit keyboard thread"),
         Node(
@@ -120,5 +246,64 @@ def generate_launch_description():
                 "pitch_index": ParameterValue(pitch_index, value_type=int),
                 "publish_dim": ParameterValue(publish_dim, value_type=int),
             }],
+        ),
+        ComposableNodeContainer(
+            name="manual_control_vision_container",
+            namespace="",
+            package="rclcpp_components",
+            executable="component_container_mt",
+            output="screen",
+            condition=IfCondition(start_camera),
+            composable_node_descriptions=[
+                ComposableNode(
+                    package="hik_camera_ros2_driver",
+                    plugin="hik_camera_ros2_driver::HikCameraRos2DriverNode",
+                    name="hik_camera_ros2_driver",
+                    parameters=[hik_params_file],
+                    extra_arguments=intra,
+                ),
+                ComposableNode(
+                    package="hik_camera_ros2_driver",
+                    plugin="hik_camera_ros2_driver::HikCameraRectifierNode",
+                    name="camera1_rectifier",
+                    parameters=[
+                        {
+                            "input_image_topic": "/camera1/image",
+                            "input_camera_info_topic": "/camera1/camera_info",
+                            "output_image_topic": "/camera1_rect/image",
+                            "output_camera_info_topic": "/camera1_rect/camera_info",
+                            "use_sensor_data_qos": True,
+                        }
+                    ],
+                    extra_arguments=intra,
+                ),
+                ComposableNode(
+                    package="auto_aim_fast",
+                    plugin="auto_aim_fast::AutoAimNode",
+                    name="auto_aim_node",
+                    condition=IfCondition(start_auto_aim),
+                    parameters=[
+                        tracker_params,
+                        camera_params,
+                        detector_params,
+                        qos_params,
+                        camera_info_params,
+                        {
+                            "detector.mode": detector_mode,
+                            "detector.yolo.engine_path": yolo_engine_path,
+                            "detector.yolo.input_w": yolo_input_w,
+                            "detector.yolo.input_h": yolo_input_h,
+                            "detector.yolo.conf_thresh": yolo_conf_thresh,
+                            "detector.yolo.nms_thresh": yolo_nms_thresh,
+                            "detector.yolo.kpt_conf_thresh": yolo_kpt_conf_thresh,
+                            "detector.yolo.max_det": yolo_max_det,
+                            "detector.yolo.use_fp16_input": yolo_use_fp16,
+                            "detector.yolo.target_class_id": yolo_class_id,
+                            "detector.yolo.swap_rb_input": yolo_swap_rb_input,
+                        },
+                    ],
+                    extra_arguments=intra,
+                ),
+            ],
         ),
     ])

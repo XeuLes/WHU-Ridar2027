@@ -48,7 +48,8 @@ __global__ void yolo_letterbox_bgr8_to_half_kernel(
   int dst_h,
   float scale,
   float pad_x,
-  float pad_y)
+  float pad_y,
+  bool swap_rb)
 {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -71,9 +72,9 @@ __global__ void yolo_letterbox_bgr8_to_half_kernel(
     out_r = static_cast<float>(read_bgr(src, src_w, src_h, src_step_bytes, src_x, src_y, 2)) / 255.0f;
   }
 
-  dst[0 * area + y * dst_w + x] = __float2half(out_r);
+  dst[0 * area + y * dst_w + x] = __float2half(swap_rb ? out_b : out_r);
   dst[1 * area + y * dst_w + x] = __float2half(out_g);
-  dst[2 * area + y * dst_w + x] = __float2half(out_b);
+  dst[2 * area + y * dst_w + x] = __float2half(swap_rb ? out_r : out_b);
 }
 
 __global__ void yolo_letterbox_bgr8_to_float_kernel(
@@ -86,7 +87,8 @@ __global__ void yolo_letterbox_bgr8_to_float_kernel(
   int dst_h,
   float scale,
   float pad_x,
-  float pad_y)
+  float pad_y,
+  bool swap_rb)
 {
   const int x = blockIdx.x * blockDim.x + threadIdx.x;
   const int y = blockIdx.y * blockDim.y + threadIdx.y;
@@ -109,9 +111,9 @@ __global__ void yolo_letterbox_bgr8_to_float_kernel(
     out_r = static_cast<float>(read_bgr(src, src_w, src_h, src_step_bytes, src_x, src_y, 2)) / 255.0f;
   }
 
-  dst[0 * area + y * dst_w + x] = out_r;
+  dst[0 * area + y * dst_w + x] = swap_rb ? out_b : out_r;
   dst[1 * area + y * dst_w + x] = out_g;
-  dst[2 * area + y * dst_w + x] = out_b;
+  dst[2 * area + y * dst_w + x] = swap_rb ? out_r : out_b;
 }
 
 }  // namespace
@@ -124,6 +126,7 @@ extern "C" bool yolo_letterbox_bgr8_to_half(
   float scale,
   float pad_x,
   float pad_y,
+  bool swap_rb,
   cudaStream_t stream)
 {
   if (d_bgr.empty() || d_bgr.type() != CV_8UC3 || d_out == nullptr) return false;
@@ -144,7 +147,8 @@ extern "C" bool yolo_letterbox_bgr8_to_half(
     dst_h,
     scale,
     pad_x,
-    pad_y);
+    pad_y,
+    swap_rb);
 
   return cudaGetLastError() == cudaSuccess;
 }
@@ -157,6 +161,7 @@ extern "C" bool yolo_letterbox_bgr8_to_float(
   float scale,
   float pad_x,
   float pad_y,
+  bool swap_rb,
   cudaStream_t stream)
 {
   if (d_bgr.empty() || d_bgr.type() != CV_8UC3 || d_out == nullptr) return false;
@@ -177,7 +182,8 @@ extern "C" bool yolo_letterbox_bgr8_to_float(
     dst_h,
     scale,
     pad_x,
-    pad_y);
+    pad_y,
+    swap_rb);
 
   return cudaGetLastError() == cudaSuccess;
 }

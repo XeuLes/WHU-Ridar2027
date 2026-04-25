@@ -33,7 +33,11 @@ struct YoloDetectorParams
   int max_det{300};
   int target_class_id{0};
   float conf_thresh{0.45f};
+  float nms_thresh{0.45f};
   float kpt_conf_thresh{0.35f};
+  float min_w_ratio{0.045f};
+  float min_h_ratio{0.055f};
+  float min_area_ratio{0.0025f};
   bool require_outer_corners{true};
   bool use_fp16_input{true};
   bool swap_rb_input{false};
