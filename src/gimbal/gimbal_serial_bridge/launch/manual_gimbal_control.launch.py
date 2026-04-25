@@ -1,7 +1,7 @@
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, LogInfo
 from launch.conditions import IfCondition
-from launch.substitutions import LaunchConfiguration
+from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
 from launch_ros.parameter_descriptions import ParameterValue
@@ -13,22 +13,35 @@ def generate_launch_description():
     pkg_share = get_package_share_directory("gimbal_serial_bridge")
     hik_share = get_package_share_directory("hik_camera_ros2_driver")
     aim_share = get_package_share_directory("auto_aim_fast")
+    solver_share = get_package_share_directory("gimbal_aim_solver")
+    laser_share = get_package_share_directory("laser_aim_controller")
     default_bridge_params = os.path.join(pkg_share, "config", "gimbal_serial_bridge.yaml")
     default_hik_params = os.path.join(hik_share, "config", "camera_params.yaml")
+    default_solver_params = os.path.join(solver_share, "config", "gimbal_aim_solver.yaml")
+    default_laser_params = os.path.join(laser_share, "config", "laser_aim_controller.yaml")
     default_tracker_params = os.path.join(aim_share, "config", "tracker.yaml")
     default_camera_params = os.path.join(aim_share, "config", "camera.yaml")
     default_detector_params = os.path.join(aim_share, "config", "detector.yaml")
     default_qos_params = os.path.join(aim_share, "config", "qos.yaml")
     default_info_params = os.path.join(aim_share, "config", "camera_info.yaml")
-    default_yolo_engine = os.path.join(aim_share, "model", "auto_aim_iter2.engine")
+    default_yolo_engine = os.path.join(aim_share, "model", "auto_aim.engine")
 
     start_bridge = LaunchConfiguration("start_bridge")
     start_camera = LaunchConfiguration("start_camera")
     start_auto_aim = LaunchConfiguration("start_auto_aim")
+    start_laser_aim = LaunchConfiguration("start_laser_aim")
+    start_gimbal_solver = LaunchConfiguration("start_gimbal_solver")
+    aim_mode = LaunchConfiguration("aim_mode")
     bridge_params_file = LaunchConfiguration("bridge_params_file")
     hik_params_file = LaunchConfiguration("hik_params_file")
+    gimbal_solver_params_file = LaunchConfiguration("gimbal_solver_params_file")
+    laser_params_file = LaunchConfiguration("laser_params_file")
     cmd_topic = LaunchConfiguration("cmd_topic")
     enable_topic = LaunchConfiguration("enable_topic")
+    manual_command_topic = LaunchConfiguration("manual_command_topic")
+    final_cmd_topic = LaunchConfiguration("final_cmd_topic")
+    gimbal_feedback_topic = LaunchConfiguration("gimbal_feedback_topic")
+    gimbal_quaternion_topic = LaunchConfiguration("gimbal_quaternion_topic")
     yaw_deg = LaunchConfiguration("yaw_deg")
     pitch_deg = LaunchConfiguration("pitch_deg")
     step_deg = LaunchConfiguration("step_deg")
@@ -44,6 +57,7 @@ def generate_launch_description():
     qos_params = LaunchConfiguration("qos_params")
     camera_info_params = LaunchConfiguration("camera_info_params")
     detector_mode = LaunchConfiguration("detector_mode")
+    laser_increment_mode = LaunchConfiguration("laser_increment_mode")
     yolo_engine_path = LaunchConfiguration("yolo_engine_path")
     yolo_input_w = LaunchConfiguration("yolo_input_w")
     yolo_input_h = LaunchConfiguration("yolo_input_h")
@@ -56,6 +70,16 @@ def generate_launch_description():
     yolo_swap_rb_input = LaunchConfiguration("yolo_swap_rb_input")
 
     intra = [{"use_intra_process_comms": True}]
+    manual_mode = IfCondition(
+        PythonExpression(["'", aim_mode, "'.lower() == 'manual'"])
+    )
+    scan_solver_mode = IfCondition(
+        PythonExpression([
+            "'", aim_mode, "'.lower() == 'scan' and '",
+            start_gimbal_solver,
+            "'.lower() == 'true'",
+        ])
+    )
 
     return LaunchDescription([
         DeclareLaunchArgument(
@@ -74,6 +98,21 @@ def generate_launch_description():
             description="Whether to start auto_aim_fast together with manual control",
         ),
         DeclareLaunchArgument(
+            "start_laser_aim",
+            default_value="true",
+            description="Whether to start laser_aim_controller as the only final gimbal command publisher",
+        ),
+        DeclareLaunchArgument(
+            "start_gimbal_solver",
+            default_value="true",
+            description="Whether to start gimbal_aim_solver when aim_mode is scan",
+        ),
+        DeclareLaunchArgument(
+            "aim_mode",
+            default_value="manual",
+            description="manual: keyboard artificial rough aim; scan: radar rough aim plus scan recovery",
+        ),
+        DeclareLaunchArgument(
             "bridge_params_file",
             default_value=default_bridge_params,
             description="Parameter file for gimbal_serial_bridge_node",
@@ -84,14 +123,44 @@ def generate_launch_description():
             description="Hik camera parameter file",
         ),
         DeclareLaunchArgument(
+            "gimbal_solver_params_file",
+            default_value=default_solver_params,
+            description="Parameter file for gimbal_aim_solver_node",
+        ),
+        DeclareLaunchArgument(
+            "laser_params_file",
+            default_value=default_laser_params,
+            description="Parameter file for laser_aim_controller_node",
+        ),
+        DeclareLaunchArgument(
             "cmd_topic",
-            default_value="/gimbal/command_angles",
-            description="Command topic for accumulated absolute yaw/pitch angles",
+            default_value="/gimbal/rough_command_angles",
+            description="Manual artificial rough command topic for accumulated absolute yaw/pitch angles",
         ),
         DeclareLaunchArgument(
             "enable_topic",
             default_value="/gimbal/enable",
             description="Enable topic for gimbal output",
+        ),
+        DeclareLaunchArgument(
+            "manual_command_topic",
+            default_value="/gimbal/command_angle_manual",
+            description="Optional fine manual offset topic consumed by laser_aim_controller",
+        ),
+        DeclareLaunchArgument(
+            "final_cmd_topic",
+            default_value="/gimbal/command_angles",
+            description="Final command topic consumed by gimbal_serial_bridge",
+        ),
+        DeclareLaunchArgument(
+            "gimbal_feedback_topic",
+            default_value="/gimbal/angles_true",
+            description="Feedback yaw/pitch topic used by solver/controller/manual initialization",
+        ),
+        DeclareLaunchArgument(
+            "gimbal_quaternion_topic",
+            default_value="/gimbal/quaternion_true",
+            description="Feedback quaternion topic used by laser_aim_controller",
         ),
         DeclareLaunchArgument(
             "yaw_deg",
@@ -169,6 +238,11 @@ def generate_launch_description():
             description="auto_aim detector mode: legacy or yolo",
         ),
         DeclareLaunchArgument(
+            "laser_increment_mode",
+            default_value="pixel",
+            description="laser_aim_controller increment mode: auto, pnp, or pixel",
+        ),
+        DeclareLaunchArgument(
             "yolo_engine_path",
             default_value=default_yolo_engine,
             description="TensorRT engine path for YOLO pose detector",
@@ -185,7 +259,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "yolo_conf_thresh",
-            default_value="0.45",
+            default_value="0.25",
             description="YOLO object confidence threshold",
         ),
         DeclareLaunchArgument(
@@ -195,7 +269,7 @@ def generate_launch_description():
         ),
         DeclareLaunchArgument(
             "yolo_kpt_conf_thresh",
-            default_value="0.35",
+            default_value="0.25",
             description="YOLO keypoint confidence threshold",
         ),
         DeclareLaunchArgument(
@@ -218,7 +292,12 @@ def generate_launch_description():
             default_value="true",
             description="Swap R/B channels before YOLO inference",
         ),
-        LogInfo(msg="Manual gimbal control: W/S pitch, A/D yaw, Q quit keyboard thread"),
+        LogInfo(msg=[
+            "Gimbal aim bringup: aim_mode=", aim_mode,
+            ", manual rough topic=", cmd_topic,
+            ", final command topic=", final_cmd_topic,
+        ]),
+        LogInfo(msg="Manual mode keyboard: W/S pitch, A/D yaw, Q quit keyboard thread"),
         Node(
             package="gimbal_serial_bridge",
             executable="gimbal_serial_bridge_node",
@@ -228,14 +307,53 @@ def generate_launch_description():
             parameters=[bridge_params_file],
         ),
         Node(
+            package="laser_aim_controller",
+            executable="laser_aim_controller_node",
+            name="laser_aim_controller_node",
+            output="screen",
+            condition=IfCondition(start_laser_aim),
+            parameters=[
+                laser_params_file,
+                {
+                    "search_stage_mode": aim_mode,
+                    "increment_mode": laser_increment_mode,
+                    "rough_command_topic": cmd_topic,
+                    "manual_command_topic": manual_command_topic,
+                    "command_topic": final_cmd_topic,
+                    "gimbal_angles_topic": gimbal_feedback_topic,
+                    "gimbal_quaternion_topic": gimbal_quaternion_topic,
+                    "manual_always_add": False,
+                },
+            ],
+        ),
+        Node(
+            package="gimbal_aim_solver",
+            executable="gimbal_aim_solver_node",
+            name="gimbal_aim_solver_node",
+            output="screen",
+            condition=scan_solver_mode,
+            parameters=[
+                gimbal_solver_params_file,
+                {
+                    "target_angles_topic": cmd_topic,
+                    "gimbal_angles_topic": gimbal_feedback_topic,
+                    "use_increment_output": False,
+                },
+            ],
+        ),
+        Node(
             package="gimbal_serial_bridge",
             executable="manual_angle_cmd_node",
             name="manual_angle_cmd_node",
             output="screen",
             emulate_tty=True,
+            condition=manual_mode,
             parameters=[{
                 "cmd_topic": cmd_topic,
                 "enable_topic": enable_topic,
+                "feedback_topic": gimbal_feedback_topic,
+                "initialize_from_feedback": True,
+                "feedback_timeout_sec": 1.0,
                 "yaw_deg": ParameterValue(yaw_deg, value_type=float),
                 "pitch_deg": ParameterValue(pitch_deg, value_type=float),
                 "step_deg": ParameterValue(step_deg, value_type=float),
@@ -244,6 +362,8 @@ def generate_launch_description():
                 "enable_value": ParameterValue(enable_value, value_type=bool),
                 "yaw_index": ParameterValue(yaw_index, value_type=int),
                 "pitch_index": ParameterValue(pitch_index, value_type=int),
+                "feedback_yaw_index": ParameterValue(yaw_index, value_type=int),
+                "feedback_pitch_index": ParameterValue(pitch_index, value_type=int),
                 "publish_dim": ParameterValue(publish_dim, value_type=int),
             }],
         ),

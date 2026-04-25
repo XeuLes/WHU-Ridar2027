@@ -32,9 +32,9 @@ struct YoloDetectorParams
   int input_h{640};
   int max_det{300};
   int target_class_id{0};
-  float conf_thresh{0.45f};
+  float conf_thresh{0.25f};
   float nms_thresh{0.45f};
-  float kpt_conf_thresh{0.35f};
+  float kpt_conf_thresh{0.25f};
   float min_w_ratio{0.045f};
   float min_h_ratio{0.055f};
   float min_area_ratio{0.0025f};

@@ -224,6 +224,7 @@ private:
   bool has_hold_auto_cmd_{false};
   double hold_auto_yaw_deg_{0.0};
   double hold_auto_pitch_deg_{0.0};
+  bool has_tracked_target_auto_cmd_{false};
 
   double pnp_bias_yaw_deg_{0.0};
   double pnp_bias_pitch_deg_{0.0};

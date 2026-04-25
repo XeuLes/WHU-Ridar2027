@@ -78,7 +78,7 @@ def generate_launch_description():
     )
     declare_yolo_engine_path = DeclareLaunchArgument(
         "yolo_engine_path",
-        default_value=os.path.join(aim_share, "model", "auto_aim_iter2.engine"),
+        default_value=os.path.join(aim_share, "model", "auto_aim.engine"),
         description="TensorRT engine path for YOLO pose detector",
     )
     declare_yolo_input_w = DeclareLaunchArgument(
@@ -93,7 +93,7 @@ def generate_launch_description():
     )
     declare_yolo_conf_thresh = DeclareLaunchArgument(
         "yolo_conf_thresh",
-        default_value="0.45",
+        default_value="0.25",
         description="YOLO object confidence threshold",
     )
     declare_yolo_nms_thresh = DeclareLaunchArgument(
@@ -103,7 +103,7 @@ def generate_launch_description():
     )
     declare_yolo_kpt_conf_thresh = DeclareLaunchArgument(
         "yolo_kpt_conf_thresh",
-        default_value="0.35",
+        default_value="0.25",
         description="YOLO keypoint confidence threshold",
     )
     declare_yolo_max_det = DeclareLaunchArgument(

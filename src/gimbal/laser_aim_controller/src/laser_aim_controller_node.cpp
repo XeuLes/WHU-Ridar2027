@@ -1251,8 +1251,7 @@ void LaserAimControllerNode::controlLoop()
   const bool target_fresh =
     obs.received && ((now - obs.rx_time).seconds() <= target_timeout_s_);
 
-  const bool explicit_lost = obs.received && !obs.has_target;
-  const bool target_stale = obs.received && !target_fresh;
+  const bool visual_missing = !target_fresh || !obs.has_target;
 
   const bool pixel_valid =
     target_fresh && obs.has_target &&
@@ -1290,16 +1289,18 @@ void LaserAimControllerNode::controlLoop()
 
   const ControlMode prev_mode = last_mode_;
   mode_ = ControlMode::HOLD;
+  const bool rough_fallback_ready =
+    visual_missing && has_rough && fallback_to_rough_when_no_target_;
   if (increment_mode_ == "pnp") {
     if (pnp_valid) {
       mode_ = ControlMode::PNP_ONLY_TRACK;
-    } else if ((explicit_lost || target_stale) && has_rough && fallback_to_rough_when_no_target_) {
+    } else if (rough_fallback_ready) {
       mode_ = ControlMode::LOST_RECOVER;
     }
   } else if (increment_mode_ == "pixel") {
     if (pixel_valid && has_filtered_pixel_) {
       mode_ = ControlMode::FINE_TRACK;
-    } else if ((explicit_lost || target_stale) && has_rough && fallback_to_rough_when_no_target_) {
+    } else if (rough_fallback_ready) {
       mode_ = ControlMode::LOST_RECOVER;
     }
   } else {
@@ -1307,7 +1308,7 @@ void LaserAimControllerNode::controlLoop()
       mode_ = ControlMode::FINE_TRACK;
     } else if (pnp_valid) {
       mode_ = ControlMode::PNP_ONLY_TRACK;
-    } else if ((explicit_lost || target_stale) && has_rough && fallback_to_rough_when_no_target_) {
+    } else if (rough_fallback_ready) {
       mode_ = ControlMode::LOST_RECOVER;
     }
   }
@@ -1749,7 +1750,10 @@ void LaserAimControllerNode::controlLoop()
       recover_scan_state.last_scan_yaw_deg = scan_yaw;
       recover_scan_state.last_scan_pitch_deg = scan_pitch;
     } else {
-      if (has_rough) {
+      if (has_tracked_target_auto_cmd_) {
+        desired_yaw = hold_auto_yaw_deg_;
+        desired_pitch = hold_auto_pitch_deg_;
+      } else if (has_rough) {
         desired_yaw = rough_yaw;
         desired_pitch = rough_pitch;
       } else if (has_hold_auto_cmd_) {
@@ -1830,6 +1834,7 @@ void LaserAimControllerNode::controlLoop()
     hold_auto_yaw_deg_ = auto_yaw;
     hold_auto_pitch_deg_ = auto_pitch;
     has_hold_auto_cmd_ = true;
+    has_tracked_target_auto_cmd_ = true;
   }
 
   double final_yaw = auto_yaw;

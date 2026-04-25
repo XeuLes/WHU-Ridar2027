@@ -5,7 +5,10 @@ gimbal_serial_bridge:
     serial_port: "/dev/ttyACM0"   # 作为 fallback（serial_ports 为空才用）
     baud: 115200
 
-    angles_topic: "/gimbal/angles"
+    angles_raw_topic: "/gimbal/angles_raw"
+    angles_true_topic: "/gimbal/angles_true"
+    quaternion_raw_topic: "/gimbal/quaternion_raw"
+    quaternion_true_topic: "/gimbal/quaternion_true"
     mode_up_topic: "/gimbal/mode_up"
     cmd_topic: "/gimbal/command_angles"
     enable_topic: "/gimbal/enable"

@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -25,16 +26,21 @@ public:
     explicit ManualAngleCmdNode(const rclcpp::NodeOptions & options)
         : Node("manual_angle_cmd_node", options)
     {
-        // 改为手动累计量输出话题，不再直发最终控制话题
+        // Manual output is intended to feed an upstream controller, not the final MCU command topic.
         declare_parameter<std::string>("cmd_topic", "/gimbal/command_angles_manual");
         declare_parameter<std::string>("enable_topic", "/gimbal/enable");
+        declare_parameter<std::string>("feedback_topic", "/gimbal/angles_true");
 
         declare_parameter<double>("yaw_deg", 0.0);
         declare_parameter<double>("pitch_deg", 0.0);
         declare_parameter<double>("step_deg", 0.1);
+        declare_parameter<bool>("initialize_from_feedback", true);
+        declare_parameter<double>("feedback_timeout_sec", 1.0);
 
         declare_parameter<int>("yaw_index", 0);
         declare_parameter<int>("pitch_index", 1);
+        declare_parameter<int>("feedback_yaw_index", 0);
+        declare_parameter<int>("feedback_pitch_index", 1);
         declare_parameter<int>("publish_dim", 2);
 
         declare_parameter<bool>("publish_enable", true);
@@ -43,13 +49,18 @@ public:
 
         cmd_topic_ = get_parameter("cmd_topic").as_string();
         enable_topic_ = get_parameter("enable_topic").as_string();
+        feedback_topic_ = get_parameter("feedback_topic").as_string();
 
         yaw_deg_ = get_parameter("yaw_deg").as_double();
         pitch_deg_ = get_parameter("pitch_deg").as_double();
         step_deg_ = get_parameter("step_deg").as_double();
+        initialize_from_feedback_ = get_parameter("initialize_from_feedback").as_bool();
+        feedback_timeout_sec_ = get_parameter("feedback_timeout_sec").as_double();
 
         yaw_index_ = get_parameter("yaw_index").as_int();
         pitch_index_ = get_parameter("pitch_index").as_int();
+        feedback_yaw_index_ = get_parameter("feedback_yaw_index").as_int();
+        feedback_pitch_index_ = get_parameter("feedback_pitch_index").as_int();
         publish_dim_ = get_parameter("publish_dim").as_int();
 
         publish_enable_ = get_parameter("publish_enable").as_bool();
@@ -62,6 +73,8 @@ public:
         }
         if (yaw_index_ < 0) yaw_index_ = 0;
         if (pitch_index_ < 0) pitch_index_ = 1;
+        if (feedback_yaw_index_ < 0) feedback_yaw_index_ = 0;
+        if (feedback_pitch_index_ < 0) feedback_pitch_index_ = 1;
         if (yaw_index_ >= publish_dim_ || pitch_index_ >= publish_dim_) {
             RCLCPP_FATAL(
                 get_logger(),
@@ -72,13 +85,26 @@ public:
         if (step_deg_ <= 0.0) {
             step_deg_ = 0.1;
         }
+        if (feedback_timeout_sec_ < 0.0) {
+            feedback_timeout_sec_ = 0.0;
+        }
+
+        initialized_ = !initialize_from_feedback_;
+        init_start_tp_ = std::chrono::steady_clock::now();
 
         pub_cmd_ = create_publisher<std_msgs::msg::Float64MultiArray>(cmd_topic_, rclcpp::QoS(10));
         if (publish_enable_) {
             pub_enable_ = create_publisher<std_msgs::msg::Bool>(enable_topic_, rclcpp::QoS(10));
         }
+        if (initialize_from_feedback_) {
+            sub_feedback_ = create_subscription<std_msgs::msg::Float64MultiArray>(
+                feedback_topic_, rclcpp::SensorDataQoS(),
+                std::bind(&ManualAngleCmdNode::feedbackCallback, this, std::placeholders::_1));
+        }
 
-        publishOnce();
+        if (initialized_) {
+            publishOnce();
+        }
 
         const auto period = std::chrono::duration<double>(1.0 / std::max(1.0, publish_hz));
         timer_ = create_wall_timer(
@@ -89,8 +115,9 @@ public:
 
         RCLCPP_INFO(
             get_logger(),
-            "manual_angle_cmd_node started. cmd_topic=%s enable_topic=%s yaw=%.3f deg pitch=%.3f deg step=%.3f deg",
-            cmd_topic_.c_str(), enable_topic_.c_str(), yaw_deg_, pitch_deg_, step_deg_);
+            "manual_angle_cmd_node started. cmd_topic=%s enable_topic=%s feedback_topic=%s yaw=%.3f deg pitch=%.3f deg step=%.3f deg init_from_feedback=%s",
+            cmd_topic_.c_str(), enable_topic_.c_str(), feedback_topic_.c_str(),
+            yaw_deg_, pitch_deg_, step_deg_, initialize_from_feedback_ ? "true" : "false");
 
         RCLCPP_INFO(
             get_logger(),
@@ -108,7 +135,64 @@ public:
 private:
     void onTimer()
     {
+        if (!isInitializedForPublish()) {
+            return;
+        }
         publishOnce();
+    }
+
+    bool isInitializedForPublish()
+    {
+        std::lock_guard<std::mutex> lk(angle_mutex_);
+        if (initialized_) {
+            return true;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const double wait_sec = std::chrono::duration<double>(now - init_start_tp_).count();
+        if (wait_sec < feedback_timeout_sec_) {
+            return false;
+        }
+
+        initialized_ = true;
+        RCLCPP_WARN(
+            get_logger(),
+            "No valid feedback received on %s within %.3f sec. Starting from configured yaw/pitch.",
+            feedback_topic_.c_str(), feedback_timeout_sec_);
+        return true;
+    }
+
+    void feedbackCallback(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+    {
+        if (!initialize_from_feedback_ || !msg || msg->data.empty()) {
+            return;
+        }
+
+        const int n = static_cast<int>(msg->data.size());
+        if (feedback_yaw_index_ >= n || feedback_pitch_index_ >= n) {
+            return;
+        }
+
+        const double yaw = msg->data[static_cast<size_t>(feedback_yaw_index_)];
+        const double pitch = msg->data[static_cast<size_t>(feedback_pitch_index_)];
+        if (!std::isfinite(yaw) || !std::isfinite(pitch)) {
+            return;
+        }
+
+        {
+            std::lock_guard<std::mutex> lk(angle_mutex_);
+            if (initialized_ || user_modified_) {
+                return;
+            }
+            yaw_deg_ = yaw;
+            pitch_deg_ = pitch;
+            initialized_ = true;
+        }
+
+        RCLCPP_INFO(
+            get_logger(),
+            "Initialized manual command from %s: yaw=%.3f deg, pitch=%.3f deg",
+            feedback_topic_.c_str(), yaw, pitch);
     }
 
     void publishOnce()
@@ -120,6 +204,9 @@ private:
         double pitch = 0.0;
         {
             std::lock_guard<std::mutex> lk(angle_mutex_);
+            if (!initialized_) {
+                return;
+            }
             yaw = yaw_deg_;
             pitch = pitch_deg_;
         }
@@ -217,6 +304,9 @@ private:
 
             {
                 std::lock_guard<std::mutex> lk(angle_mutex_);
+                if (!initialized_) {
+                    initialized_ = true;
+                }
                 switch (ch) {
                     case 'A':
                         yaw_deg_ += step_deg_;
@@ -241,6 +331,9 @@ private:
                     default:
                         break;
                 }
+                if (changed) {
+                    user_modified_ = true;
+                }
                 yaw = yaw_deg_;
                 pitch = pitch_deg_;
             }
@@ -260,23 +353,32 @@ private:
 private:
     std::string cmd_topic_;
     std::string enable_topic_;
+    std::string feedback_topic_;
 
     double yaw_deg_{0.0};
     double pitch_deg_{0.0};
     double step_deg_{0.1};
+    bool initialize_from_feedback_{true};
+    double feedback_timeout_sec_{1.0};
 
     int yaw_index_{0};
     int pitch_index_{1};
+    int feedback_yaw_index_{0};
+    int feedback_pitch_index_{1};
     int publish_dim_{2};
 
     bool publish_enable_{true};
     bool enable_value_{true};
+    bool initialized_{false};
+    bool user_modified_{false};
+    std::chrono::steady_clock::time_point init_start_tp_{};
 
     std::mutex angle_mutex_;
     std::atomic<bool> quit_{false};
 
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_cmd_;
     rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr pub_enable_;
+    rclcpp::Subscription<std_msgs::msg::Float64MultiArray>::SharedPtr sub_feedback_;
     rclcpp::TimerBase::SharedPtr timer_;
 
     std::thread kb_thread_;

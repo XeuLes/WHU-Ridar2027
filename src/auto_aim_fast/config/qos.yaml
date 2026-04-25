@@ -5,7 +5,7 @@ auto_aim_node:
     qos.history_keep_all: false
     qos.reliability: "best_effort"
 
-    publish_hz: 100
+    publish_hz: 200
     output.angle_unit: "rad"
 
     prediction.enable: true
@@ -14,8 +14,6 @@ auto_aim_node:
     prediction.extra_latency_ns: 0
 
     debug.publish_debug_image: true
-    debug.publish_binary_image: true
+    debug.publish_binary_image: false
     debug.debug_topic: "/auto_aim/debug_image"
     debug.binary_topic: "/auto_aim/binary_image"
-
-

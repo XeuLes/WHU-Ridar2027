@@ -1,13 +1,13 @@
 gimbal_aim_solver_node:
   ros__parameters:
     uav_topic: "/uav_positions"
-    gimbal_angles_topic: "/gimbal/angles"
+    gimbal_angles_topic: "/gimbal/angles_true"
     target_angles_topic: "/gimbal/rough_command_angles"
 
     # red / blue
     target_side: "red"
 
-    # /gimbal/angles 的顺序:
+    # /gimbal/angles_true 的顺序:
     # "pitch_yaw" 表示 data[0]=pitch, data[1]=yaw
     # "yaw_pitch" 表示 data[0]=yaw, data[1]=pitch
     gimbal_angle_order: "yaw_pitch"

@@ -76,7 +76,7 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<bool>("qos.history_keep_all", false);
   this->declare_parameter<std::string>("qos.reliability", "best_effort");
 
-  this->declare_parameter<int>("publish_hz", 100);
+  this->declare_parameter<int>("publish_hz", 200);
 
   this->declare_parameter<std::string>("output.angle_unit", "rad"); // "rad" or "deg"
 
@@ -147,9 +147,9 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("detector.yolo.input_h", 640);
   this->declare_parameter<int>("detector.yolo.max_det", 300);
   this->declare_parameter<int>("detector.yolo.target_class_id", 0);
-  this->declare_parameter<double>("detector.yolo.conf_thresh", 0.45);
+  this->declare_parameter<double>("detector.yolo.conf_thresh", 0.25);
   this->declare_parameter<double>("detector.yolo.nms_thresh", 0.45);
-  this->declare_parameter<double>("detector.yolo.kpt_conf_thresh", 0.35);
+  this->declare_parameter<double>("detector.yolo.kpt_conf_thresh", 0.25);
   this->declare_parameter<double>("detector.yolo.min_w_ratio", 0.045);
   this->declare_parameter<double>("detector.yolo.min_h_ratio", 0.055);
   this->declare_parameter<double>("detector.yolo.min_area_ratio", 0.0025);
