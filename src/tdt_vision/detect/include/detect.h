@@ -73,6 +73,16 @@ public:
         uav_cluster_debug_sub_;
 
 private:
+    struct SemanticTrackCache {
+        int color = 1;
+        int number = 0;
+        int index = -1;
+        cv::Rect car_rect;
+        cv::Point2f center;
+        rclcpp::Time last_real_armor_time{0, 0, RCL_ROS_TIME};
+        bool valid = false;
+    };
+
     std::shared_ptr<Infer<yolo::BoxArray>>     yolo;
     std::shared_ptr<Infer<yolo::BoxArray>>     armor_yolo;
     std::shared_ptr<Infer<yolo::BoxArray>>     uav_detector;
@@ -95,6 +105,8 @@ private:
     bool  red_y_lpf_init_[7]{false};
 
     float y_lpf_alpha_ = 0.35f;
+    int semantic_carry_ms_ = 500;
+    SemanticTrackCache last_semantic_tracks_[3][7];
 
     std::vector<TrackedUav> tracked_uavs;
     const int HIT_THRESHOLD = 3;   // 连续3帧出现才认为有效

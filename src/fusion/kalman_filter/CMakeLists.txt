@@ -3,6 +3,7 @@ project(kalman_filter)
 
 find_package (ament_cmake_auto REQUIRED) 
 ament_auto_find_build_dependencies ()
+find_package(yaml-cpp REQUIRED)
 
 include_directories(include)
 
@@ -14,7 +15,7 @@ file(GLOB_RECURSE KALMAN_FILTER_SRCS
 ament_auto_add_library(${KALMAN_FILTER} SHARED
     ${KALMAN_FILTER_SRCS}
 )
-target_link_libraries(${KALMAN_FILTER} ${PCL_LIBRARIES})
+target_link_libraries(${KALMAN_FILTER} ${PCL_LIBRARIES} yaml-cpp)
 
 rclcpp_components_register_node(${KALMAN_FILTER}
     PLUGIN "tdt_radar::KalmanFilter"

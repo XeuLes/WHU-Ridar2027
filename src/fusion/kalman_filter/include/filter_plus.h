@@ -4,6 +4,8 @@
 #include <pcl/impl/point_types.hpp>
 #include <rclcpp/rclcpp.hpp>
 #include <rclcpp/time.hpp>
+#include <algorithm>
+#include <map>
 #include "opencv2/opencv.hpp"
 #include "pcl/point_cloud.h"
 #include "pcl/point_types.h"
@@ -33,8 +35,16 @@ public:
     std::vector<std::pair<double, pcl::PointXY>> history;
     std::vector<std::pair<int, int>>             detect_history;
     int                                          max_history = 20;
+    int                                          semantic_history_size = 20;
+    int                                          semantic_confirm_min_hits = 1;
+    int                                          semantic_switch_min_hits = 3;
+    bool                                         semantic_tracking_enabled = true;
+    bool                                         semantic_confirmed = false;
+    int                                          semantic_color = 1;
+    int                                          semantic_number = -1;
 
     pcl::PointXY predict_point;
+    pcl::PointXY velocity_point;
     float        detect_r = 1;
     float        car_speed = 2;
     float        car_max_speed = 2.5;
@@ -73,7 +83,7 @@ float        camera_match_r = 0.8f;
         unsigned int type = CV_32F;
         KF.init(stateSize, measSize, contrSize, type);
 
-        cv::Mat state(stateSize, 1, type);
+        cv::Mat state = cv::Mat::zeros(stateSize, 1, type);
         cv::Mat meas(measSize, 1, type);
         meas.at<float>(0) = input.x;
         meas.at<float>(1) = input.y;
@@ -81,6 +91,8 @@ float        camera_match_r = 0.8f;
         state.at<float>(0) = meas.at<float>(0);
         state.at<float>(2) = meas.at<float>(1);
         KF.statePost = state;
+        velocity_point.x = 0.0f;
+        velocity_point.y = 0.0f;
         KF.transitionMatrix = (cv::Mat_<float>(4, 4) << 1, dt_, 0, 0, 0, 1,
                                0, 0, 0, 0, 1, dt_, 0, 0, 0, 1);
 
@@ -111,8 +123,109 @@ float        camera_match_r = 0.8f;
 
     ~Kalman_filter_plus() {}
 
-    int get_color()
+    pcl::PointXY velocity() const
     {
+        return velocity_point;
+    }
+
+    static bool valid_semantic(int color_id, int number_id)
+    {
+        return (color_id == 0 || color_id == 2) && number_id >= 0 && number_id < 7;
+    }
+
+    int count_semantic(int color_id, int number_id) const
+    {
+        int count = 0;
+        for (const auto& label : detect_history) {
+            if (label.first == color_id && label.second == number_id) {
+                count++;
+            }
+        }
+        return count;
+    }
+
+    bool best_semantic(int& color_id, int& number_id, int& count) const
+    {
+        std::map<std::pair<int, int>, int> label_counts;
+        for (const auto& label : detect_history) {
+            if (valid_semantic(label.first, label.second)) {
+                label_counts[label]++;
+            }
+        }
+        if (label_counts.empty()) {
+            return false;
+        }
+
+        count = 0;
+        color_id = 1;
+        number_id = -1;
+        for (const auto& entry : label_counts) {
+            if (entry.second > count) {
+                count = entry.second;
+                color_id = entry.first.first;
+                number_id = entry.first.second;
+            }
+        }
+        return true;
+    }
+
+    void update_semantic(int color_id, int number_id)
+    {
+        if (!valid_semantic(color_id, number_id)) {
+            return;
+        }
+
+        detect_history.push_back(std::make_pair(color_id, number_id));
+        const int max_semantic_history = std::max(1, semantic_history_size);
+        while (static_cast<int>(detect_history.size()) > max_semantic_history) {
+            detect_history.erase(detect_history.begin());
+        }
+
+        if (!semantic_tracking_enabled) {
+            int best_color = 1;
+            int best_number = -1;
+            int best_count = 0;
+            if (best_semantic(best_color, best_number, best_count)) {
+                semantic_color = best_color;
+                semantic_number = best_number;
+                semantic_confirmed = true;
+            }
+            return;
+        }
+
+        const int observed_count = count_semantic(color_id, number_id);
+        if (!semantic_confirmed) {
+            if (observed_count >= std::max(1, semantic_confirm_min_hits)) {
+                semantic_color = color_id;
+                semantic_number = number_id;
+                semantic_confirmed = true;
+            }
+            return;
+        }
+
+        if (semantic_color == color_id && semantic_number == number_id) {
+            return;
+        }
+
+        if (observed_count >= std::max(1, semantic_switch_min_hits)) {
+            semantic_color = color_id;
+            semantic_number = number_id;
+        }
+    }
+
+    int semantic_confidence_hits() const
+    {
+        if (!semantic_confirmed) {
+            return 0;
+        }
+        return count_semantic(semantic_color, semantic_number);
+    }
+
+    int get_color() const
+    {
+        if (semantic_tracking_enabled) {
+            return semantic_confirmed ? semantic_color : 1;
+        }
         if (detect_history.size() == 0) {
             return 1;
         }
@@ -132,8 +245,11 @@ float        camera_match_r = 0.8f;
         }
     }
 
-    int get_number()
+    int get_number() const
     {
+        if (semantic_tracking_enabled) {
+            return semantic_confirmed ? semantic_number : 0;
+        }
         int                color = get_color();
         std::map<int, int> number_map;
         for (auto& number : detect_history) {
@@ -164,6 +280,8 @@ float        camera_match_r = 0.8f;
 
     predict_point.x = KF.statePost.at<float>(0);
     predict_point.y = KF.statePost.at<float>(2);
+    velocity_point.x = KF.statePost.at<float>(1);
+    velocity_point.y = KF.statePost.at<float>(3);
 
     has_updated = true;
     last_time = 0;
@@ -187,6 +305,8 @@ void update_camera(const pcl::PointXY& input, rclcpp::Time time)
 
     predict_point.x = KF.statePost.at<float>(0);
     predict_point.y = KF.statePost.at<float>(2);
+    velocity_point.x = KF.statePost.at<float>(1);
+    velocity_point.y = KF.statePost.at<float>(3);
 
     has_updated = true;
     last_time = 0;
@@ -221,6 +341,8 @@ void update_camera(const pcl::PointXY& input, rclcpp::Time time)
 
         predict_point.x = result.at<float>(0);
         predict_point.y = result.at<float>(2);
+        velocity_point.x = result.at<float>(1);
+        velocity_point.y = result.at<float>(3);
     }
 
     bool match(const pcl::PointXY& input)
@@ -228,13 +350,14 @@ void update_camera(const pcl::PointXY& input, rclcpp::Time time)
         return Distance(predict_point, input) <
             (car_max_speed * dt_ + detect_r);
     }
-    bool match_camera(const pcl::PointXY& input)
+    bool match_camera(const pcl::PointXY& input) const
     {
         return Distance(predict_point, input) < camera_match_r;
     }
 
-    void camera_match_and_update(rclcpp::Time& time, const pcl::PointXY& input,
-                                int color_id, int number_id)
+    bool camera_match_score(const rclcpp::Time& time,
+                            const pcl::PointXY& input,
+                            float& score) const
     {
         const double TIME_THRESHOLD = 1.0;
         double input_time = GetTimeByRosTime(time);
@@ -252,27 +375,39 @@ void update_camera(const pcl::PointXY& input, rclcpp::Time time)
 
         // 1) 时间门控
         if (differ_time > TIME_THRESHOLD) {
-            return;
+            return false;
         }
 
         // 2) 历史点距离门控（保留你原逻辑）
         if (Distance(match_point, input) >= detect_r) {
-            return;
+            return false;
         }
 
         // 3) 当前预测点门控（新增）
         if (!match_camera(input)) {
-            return;
+            return false;
         }
 
-        // 4) 记录颜色和编号历史
-        detect_history.push_back(std::make_pair(color_id, number_id));
-        if (detect_history.size() > max_history) {
-            detect_history.erase(detect_history.begin());
+        score = Distance(predict_point, input);
+        return true;
+    }
+
+    bool camera_match_and_update(const rclcpp::Time& time,
+                                 const pcl::PointXY& input,
+                                 int color_id,
+                                 int number_id)
+    {
+        float score = 0.0f;
+        if (!camera_match_score(time, input, score)) {
+            return false;
         }
+
+        // 4) 记录稳定语义，未知/无效语义不会清空已确认标签
+        update_semantic(color_id, number_id);
 
         // 5) 用相机坐标修正KF
         update_camera(input, time);
+        return true;
     }
     static double GetTimeByRosTime(const rclcpp::Time& ros_time)
     {

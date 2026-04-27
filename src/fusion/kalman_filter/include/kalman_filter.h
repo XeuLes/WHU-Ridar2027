@@ -1,13 +1,18 @@
 #pragma once
 
+#include <builtin_interfaces/msg/time.hpp>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include <radar_decision_comm/msg/referee_robot_identity.hpp>
 #include <rclcpp/publisher.hpp>
 #include <rclcpp_components/register_node_macro.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <vision_interface/msg/detect_result.hpp>
 #include <vision_interface/msg/match_info.hpp>
 #include <vision_interface/msg/radar2_sentry.hpp>
 #include <vision_interface/msg/radar_warn.hpp>
-#include "filter_plus.h"
+#include "track_state_machine.h"
 #include "opencv2/opencv.hpp"
 #include "pcl/io/pcd_io.h"
 #include "pcl/point_cloud.h"
@@ -37,6 +42,7 @@ private:
         radar_pub_;
     rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr
         radar_detect_pub_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr track_status_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr pub_;
     void callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void detect_callback(
@@ -50,7 +56,24 @@ private:
     bool is_kf_available_now(const rclcpp::Time& now_time) const;
     int normalized_self_color(int raw_color) const;
     int effective_self_color() const;
-    std::vector<Kalman_filter_plus>  KFs;
+    void publish_tracks(const rclcpp::Time& time,
+                        const builtin_interfaces::msg::Time& stamp);
+    void publish_track_status(const rclcpp::Time& time);
+    bool load_blind_guess_points(const std::string& config_path);
+    std::string robot_key(const FixedTrackSlot& track) const;
+    pcl::PointXY mirror_point_if_needed(const pcl::PointXY& point,
+                                        bool mirror) const;
+    std::vector<pcl::PointXY> get_guess_points_for_track(
+        const FixedTrackSlot& track,
+        int effective_self_color) const;
+    bool compute_blind_guess(FixedTrackSlot& track,
+                             const rclcpp::Time& time,
+                             int effective_self_color);
+    void update_track_output_modes(const rclcpp::Time& time);
+    double lost_duration_ms(const FixedTrackSlot& track,
+                            const rclcpp::Time& time) const;
+
+    FixedTrackStateMachine track_sm_;
     vision_interface::msg::RadarWarn lidar_detect;
     vision_interface::msg::MatchInfo match_info;
     rclcpp::Time last_lidar_cluster_stamp_{0, 0, RCL_ROS_TIME};
@@ -61,5 +84,7 @@ private:
     bool use_referee_identity_color_{true};
     int referee_identity_color_{2};
     bool has_referee_identity_color_{false};
+    std::unordered_map<std::string, std::vector<pcl::PointXY>>
+        guess_points_;
 };
 }  // namespace tdt_radar

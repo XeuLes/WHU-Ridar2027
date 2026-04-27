@@ -48,6 +48,9 @@ def _build_launch(context):
 
     bringup_config = os.path.join(bringup_share, "config")
     map_pcd_path = os.path.join(localization_share, "config", "RM2025.pcd")
+    camera_extrinsic_yaml = os.path.join(bringup_config, "out_matrix.yaml")
+    camera_to_lidar_yaml = os.path.join(localization_share, "config", "camera_to_lidar.yaml")
+    manual_yaml = os.path.join(localization_share, "config", "livox_rm_manual.yaml")
     rviz_config_path = os.path.join(localization_share, "config", "localization_rviz_config.rviz")
 
     intra = [{"use_intra_process_comms": True}]
@@ -65,20 +68,62 @@ def _build_launch(context):
         plugin="tdt_radar::Localization",
         name="localization_node",
         parameters=[
+            manual_yaml,
             {
-                "use_map": True,
-                "map_frame": "rm_frame",
                 "target_pcd_path": map_pcd_path,
+                "initial_pose_mode": "online",
+                "fallback_to_offline_if_online_failed": True,
+                "initial_x": 0.0,
+                "initial_y": 0.0,
+                "initial_z": 0.0,
+                "initial_roll": 0.0,
+                "initial_pitch": 0.0,
+                "initial_yaw": 0.0,
+                "camera_extrinsic_yaml": camera_extrinsic_yaml,
+                "camera_to_lidar_yaml": camera_to_lidar_yaml,
+                "online_initial_y_offset": 15.0,
+                "enable_gicp_total_timeout": True,
+                "gicp_total_timeout_sec": 5.0,
+                "fallback_to_initial_after_timeout": True,
+                "gicp_max_iterations": 100,
+                "gicp_transformation_epsilon": 1e-8,
+                "gicp_euclidean_fitness_epsilon": 1e-6,
+                "gicp_success_fitness_threshold": 0.3,
+                "accumulate_time": 30,
+                "grid_size_degrees": 0.05,
+                "downsample_leaf_size": 0.2,
+                "roi_min_x": 0.0,
+                "roi_max_x": 28.0,
+                "roi_min_y": -15.0,
+                "roi_max_y": 15.0,
+                "roi_max_z": 1.0,
+                "tf_publish_rate_hz": 20.0,
+                "gicp_worker_rate_hz": 20.0,
+                "publish_full_pcd_map": False,
+                "publish_live_scan_map_on_gicp_timeout": False,
             }
         ],
-        extra_arguments=intra,
+        extra_arguments=[{"use_intra_process_comms": False}],
     )
 
     dynamic_cloud_component = ComposableNode(
         package="dynamic_cloud",
         plugin="tdt_radar::DynamicCloud",
         name="dynamic_cloud_node",
-        parameters=[{"map_pcd_path": map_pcd_path}],
+        parameters=[
+            {
+                "map_pcd_path": map_pcd_path,
+                "uav_other_min_x": 0.0,
+                "uav_other_max_x": 28.0,
+                "uav_other_min_y": 0.0,
+                "uav_other_max_y": 15.0,
+                "uav_other_min_z": 1.2,
+                "uav_other_max_z": 4.5,
+            }
+        ],
+        remappings=[
+            ("/livox/lidar_integrated", "/livox/lidar"),
+        ],
         extra_arguments=intra,
     )
 
@@ -103,8 +148,10 @@ def _build_launch(context):
         name="radar_resolve_node",
         parameters=[
             {
-                "out_matrix_path": os.path.join(bringup_config, "out_matrix.yaml"),
-                "camera_params_path": os.path.join(bringup_config, "camera_params_rect.yaml"),
+                "out_matrix_path": camera_extrinsic_yaml,
+                # RosbagPlayer decodes /compressed_image directly and does not
+                # rectify it, so resolve must use the raw camera model here.
+                "camera_params_path": os.path.join(bringup_config, "camera_params.yaml"),
                 "region_points_path": os.path.join(bringup_config, "RM2025_Points.yaml"),
                 "minimap_path": os.path.join(bringup_config, "RM2025.png"),
                 "uav_publish_default_output": False,
@@ -127,6 +174,47 @@ def _build_launch(context):
             {
                 "use_match_info_color": False,
                 "self_color_override": team["match_self_color"],
+                "semantic_tracking_enabled": True,
+                "semantic_history_size": 20,
+                "semantic_confirm_min_hits": 2,
+                "semantic_switch_min_hits": 3,
+                "fixed_track_confirm_hits": 2,
+                "pending_seed_confirm_hits": 2,
+                "semantic_vote_history_size": 6,
+                "tentative_miss_limit": 2,
+                "lost_miss_limit": 8,
+                "lost_prediction_publish_ms": 0,
+                "camera_publish_hold_ms": 120,
+                "lidar_publish_hold_ms": 100,
+                "recent_camera_constraint_ms": 500,
+                "frame_sync_ms": 50,
+                "box_iou_history_size": 6,
+                "visual_bootstrap_on_first_frame": True,
+                "tentative_accept_same_id_camera": True,
+                "car_lidar_update_enabled": False,
+                "lidar_match_gate_m": 1.2,
+                "lost_lidar_match_gate_m": 2.0,
+                "camera_match_gate_m": 1.2,
+                "camera_dynamic_speed_gain": 1.0,
+                "vision_noise_margin_m": 0.8,
+                "box_consistency_gate_relax_m": 2.0,
+                "pending_seed_gate_m": 1.2,
+                "box_iou_confirm_threshold": 0.25,
+                "box_center_diag_ratio": 0.75,
+                "publish_lost_prediction_to_decision": False,
+                "blind_guess_enabled": True,
+                "blind_guess_config_path": os.path.join(bringup_config, "guess_pts.yaml"),
+                "blind_guess_after_ms": 250,
+                "blind_guess_hold_ms": 1200,
+                "kf_predict_hold_ms": 150,
+                "max_predict_step_m": 0.8,
+                "max_predict_speed_mps": 5.0,
+                "blind_guess_distance_weight": 0.6,
+                "blind_guess_direction_weight": 0.4,
+                "blind_guess_d_factor": 0.15,
+                "blind_guess_min_speed_mps": 0.2,
+                "blind_guess_publish_to_detect": False,
+                "blind_guess_publish_to_sentry": False,
             }
         ],
         extra_arguments=intra,
@@ -292,12 +380,29 @@ def _build_launch(context):
         arguments=["-d", rviz_config_path],
     )
 
+    track_status_window_node = Node(
+        package="debug_map",
+        executable="track_status_window_node",
+        name="track_status_window_node",
+        output="screen",
+        parameters=[
+            {
+                "detect_topic": "/detect_result",
+                "resolve_topic": "/resolve_result",
+                "kalman_topic": "/kalman_detect",
+                "debug_map_topic": "/debug_map_result",
+                "status_topic": "/kalman_track_status",
+            }
+        ],
+    )
+
     return [
         LogInfo(msg=f"rosbag_radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"rosbag file: {rosbag_file}"),
         replay_container,
         radar_decision_comm_container,
         map_pcd_publisher,
+        track_status_window_node,
         rviz_node,
     ]
 

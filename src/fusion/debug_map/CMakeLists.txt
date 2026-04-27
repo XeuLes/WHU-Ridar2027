@@ -14,11 +14,19 @@ ament_auto_add_executable(debug_map_homo_node
   src/debug_map_homo.cpp
 )
 
+ament_auto_add_executable(track_status_window_node
+  src/track_status_window.cpp
+)
+
 target_link_libraries(debug_map_component
   ${OpenCV_LIBRARIES}
 )
 
 target_link_libraries(debug_map_homo_node
+  ${OpenCV_LIBRARIES}
+)
+
+target_link_libraries(track_status_window_node
   ${OpenCV_LIBRARIES}
 )
 

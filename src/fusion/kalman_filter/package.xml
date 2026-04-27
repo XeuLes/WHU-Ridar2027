@@ -16,6 +16,7 @@
   <depend>pcl_conversions</depend>
   <depend>pcl_msgs</depend>
   <depend>OpenCV</depend>
+  <depend>yaml-cpp</depend>
   <depend>vision_interface</depend>
   <depend>rclcpp_components</depend>
   <depend>radar_decision_comm</depend>

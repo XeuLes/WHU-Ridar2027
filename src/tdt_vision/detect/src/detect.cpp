@@ -77,6 +77,43 @@ int buildTensorRTEngine(
     return std::system(command.str().c_str());
 }
 
+static float rectIou(const cv::Rect& lhs, const cv::Rect& rhs)
+{
+    if (lhs.area() <= 0 || rhs.area() <= 0) {
+        return 0.0f;
+    }
+    const cv::Rect intersection = lhs & rhs;
+    const float intersection_area = static_cast<float>(intersection.area());
+    const float union_area =
+        static_cast<float>(lhs.area() + rhs.area()) - intersection_area;
+    if (union_area <= 1.0f) {
+        return 0.0f;
+    }
+    return intersection_area / union_area;
+}
+
+static float rectCenterDistance(const cv::Rect& lhs, const cv::Rect& rhs)
+{
+    const cv::Point2f lhs_center(
+        lhs.x + lhs.width * 0.5f,
+        lhs.y + lhs.height * 0.5f);
+    const cv::Point2f rhs_center(
+        rhs.x + rhs.width * 0.5f,
+        rhs.y + rhs.height * 0.5f);
+    const float dx = lhs_center.x - rhs_center.x;
+    const float dy = lhs_center.y - rhs_center.y;
+    return std::sqrt(dx * dx + dy * dy);
+}
+
+static float rectDiag(const cv::Rect& rect)
+{
+    if (rect.width <= 0 || rect.height <= 0) {
+        return 0.0f;
+    }
+    return std::sqrt(static_cast<float>(rect.width * rect.width +
+                                        rect.height * rect.height));
+}
+
 }  // namespace
 
 unsigned int count_img = 0;  // 全局图像帧计数器
@@ -422,6 +459,10 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
     this->declare_parameter<int>("uav_intersection_timeout_ms", 120);
     uav_intersection_timeout_ms_ =
         this->get_parameter("uav_intersection_timeout_ms").as_int();
+    this->declare_parameter<int>("semantic_carry_ms", 500);
+    semantic_carry_ms_ =
+        std::max(0, static_cast<int>(
+                        this->get_parameter("semantic_carry_ms").as_int()));
     uav_intersection_debug_sub_ =
         this->create_subscription<sensor_msgs::msg::PointCloud2>(
             "/uav_intersection_debug", rclcpp::SensorDataQoS(),
@@ -668,6 +709,14 @@ for (const auto& b : result) {
         detect_result.blue_y[i] = 0.0f;
         detect_result.red_x[i] = 0.0f;
         detect_result.red_y[i] = 0.0f;
+        detect_result.blue_car_box_x1[i] = 0.0f;
+        detect_result.blue_car_box_y1[i] = 0.0f;
+        detect_result.blue_car_box_x2[i] = 0.0f;
+        detect_result.blue_car_box_y2[i] = 0.0f;
+        detect_result.red_car_box_x1[i] = 0.0f;
+        detect_result.red_car_box_y1[i] = 0.0f;
+        detect_result.red_car_box_x2[i] = 0.0f;
+        detect_result.red_car_box_y2[i] = 0.0f;
     }
     
     // 2.2 初始化UAV灯条检测数组
@@ -692,6 +741,61 @@ for (const auto& b : result) {
     detect_result.red_uav_conf = 0.0f;
     
     size_t array_limit = detect_result.blue_x.size(); 
+    rclcpp::Time frame_time = msg->header.stamp;
+    if (frame_time.nanoseconds() == 0) {
+        frame_time = this->now();
+    }
+
+    auto write_car_detection = [&](int color,
+                                   int idx,
+                                   const cv::Point2f& center,
+                                   const cv::Rect& car_rect) -> bool {
+        if (idx < 0 || idx >= static_cast<int>(array_limit)) {
+            return false;
+        }
+        if (color == 0) {
+            detect_result.blue_x[idx] = center.x;
+            detect_result.blue_y[idx] = center.y;
+            detect_result.blue_car_box_x1[idx] =
+                static_cast<float>(car_rect.x);
+            detect_result.blue_car_box_y1[idx] =
+                static_cast<float>(car_rect.y);
+            detect_result.blue_car_box_x2[idx] =
+                static_cast<float>(car_rect.x + car_rect.width);
+            detect_result.blue_car_box_y2[idx] =
+                static_cast<float>(car_rect.y + car_rect.height);
+            return true;
+        }
+        if (color == 2) {
+            detect_result.red_x[idx] = center.x;
+            detect_result.red_y[idx] = center.y;
+            detect_result.red_car_box_x1[idx] =
+                static_cast<float>(car_rect.x);
+            detect_result.red_car_box_y1[idx] =
+                static_cast<float>(car_rect.y);
+            detect_result.red_car_box_x2[idx] =
+                static_cast<float>(car_rect.x + car_rect.width);
+            detect_result.red_car_box_y2[idx] =
+                static_cast<float>(car_rect.y + car_rect.height);
+            return true;
+        }
+        return false;
+    };
+
+    auto slot_has_detection = [&](int color, int idx) -> bool {
+        if (idx < 0 || idx >= static_cast<int>(array_limit)) {
+            return true;
+        }
+        if (color == 0) {
+            return detect_result.blue_x[idx] != 0.0f ||
+                   detect_result.blue_y[idx] != 0.0f;
+        }
+        if (color == 2) {
+            return detect_result.red_x[idx] != 0.0f ||
+                   detect_result.red_y[idx] != 0.0f;
+        }
+        return true;
+    };
 
     // ==================== 阶段3: 处理地面车辆检测（ID 1-6）====================
     std::vector<Car> cars;
@@ -756,7 +860,7 @@ for (const auto& b : result) {
             cv::rectangle(img, temp_car_rect, cv::Scalar(0, 255, 255), 2);
             cv::putText(img, "Car-Detected",
                         cv::Point(temp_car_rect.x, temp_car_rect.y - 5),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.6,
+                        cv::FONT_HERSHEY_SIMPLEX, 0.75,
                         cv::Scalar(0, 255, 255), 1);
         }
 
@@ -822,18 +926,75 @@ for (const auto& b : result) {
                 }
             }
             
-            // 3.7 数字匹配与结果发送（选择置信度最高的有效装甲板）
+            auto try_carry_semantic = [&](const Car& car,
+                                          int& out_color,
+                                          int& out_number,
+                                          int& out_idx) -> bool {
+                if (semantic_carry_ms_ <= 0 || car.car_rect.area() <= 0) {
+                    return false;
+                }
+
+                float best_match_score = -1.0f;
+                for (int color : {0, 2}) {
+                    for (int idx = 0; idx < 6 && idx < static_cast<int>(array_limit); ++idx) {
+                        const auto& cache = last_semantic_tracks_[color][idx];
+                        if (!cache.valid || cache.car_rect.area() <= 0 ||
+                            slot_has_detection(color, idx)) {
+                            continue;
+                        }
+
+                        const double dt_ms =
+                            (frame_time - cache.last_real_armor_time).seconds() * 1000.0;
+                        if (dt_ms < 0.0 ||
+                            dt_ms > static_cast<double>(semantic_carry_ms_)) {
+                            continue;
+                        }
+
+                        const float area_ratio =
+                            static_cast<float>(car.car_rect.area()) /
+                            static_cast<float>(std::max(1, cache.car_rect.area()));
+                        if (area_ratio < 0.5f || area_ratio > 2.0f) {
+                            continue;
+                        }
+
+                        const float iou = rectIou(car.car_rect, cache.car_rect);
+                        const float center_distance =
+                            rectCenterDistance(car.car_rect, cache.car_rect);
+                        const float diag =
+                            std::max(rectDiag(car.car_rect), rectDiag(cache.car_rect));
+                        const bool center_ok =
+                            diag > 1.0f && center_distance <= 0.75f * diag;
+                        if (iou <= 0.25f && !center_ok) {
+                            continue;
+                        }
+
+                        const float center_score =
+                            center_ok ? std::max(0.0f,
+                                                 1.0f - center_distance /
+                                                            std::max(1.0f, 0.75f * diag))
+                                      : 0.0f;
+                        const float score = iou + center_score;
+                        if (score > best_match_score) {
+                            best_match_score = score;
+                            out_color = cache.color;
+                            out_number = cache.number;
+                            out_idx = cache.index;
+                        }
+                    }
+                }
+
+                return best_match_score >= 0.0f;
+            };
+
+            // 3.7 数字匹配与结果发送；无装甲板时短时继承最近语义
             for (auto& car : cars) {
-                if (car.armors.empty()) continue;
-                
-                // 找到最高置信度的有效装甲板（排除class_label=0和5）
                 int best_armor_idx = -1;
                 float best_score = -1.0f;
-                
+
                 for (int i = 0; i < (int)car.armors.size(); i++) {
                     const auto& armor = car.armors[i];
                     if (armor.class_label != 0 && armor.class_label != 5) {
-                        float combined_score = armor.confidence * 0.8f + 
+                        float combined_score = armor.confidence * 0.8f +
                                               (armor.class_label > 0 ? 0.2f : 0.0f);
                         if (combined_score > best_score) {
                             best_score = combined_score;
@@ -841,9 +1002,37 @@ for (const auto& b : result) {
                         }
                     }
                 }
-                
-                if (best_armor_idx == -1) continue;
-                
+
+                if (best_armor_idx == -1) {
+                    int carried_color = 1;
+                    int carried_number = 0;
+                    int carried_idx = -1;
+                    if (!try_carry_semantic(car, carried_color, carried_number, carried_idx)) {
+                        continue;
+                    }
+
+                    car.color = carried_color;
+                    car.number = carried_number;
+                    car.center = cv::Point2f(
+                        car.car_rect.x + car.car_rect.width * 0.5f,
+                        car.car_rect.y + car.car_rect.height * 0.5f);
+                    write_car_detection(car.color, carried_idx, car.center, car.car_rect);
+
+                    if (debug) {
+                        cv::Scalar draw_color =
+                            (car.color == 2) ? cv::Scalar(0, 80, 255)
+                                             : cv::Scalar(255, 120, 0);
+                        std::string label =
+                            (car.color == 2 ? "R" : "B") +
+                            std::to_string(car.number) + "-carry";
+                        cv::rectangle(img, car.car_rect, draw_color, 2);
+                        cv::putText(img, label,
+                                    cv::Point(car.car_rect.x, car.car_rect.y),
+                                    cv::FONT_HERSHEY_SIMPLEX, 0.85, draw_color, 2);
+                    }
+                    continue;
+                }
+
                 // 计算车辆中心点和颜色
                 const auto& best_armor = car.armors[best_armor_idx];
                 cv::Rect best_rect(
@@ -909,26 +1098,26 @@ for (const auto& b : result) {
                 }
 
                 car.center = cv::Point2f(final_center_x, filtered_center_y);
-                
-                
-                // 填充检测结果数组（防崩溃检查）
-                if (idx >= 0 && idx < (int)array_limit) {
-                    if (car.color == 0) { // Blue
-                        detect_result.blue_x[idx] = car.center.x;
-                        detect_result.blue_y[idx] = car.center.y;
-                    } else if (car.color == 2) { // Red
-                        detect_result.red_x[idx] = car.center.x;
-                        detect_result.red_y[idx] = car.center.y;
-                    }
+
+                if (write_car_detection(car.color, idx, car.center, car.car_rect) &&
+                    idx >= 0 && idx < 6 && (car.color == 0 || car.color == 2)) {
+                    auto& cache = last_semantic_tracks_[car.color][idx];
+                    cache.color = car.color;
+                    cache.number = car.number;
+                    cache.index = idx;
+                    cache.car_rect = car.car_rect;
+                    cache.center = car.center;
+                    cache.last_real_armor_time = frame_time;
+                    cache.valid = true;
                 }
-                
+
                 // 3.8 绘制调试信息
                 if (debug) {
                     cv::Scalar draw_color = (car.color == 2) ? cv::Scalar(0,0,255) : cv::Scalar(255,0,0);
                     std::string label = (car.color == 2 ? "R" : "B") + std::to_string(car.number);
                     cv::rectangle(img, car.car_rect, draw_color, 3);
-                    cv::putText(img, label, cv::Point(car.car_rect.x, car.car_rect.y), 
-                                   cv::FONT_HERSHEY_SIMPLEX, 1, draw_color, 2);
+                    cv::putText(img, label, cv::Point(car.car_rect.x, car.car_rect.y),
+                                   cv::FONT_HERSHEY_SIMPLEX, 1.15, draw_color, 2);
                 }
             }
         }
@@ -1069,7 +1258,7 @@ for (const auto& b : result) {
             cv::circle(img, candidate.roi_center, 4, cv::Scalar(0, 255, 0), -1);
             cv::putText(img, label + cv::format(" %.2f", candidate.confidence),
                         cv::Point(candidate.bbox.x, std::max(candidate.bbox.y - 6, 0)),
-                        cv::FONT_HERSHEY_SIMPLEX, 0.8, color_bgr, 2);
+                        cv::FONT_HERSHEY_SIMPLEX, 0.95, color_bgr, 2);
         }
 
         const rclcpp::Time image_stamp =

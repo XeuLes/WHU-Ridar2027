@@ -50,6 +50,7 @@ public:
     declare_parameter<std::string>("uav_topic", "/uav_positions");
     declare_parameter<std::string>("match_info_topic", "/match_info");
     declare_parameter<std::string>("debug_image_topic", "/debug_map_homo");
+    declare_parameter<std::string>("debug_map_result_topic", "/debug_map_result");
 
     declare_parameter<std::string>("homography_path", "");
     declare_parameter<bool>("auto_load_homography", true);
@@ -72,6 +73,7 @@ public:
     uav_topic_ = get_parameter("uav_topic").as_string();
     match_info_topic_ = get_parameter("match_info_topic").as_string();
     debug_image_topic_ = get_parameter("debug_image_topic").as_string();
+    debug_map_result_topic_ = get_parameter("debug_map_result_topic").as_string();
 
     homography_path_ = get_parameter("homography_path").as_string();
     auto_load_homography_ = get_parameter("auto_load_homography").as_bool();
@@ -128,6 +130,8 @@ public:
       std::bind(&DebugMapHomoNode::onUav, this, std::placeholders::_1));
 
     image_pub_ = create_publisher<sensor_msgs::msg::Image>(debug_image_topic_, 10);
+    debug_map_result_pub_ =
+      create_publisher<vision_interface::msg::DetectResult>(debug_map_result_topic_, 10);
 
     if (show_window_) {
       cv::namedWindow(kWindowName_, cv::WINDOW_AUTOSIZE);
@@ -146,6 +150,7 @@ public:
       "  uav_topic=%s\n"
       "  match_info_topic=%s\n"
       "  debug_image_topic=%s\n"
+      "  debug_map_result_topic=%s\n"
       "  Click 4 points and input world X/Y in the UI.\n"
       "  Keys: [R]=reset mapping, [ESC]=close window",
       map_path_.c_str(),
@@ -153,7 +158,8 @@ public:
       resolve_topic_.c_str(),
       uav_topic_.c_str(),
       match_info_topic_.c_str(),
-      debug_image_topic_.c_str());
+      debug_image_topic_.c_str(),
+      debug_map_result_topic_.c_str());
   }
 
 private:
@@ -322,20 +328,14 @@ bool saveHomographyToFile()
   void onResolveDetect(const vision_interface::msg::DetectResult::SharedPtr msg)
   {
     if (!msg) return;
-    const double t = nowSec();
-
     std::lock_guard<std::mutex> lk(mtx_);
     for (int i = 0; i < 7; ++i) {
-      if (msg->blue_x[i] != 0.0f || msg->blue_y[i] != 0.0f) {
-        resolve_blue_xy_[i] = cv::Point2f(msg->blue_x[i], msg->blue_y[i]);
-        resolve_blue_valid_[i] = true;
-        resolve_blue_t_[i] = t;
-      }
-      if (msg->red_x[i] != 0.0f || msg->red_y[i] != 0.0f) {
-        resolve_red_xy_[i] = cv::Point2f(msg->red_x[i], msg->red_y[i]);
-        resolve_red_valid_[i] = true;
-        resolve_red_t_[i] = t;
-      }
+      resolve_blue_xy_[i] = cv::Point2f(0.0f, 0.0f);
+      resolve_blue_valid_[i] = false;
+      resolve_blue_t_[i] = 0.0;
+      resolve_red_xy_[i] = cv::Point2f(0.0f, 0.0f);
+      resolve_red_valid_[i] = false;
+      resolve_red_t_[i] = 0.0;
     }
   }
 
@@ -535,6 +535,33 @@ void buildHomographyLocked()
     return false;
   }
 
+  vision_interface::msg::DetectResult buildDebugMapResultLocked(
+    const rclcpp::Time & stamp) const
+  {
+    vision_interface::msg::DetectResult result;
+    result.header.stamp = stamp;
+    result.header.frame_id = "map";
+
+    for (int i = 0; i < 7; ++i) {
+      cv::Point2f world;
+      bool from_kalman = false;
+      if (chooseVehiclePointLocked(true, i, world, from_kalman)) {
+        (void)from_kalman;
+        world = applySelfColorFlipLocked(world);
+        result.blue_x[i] = world.x;
+        result.blue_y[i] = world.y;
+      }
+      if (chooseVehiclePointLocked(false, i, world, from_kalman)) {
+        (void)from_kalman;
+        world = applySelfColorFlipLocked(world);
+        result.red_x[i] = world.x;
+        result.red_y[i] = world.y;
+      }
+    }
+
+    return result;
+  }
+
   void drawVehicleLocked(cv::Mat & canvas, bool is_blue, int idx)
   {
     cv::Point2f world;
@@ -711,6 +738,7 @@ void buildHomographyLocked()
   void onUiTimer()
   {
     cv::Mat canvas;
+    vision_interface::msg::DetectResult debug_map_result;
     {
       std::lock_guard<std::mutex> lk(mtx_);
 
@@ -728,6 +756,8 @@ void buildHomographyLocked()
       // drawUavLocked(canvas, 0);
       // drawUavLocked(canvas, 1);
 
+      debug_map_result = buildDebugMapResultLocked(now());
+
       std_msgs::msg::Header header;
       header.stamp = now();
       header.frame_id = "map";
@@ -740,6 +770,8 @@ void buildHomographyLocked()
           "cv_bridge conversion failed: %s", e.what());
       }
     }
+
+    debug_map_result_pub_->publish(debug_map_result);
 
     if (show_window_) {
       cv::imshow(kWindowName_, canvas);
@@ -769,6 +801,7 @@ private:
   std::string uav_topic_;
   std::string match_info_topic_;
   std::string debug_image_topic_;
+  std::string debug_map_result_topic_;
   std::string referee_identity_topic_;
 
 
@@ -820,6 +853,7 @@ bool auto_save_homography_{true};
     referee_identity_sub_;
   rclcpp::Subscription<geometry_msgs::msg::PoseArray>::SharedPtr uav_sub_;
   rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr image_pub_;
+  rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr debug_map_result_pub_;
   rclcpp::TimerBase::SharedPtr ui_timer_;
 };
 

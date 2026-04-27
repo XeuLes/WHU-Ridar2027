@@ -23,6 +23,9 @@ namespace debug_map {
 namespace
 {
 
+constexpr double kVehicleDisplayTimeoutSeconds = 0.20;
+constexpr double kUavDisplayTimeoutSeconds = 0.50;
+
 int normalize_self_color(int raw_color, int fallback)
 {
     if (raw_color == 0) {
@@ -154,6 +157,9 @@ public:
                 "/hero_state", 10);
         debug_map_pub =
             this->create_publisher<sensor_msgs::msg::Image>("/map_2d", 10);
+        debug_map_result_pub =
+            this->create_publisher<vision_interface::msg::DetectResult>(
+                "/debug_map_result", 10);
         radar2sentry_pub =
             this->create_publisher<vision_interface::msg::Radar2Sentry>(
                 "/Radar2Sentry", rclcpp::SensorDataQoS());
@@ -237,6 +243,32 @@ public:
         update_one(1);
     }
 
+    void publish_debug_map_result(double time)
+    {
+        if (!debug_map_result_pub) {
+            return;
+        }
+
+        vision_interface::msg::DetectResult result;
+        result.header.stamp = this->get_clock()->now();
+        result.header.frame_id = "map";
+
+        for (int i = 0; i < 7; i++) {
+            if ((blue_point[i].x != 0.0f || blue_point[i].y != 0.0f) &&
+                time - blue_update[i] < kVehicleDisplayTimeoutSeconds) {
+                result.blue_x[i] = blue_point[i].x;
+                result.blue_y[i] = blue_point[i].y;
+            }
+            if ((red_point[i].x != 0.0f || red_point[i].y != 0.0f) &&
+                time - red_update[i] < kVehicleDisplayTimeoutSeconds) {
+                result.red_x[i] = red_point[i].x;
+                result.red_y[i] = red_point[i].y;
+            }
+        }
+
+        debug_map_result_pub->publish(result);
+    }
+
     void show_map()
     {
         if (map.empty()) {
@@ -259,7 +291,7 @@ public:
             int number = i + 1;
 
             if ((blue_point[i].x != 0 || blue_point[i].y != 0) &&
-                time - blue_update[i] < 0.5) {
+                time - blue_update[i] < kVehicleDisplayTimeoutSeconds) {
                 cv::Point2f point(clone_map.cols * blue_point[i].x / 28,
                                   clone_map.rows * (15 - blue_point[i].y) /
                                       15);
@@ -271,7 +303,7 @@ public:
             }
 
             if ((red_point[i].x != 0 || red_point[i].y != 0) &&
-                time - red_update[i] < 0.5) {
+                time - red_update[i] < kVehicleDisplayTimeoutSeconds) {
                 cv::Point2f point(clone_map.cols * red_point[i].x / 28,
                                   clone_map.rows * (15 - red_point[i].y) /
                                       15);
@@ -288,7 +320,7 @@ public:
         // =========================
         // poses[0]=蓝UAV
         if ((uav_point[0].x != 0.0f || uav_point[0].y != 0.0f) &&
-            (time - uav_update[0] < 0.5)) {
+            (time - uav_update[0] < kUavDisplayTimeoutSeconds)) {
             cv::Point2f point(clone_map.cols * uav_point[0].x / 28,
                               clone_map.rows * (15 - uav_point[0].y) / 15);
             cv::circle(clone_map, point, 12, cv::Scalar(200, 0, 0), -1);
@@ -299,7 +331,7 @@ public:
 
         // poses[1]=红UAV
         if ((uav_point[1].x != 0.0f || uav_point[1].y != 0.0f) &&
-            (time - uav_update[1] < 0.5)) {
+            (time - uav_update[1] < kUavDisplayTimeoutSeconds)) {
             cv::Point2f point(clone_map.cols * uav_point[1].x / 28,
                               clone_map.rows * (15 - uav_point[1].y) / 15);
             cv::circle(clone_map, point, 12, cv::Scalar(0, 0, 200), -1);
@@ -323,52 +355,21 @@ public:
                          e.what());
         }
 
+        publish_debug_map_result(time);
+
         cv::imshow("Debug Map", clone_map);
         cv::waitKey(1);
     }
 
-    // 相机检测结果回调（原逻辑不变）
+    // resolve_result 只触发刷新；车辆图标严格使用 /kalman_detect。
     void camera_callback(
         const std::shared_ptr<vision_interface::msg::DetectResult> msg)
     {
-        auto   now = std::chrono::system_clock::now();
-        double time = std::chrono::duration_cast<std::chrono::milliseconds>(
-                          now.time_since_epoch())
-                          .count() /
-                      1000.0;
-
-        for (int i = 0; i < 7; i++) {
-            if (msg->blue_x[i] != 0 || msg->blue_y[i] != 0) {
-                if (time - blue_time[i] > 5) {
-                    cv::Point2f blue_raw(msg->blue_x[i], msg->blue_y[i]);
-                    blue_point[i] = blue_raw;
-
-                    if (!match_info.self_color) {
-                        blue_point[i] = cv::Point2f(28 - msg->blue_x[i],
-                                                    15 - msg->blue_y[i]);
-                    }
-                    blue_update[i] = time;
-                }
-            }
-
-            if (msg->red_x[i] != 0 || msg->red_y[i] != 0) {
-                if (time - red_time[i] > 5) {
-                    cv::Point2f red_raw(msg->red_x[i], msg->red_y[i]);
-                    red_point[i] = red_raw;
-
-                    if (!match_info.self_color) {
-                        red_point[i] = cv::Point2f(28 - msg->red_x[i],
-                                                   15 - msg->red_y[i]);
-                    }
-                    red_update[i] = time;
-                }
-            }
-        }
-
+        (void)msg;
         show_map();
     }
 
-    // 卡尔曼融合回调（原逻辑不变）
+    // 卡尔曼融合回调：车辆图标只信任状态机输出。
     void
     callback(const std::shared_ptr<vision_interface::msg::DetectResult> msg)
     {
@@ -406,10 +407,13 @@ public:
         }
 
         if (match_info.self_color == 0) {
-            if (red_point[0].x > (28 - 8.668)) {
+            const bool red_hero_recent =
+                (time - red_update[0] < kVehicleDisplayTimeoutSeconds);
+            if (red_hero_recent && red_point[0].x > (28 - 8.668)) {
                 hero_count1++;
                 hero_count2--;
-            } else if (red_point[0].x < (28 - 20.3) &&
+            } else if (red_hero_recent &&
+                       red_point[0].x < (28 - 20.3) &&
                        red_point[0].x > (28 - 25.075) &&
                        red_point[0].y < 15 && red_point[0].y > 10.3) {
                 hero_count1--;
@@ -419,10 +423,13 @@ public:
                 hero_count2--;
             }
         } else if (match_info.self_color == 2) {
-            if (blue_point[0].x < 8.668) {
+            const bool blue_hero_recent =
+                (time - blue_update[0] < kVehicleDisplayTimeoutSeconds);
+            if (blue_hero_recent && blue_point[0].x < 8.668) {
                 hero_count1++;
                 hero_count2--;
-            } else if (blue_point[0].x > 20.3 && blue_point[0].x < 25.075 &&
+            } else if (blue_hero_recent &&
+                       blue_point[0].x > 20.3 && blue_point[0].x < 25.075 &&
                        blue_point[0].y > 0 &&
                        blue_point[0].y < (15 - 10.3)) {
                 hero_count1--;
@@ -441,20 +448,20 @@ public:
                     if (match_info.marks[i] >= 117) {
                         relax[i] = true;
                         relax_time[i] = time;
-                    } else if (time - red_update[i] < 0.5) {
+                    } else if (time - red_update[i] < kVehicleDisplayTimeoutSeconds) {
                         radar2sentry.radar_enemy_x[i] = red_point[i].x;
                         radar2sentry.radar_enemy_y[i] = red_point[i].y;
                     }
                 } else {
                     if (match_info.marks[i] < 105) {
                         relax[i] = false;
-                        if (time - red_update[i] < 0.5) {
+                        if (time - red_update[i] < kVehicleDisplayTimeoutSeconds) {
                             radar2sentry.radar_enemy_x[i] = red_point[i].x;
                             radar2sentry.radar_enemy_y[i] = red_point[i].y;
                         }
                     } else if (time - relax_time[i] > 0.35) {
                         relax_time[i] = time;
-                        if (time - red_update[i] < 0.5) {
+                        if (time - red_update[i] < kVehicleDisplayTimeoutSeconds) {
                             radar2sentry.radar_enemy_x[i] = red_point[i].x;
                             radar2sentry.radar_enemy_y[i] = red_point[i].y;
                         }
@@ -467,20 +474,20 @@ public:
                     if (match_info.marks[i] >= 117) {
                         relax[i] = true;
                         relax_time[i] = time;
-                    } else if (time - blue_update[i] < 0.5) {
+                    } else if (time - blue_update[i] < kVehicleDisplayTimeoutSeconds) {
                         radar2sentry.radar_enemy_x[i] = blue_point[i].x;
                         radar2sentry.radar_enemy_y[i] = blue_point[i].y;
                     }
                 } else {
                     if (match_info.marks[i] < 105) {
                         relax[i] = false;
-                        if (time - blue_update[i] < 0.5) {
+                        if (time - blue_update[i] < kVehicleDisplayTimeoutSeconds) {
                             radar2sentry.radar_enemy_x[i] = blue_point[i].x;
                             radar2sentry.radar_enemy_y[i] = blue_point[i].y;
                         }
                     } else if (time - relax_time[i] > 0.35) {
                         relax_time[i] = time;
-                        if (time - blue_update[i] < 0.5) {
+                        if (time - blue_update[i] < kVehicleDisplayTimeoutSeconds) {
                             radar2sentry.radar_enemy_x[i] = blue_point[i].x;
                             radar2sentry.radar_enemy_y[i] = blue_point[i].y;
                         }
@@ -505,6 +512,8 @@ private:
 
     // publishers
     rclcpp::Publisher<sensor_msgs::msg::Image>::SharedPtr debug_map_pub;
+    rclcpp::Publisher<vision_interface::msg::DetectResult>::SharedPtr
+        debug_map_result_pub;
     rclcpp::Publisher<vision_interface::msg::RadarWarn>::SharedPtr
         radar_warn_pub;
     rclcpp::Publisher<vision_interface::msg::Radar2Sentry>::SharedPtr

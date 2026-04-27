@@ -5,6 +5,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 #include <rclcpp/time.hpp>
 #include <std_msgs/msg/u_int8.hpp>
+#include <algorithm>
 #include <mutex>
 
 namespace tdt_radar {  // 自定义命名空间
@@ -24,6 +25,12 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<int>("actual_map_min_stable_voxels", 400);
     this->declare_parameter<double>("actual_map_voxel_size", 0.10);
     this->declare_parameter<double>("actual_map_min_observe_ratio", 0.20);
+    this->declare_parameter<double>("uav_other_min_x", 0.0);
+    this->declare_parameter<double>("uav_other_max_x", 28.0);
+    this->declare_parameter<double>("uav_other_min_y", 0.0);
+    this->declare_parameter<double>("uav_other_max_y", 15.0);
+    this->declare_parameter<double>("uav_other_min_z", 1.2);
+    this->declare_parameter<double>("uav_other_max_z", 4.5);
 
     std::string map_pcd_path;
     this->get_parameter("map_pcd_path", map_pcd_path);
@@ -31,6 +38,15 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     this->get_parameter("actual_map_min_stable_voxels", actual_map_min_stable_voxels_);
     this->get_parameter("actual_map_voxel_size", actual_map_voxel_size_);
     this->get_parameter("actual_map_min_observe_ratio", actual_map_min_observe_ratio_);
+    this->get_parameter("uav_other_min_x", uav_other_min_x_);
+    this->get_parameter("uav_other_max_x", uav_other_max_x_);
+    this->get_parameter("uav_other_min_y", uav_other_min_y_);
+    this->get_parameter("uav_other_max_y", uav_other_max_y_);
+    this->get_parameter("uav_other_min_z", uav_other_min_z_);
+    this->get_parameter("uav_other_max_z", uav_other_max_z_);
+    if (uav_other_min_x_ > uav_other_max_x_) std::swap(uav_other_min_x_, uav_other_max_x_);
+    if (uav_other_min_y_ > uav_other_max_y_) std::swap(uav_other_min_y_, uav_other_max_y_);
+    if (uav_other_min_z_ > uav_other_max_z_) std::swap(uav_other_min_z_, uav_other_max_z_);
 
     // === 加载地图点云 ===
     pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
@@ -411,6 +427,12 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
                (point.z > 1.7 && point.z < 3);
     };
 
+    auto uav_other_filter = [this](const pcl::PointXYZ& point) {
+        return point.x >= uav_other_min_x_ && point.x <= uav_other_max_x_ &&
+               point.y >= uav_other_min_y_ && point.y <= uav_other_max_y_ &&
+               point.z >= uav_other_min_z_ && point.z <= uav_other_max_z_;
+    };
+
     // 1. 转换ROS消息到PCL
     if (msg->data.empty() || msg->width == 0 || msg->height == 0) {
         return;
@@ -429,7 +451,10 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
             "rm_frame", msg->header.frame_id, tf2::TimePointZero);
     }
     catch (tf2::TransformException& ex) {
-        RCLCPP_ERROR(rclcpp::get_logger("rclcpp"), "Transform error: %s", ex.what());
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(), *this->get_clock(), 1000,
+            "等待 TF rm_frame <- %s: %s",
+            msg->header.frame_id.c_str(), ex.what());
         return;
     }
 
@@ -457,17 +482,24 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 
     for (size_t i = 0; i < transformed_cloud.size(); i++) {
         auto& point = transformed_cloud.points[i];
+        const bool is_uav_other = uav_other_filter(point);
         
         // ROI 边界判断 (去除场外点、地面点、高空点)
         bool is_out_of_bounds = (point.x < 10.0 || point.x > 40.0 || 
                                  point.y < 2.0 || point.y > 10.0 || 
                                  point.z < -1 || point.z > 5.0);
 
+        if (is_uav_other) {
+            other_filtered_cloud.push_back(point);
+        }
+
         if (is_out_of_bounds) {
             // 虽然是场外点，但检查是否在特殊关注区域（如飞镖/飞机区）
             if ((point.x > 27.0 && point.x < 28.0 && point.y > 3.9 && point.y < 4.6 && point.z > 1.5) ||
                 (point.x > 13.0 && point.x < 27.5 && point.y > 0.2 && point.y < 4.5 && point.z > 1.7)) {
-                other_filtered_cloud.push_back(point);
+                if (!is_uav_other) {
+                    other_filtered_cloud.push_back(point);
+                }
             }
             continue; 
         }
@@ -519,6 +551,15 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     } else {
         GetDynamicCloud(filtered_cloud, dynamic_pointcloud, 0.03, 12);
     }
+
+    RCLCPP_INFO_THROTTLE(
+        this->get_logger(), *this->get_clock(), 1000,
+        "dynamic_cloud 点数: raw=%zu, roi=%zu, dynamic=%zu, lidar_other候选=%zu, map_mode=%s",
+        receive_cloud.size(),
+        filtered_cloud.size(),
+        dynamic_pointcloud.size(),
+        other_filtered_cloud.size(),
+        mapModeToString(current_mode));
     
     // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
     //                      "【阶段5】动态检测后点数：%zu",

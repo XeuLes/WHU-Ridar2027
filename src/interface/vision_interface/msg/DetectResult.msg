@@ -4,6 +4,18 @@ float32[7] blue_y
 float32[7] red_x
 float32[7] red_y
 
+# Ground robot YOLO bbox in original image coordinates.
+# Arrays use the same index as blue_x/red_x: index 0..5 => robot 1..6.
+# A box is valid when x2 > x1 and y2 > y1.
+float32[7] blue_car_box_x1
+float32[7] blue_car_box_y1
+float32[7] blue_car_box_x2
+float32[7] blue_car_box_y2
+float32[7] red_car_box_x1
+float32[7] red_car_box_y1
+float32[7] red_car_box_x2
+float32[7] red_car_box_y2
+
 # UAV YOLO bbox in original image coordinates (valid when w/h > 0)
 float32 blue_uav_bbox_x
 float32 blue_uav_bbox_y

@@ -206,6 +206,47 @@ def _build_launch(context):
             {
                 "use_match_info_color": False,
                 "self_color_override": team["match_self_color"],
+                "semantic_tracking_enabled": True,
+                "semantic_history_size": 20,
+                "semantic_confirm_min_hits": 2,
+                "semantic_switch_min_hits": 3,
+                "fixed_track_confirm_hits": 2,
+                "pending_seed_confirm_hits": 2,
+                "semantic_vote_history_size": 6,
+                "tentative_miss_limit": 2,
+                "lost_miss_limit": 8,
+                "lost_prediction_publish_ms": 0,
+                "camera_publish_hold_ms": 120,
+                "lidar_publish_hold_ms": 100,
+                "recent_camera_constraint_ms": 500,
+                "frame_sync_ms": 50,
+                "box_iou_history_size": 6,
+                "visual_bootstrap_on_first_frame": True,
+                "tentative_accept_same_id_camera": True,
+                "car_lidar_update_enabled": False,
+                "lidar_match_gate_m": 1.2,
+                "lost_lidar_match_gate_m": 2.0,
+                "camera_match_gate_m": 1.2,
+                "camera_dynamic_speed_gain": 1.0,
+                "vision_noise_margin_m": 0.8,
+                "box_consistency_gate_relax_m": 2.0,
+                "pending_seed_gate_m": 1.2,
+                "box_iou_confirm_threshold": 0.25,
+                "box_center_diag_ratio": 0.75,
+                "publish_lost_prediction_to_decision": False,
+                "blind_guess_enabled": True,
+                "blind_guess_config_path": os.path.join(bringup_config, "guess_pts.yaml"),
+                "blind_guess_after_ms": 250,
+                "blind_guess_hold_ms": 1200,
+                "kf_predict_hold_ms": 150,
+                "max_predict_step_m": 0.8,
+                "max_predict_speed_mps": 5.0,
+                "blind_guess_distance_weight": 0.6,
+                "blind_guess_direction_weight": 0.4,
+                "blind_guess_d_factor": 0.15,
+                "blind_guess_min_speed_mps": 0.2,
+                "blind_guess_publish_to_detect": False,
+                "blind_guess_publish_to_sentry": False,
             }
         ],
         extra_arguments=intra,
@@ -499,6 +540,22 @@ def _build_launch(context):
         arguments=["-d", rviz_config_path],
     )
 
+    track_status_window_node = Node(
+        package="debug_map",
+        executable="track_status_window_node",
+        name="track_status_window_node",
+        output="screen",
+        parameters=[
+            {
+                "detect_topic": "/detect_result",
+                "resolve_topic": "/resolve_result",
+                "kalman_topic": "/kalman_detect",
+                "debug_map_topic": "/debug_map_result",
+                "status_topic": "/kalman_track_status",
+            }
+        ],
+    )
+
     return [
         LogInfo(msg=f"radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"decision params file: {decision_params_file}"),
@@ -516,6 +573,7 @@ def _build_launch(context):
         radar_debug_container,
         radar_decision_comm_container,
         map_pcd_publisher,
+        track_status_window_node,
         rviz_node,
     ]
 
@@ -545,7 +603,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "referee_serial_device",
-                default_value="/dev/ttyUSB20",
+                default_value="/dev/ttyUSB1",
                 description="referee serial device path, distinct from gimbal serial device",
             ),
             DeclareLaunchArgument(

@@ -71,6 +71,9 @@ public:
         // online 读取两个 yaml
         this->declare_parameter<std::string>("camera_extrinsic_yaml", "");
         this->declare_parameter<std::string>("camera_to_lidar_yaml", "");
+        this->declare_parameter<double>("online_initial_x_offset", 0.0);
+        this->declare_parameter<double>("online_initial_y_offset", 0.0);
+        this->declare_parameter<double>("online_initial_z_offset", 0.0);
 
         // GICP 总尝试时间超时
         this->declare_parameter<bool>("enable_gicp_total_timeout", true);
@@ -101,6 +104,11 @@ public:
         // GICP worker 频率
         this->declare_parameter<double>("gicp_worker_rate_hz", 20.0);
 
+        // /livox/map publishing. GICP still uses the downsampled target cloud;
+        // this only controls the visualization/debug map topic.
+        this->declare_parameter<bool>("publish_full_pcd_map", false);
+        this->declare_parameter<bool>("publish_live_scan_map_on_gicp_timeout", false);
+
         // ---------------------------------------------------------
         // 2. 读取参数
         // ---------------------------------------------------------
@@ -114,6 +122,10 @@ public:
         this->get_parameter("gicp_transformation_epsilon", gicp_transformation_epsilon_);
         this->get_parameter("gicp_euclidean_fitness_epsilon", gicp_euclidean_fitness_epsilon_);
         this->get_parameter("gicp_success_fitness_threshold", gicp_success_fitness_threshold_);
+
+        this->get_parameter("online_initial_x_offset", online_initial_x_offset_);
+        this->get_parameter("online_initial_y_offset", online_initial_y_offset_);
+        this->get_parameter("online_initial_z_offset", online_initial_z_offset_);
 
         this->get_parameter("accumulate_time", accumulate_time_);
         this->get_parameter("grid_size_degrees", grid_size_degrees_);
@@ -134,6 +146,9 @@ public:
         if (gicp_worker_rate_hz_ <= 0.0) {
             gicp_worker_rate_hz_ = 20.0;
         }
+        this->get_parameter("publish_full_pcd_map", publish_full_pcd_map_);
+        this->get_parameter("publish_live_scan_map_on_gicp_timeout",
+                            publish_live_scan_map_on_gicp_timeout_);
 
         // ---------------------------------------------------------
         // 3. 加载地图
@@ -141,13 +156,18 @@ public:
         std::string target_pcd_file;
         this->get_parameter("target_pcd_path", target_pcd_file);
 
+        raw_target_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
         target_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
-        if (pcl::io::loadPCDFile(target_pcd_file, *target_cloud_)) {
+        if (pcl::io::loadPCDFile(target_pcd_file, *raw_target_cloud_)) {
             RCLCPP_ERROR(this->get_logger(), "无法加载地图: %s", target_pcd_file.c_str());
             return;
         }
+        *target_cloud_ = *raw_target_cloud_;
         downsample_cloud(target_cloud_, target_cloud_, static_cast<float>(downsample_leaf_size_));
-        RCLCPP_INFO(this->get_logger(), "地图加载成功，点数：%lu", target_cloud_->size());
+        RCLCPP_INFO(this->get_logger(),
+                    "地图加载成功，原始点数：%lu，GICP降采样点数：%lu",
+                    raw_target_cloud_->size(),
+                    target_cloud_->size());
 
         // ---------------------------------------------------------
         // 4. 构建初始变换矩阵
@@ -273,7 +293,9 @@ private:
 
         {
             std::lock_guard<std::mutex> lock(map_mutex_);
-            if (gicp_timeout_reached_ &&
+            if (!publish_full_pcd_map_ &&
+                publish_live_scan_map_on_gicp_timeout_ &&
+                gicp_timeout_reached_ &&
                 latest_scan_map_cloud_ &&
                 !latest_scan_map_cloud_->empty()) {
                 map_cloud = latest_scan_map_cloud_;
@@ -282,7 +304,9 @@ private:
         }
 
         if (!map_cloud) {
-            map_cloud = target_cloud_;
+            map_cloud = (publish_full_pcd_map_ && raw_target_cloud_ && !raw_target_cloud_->empty())
+                            ? raw_target_cloud_
+                            : target_cloud_;
         }
 
         if (!map_cloud || map_cloud->empty()) {
@@ -299,7 +323,9 @@ private:
 
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                             "已发布%s到 /livox/map, points=%zu",
-                            use_live_scan_map ? "实时扫描点云" : "先验地图",
+                            use_live_scan_map
+                                ? "实时扫描点云"
+                                : (publish_full_pcd_map_ ? "完整先验地图" : "降采样先验地图"),
                             map_cloud->size());
     }
 
@@ -544,6 +570,19 @@ private:
 
         Eigen::Matrix4d T_world_lidar = T_world_camera * T_camera_lidar;
         initial_transform_ = T_world_lidar.cast<float>();
+        initial_transform_(0, 3) += static_cast<float>(online_initial_x_offset_);
+        initial_transform_(1, 3) += static_cast<float>(online_initial_y_offset_);
+        initial_transform_(2, 3) += static_cast<float>(online_initial_z_offset_);
+
+        if (std::abs(online_initial_x_offset_) > 1e-9 ||
+            std::abs(online_initial_y_offset_) > 1e-9 ||
+            std::abs(online_initial_z_offset_) > 1e-9) {
+            RCLCPP_INFO(this->get_logger(),
+                        "online 初始位姿平移补偿: [%.3f, %.3f, %.3f]",
+                        online_initial_x_offset_,
+                        online_initial_y_offset_,
+                        online_initial_z_offset_);
+        }
 
         printTransformInfo("已在线计算初始位姿 (camera_extrinsic_yaml + camera_to_lidar_yaml):",
                            initial_transform_);
@@ -677,8 +716,12 @@ private:
                 gicp_timeout_reached_ = true;
                 publishLocalizationStatus(LocalizationStatus::INIT_ONLY);
                 RCLCPP_WARN(this->get_logger(),
-                            "GICP 总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，/livox/map 切换为实时扫描点云",
-                            elapsed, gicp_total_timeout_sec_);
+                            "GICP 总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，/livox/map %s",
+                            elapsed,
+                            gicp_total_timeout_sec_,
+                            publish_live_scan_map_on_gicp_timeout_
+                                ? "切换为实时扫描点云"
+                                : "保持发布GICP先验地图");
                 publishMap(msg_stamp);
                 return;
             }
@@ -719,8 +762,12 @@ private:
                     gicp_timeout_reached_ = true;
                     publishLocalizationStatus(LocalizationStatus::INIT_ONLY);
                     RCLCPP_WARN(this->get_logger(),
-                                "GICP worker 检测到总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，/livox/map 切换为实时扫描点云",
-                                elapsed, gicp_total_timeout_sec_);
+                                "GICP worker 检测到总尝试时间超时(%.3f sec > %.3f sec)，停止自动配准，/livox/map %s",
+                                elapsed,
+                                gicp_total_timeout_sec_,
+                                publish_live_scan_map_on_gicp_timeout_
+                                    ? "切换为实时扫描点云"
+                                    : "保持发布GICP先验地图");
                     publishMapOnce();
                 }
                 gicp_running_ = false;
@@ -801,17 +848,23 @@ private:
     bool enable_gicp_total_timeout_{true};
     double gicp_total_timeout_sec_{10.0};
     bool fallback_to_initial_after_timeout_{true};
+    bool publish_full_pcd_map_{false};
+    bool publish_live_scan_map_on_gicp_timeout_{false};
     rclcpp::Time gicp_start_time_{0, 0, RCL_ROS_TIME};
 
     int gicp_max_iterations_{100};
     double gicp_transformation_epsilon_{1e-8};
     double gicp_euclidean_fitness_epsilon_{1e-6};
     double gicp_success_fitness_threshold_{0.2};
+    double online_initial_x_offset_{0.0};
+    double online_initial_y_offset_{0.0};
+    double online_initial_z_offset_{0.0};
 
     double tf_publish_rate_hz_{20.0};
     double gicp_worker_rate_hz_{20.0};
 
     pcl::PointCloud<pcl::PointXYZ>::Ptr target_cloud_;
+    pcl::PointCloud<pcl::PointXYZ>::Ptr raw_target_cloud_;
     std::vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> accumulated_clouds_;
 
     int accumulate_time_ = 30;

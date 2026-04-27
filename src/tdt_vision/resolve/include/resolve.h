@@ -63,6 +63,10 @@ private:
         double ray_dist_spread{std::numeric_limits<double>::infinity()};
         double depth_median{0.0};
         int cluster_size{0};
+        int input_size{0};
+        int z_valid_size{0};
+        int roi_point_size{0};
+        int cluster_count{0};
         std::vector<cv::Point2f> debug_uvs;
         std::vector<cv::Point2f> cluster_uvs;
     };
@@ -126,6 +130,12 @@ private:
     double uav_quality_size_ref_{12.0};
     double uav_quality_measurement_threshold_{0.60};
     double uav_quality_z_prior_threshold_{0.75};
+    double uav_world_to_field_y_offset_{15.0};
+    double uav_field_min_x_{0.0};
+    double uav_field_max_x_{28.0};
+    double uav_field_min_y_{0.0};
+    double uav_field_max_y_{15.0};
+    double uav_field_margin_m_{0.20};
     double uav_z_prior_alpha_{0.90};
     int    uav_z_prior_window_ms_{1200};
     int    uav_z_prior_update_min_interval_ms_{250};
@@ -173,6 +183,14 @@ private:
     float GetFilteredZPlane(int idx, double z_raw);
     cv::Rect2f BuildUavRoiFromBbox(float x, float y, float w, float h) const;
     double ClampUavZ(double z) const;
+    void InferUavFieldTransform();
+    cv::Point3f UavFieldToCameraWorld(const pcl::PointXYZ& point) const;
+    cv::Vec3d UavCameraWorldToField(const cv::Vec3d& point) const;
+    bool IsUavFieldPointInside(double x, double y) const;
+    bool IntersectUavPixelWithZ(const cv::Point2f& pixel,
+                                double z_plane,
+                                cv::Vec3d& point_field,
+                                cv::Vec3d* point_camera_world = nullptr) const;
     bool BuildUavCenterRay(const cv::Point2f& pixel,
                            cv::Vec3d& origin_world,
                            cv::Vec3d& dir_world) const;

@@ -53,9 +53,35 @@ static cv::Mat makeCameraMatrix64(const cv::Mat& camera_matrix)
     return K;
 }
 
-static bool pixelToRectifiedRay(const cv::Point2f& pixel,
-                                const cv::Mat& camera_matrix,
-                                cv::Vec3d& ray_camera)
+static cv::Mat makeDistCoeffs64(const cv::Mat& dist_coeffs)
+{
+    if (dist_coeffs.empty()) {
+        return cv::Mat::zeros(1, 5, CV_64F);
+    }
+    cv::Mat D;
+    dist_coeffs.convertTo(D, CV_64F);
+    return D.reshape(1, 1);
+}
+
+static bool hasNonZeroDistCoeffs(const cv::Mat& dist_coeffs)
+{
+    if (dist_coeffs.empty()) {
+        return false;
+    }
+
+    const cv::Mat D = makeDistCoeffs64(dist_coeffs);
+    for (int i = 0; i < D.cols; ++i) {
+        if (std::abs(D.at<double>(0, i)) > 1e-12) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool pixelToCameraRay(const cv::Point2f& pixel,
+                             const cv::Mat& camera_matrix,
+                             const cv::Mat& dist_coeffs,
+                             cv::Vec3d& ray_camera)
 {
     if (camera_matrix.empty()) {
         return false;
@@ -70,7 +96,18 @@ static bool pixelToRectifiedRay(const cv::Point2f& pixel,
         return false;
     }
 
-    ray_camera = cv::Vec3d((pixel.x - cx) / fx, (pixel.y - cy) / fy, 1.0);
+    if (hasNonZeroDistCoeffs(dist_coeffs)) {
+        std::vector<cv::Point2f> src{pixel};
+        std::vector<cv::Point2f> dst;
+        cv::undistortPoints(src, dst, K, makeDistCoeffs64(dist_coeffs));
+        if (dst.empty()) {
+            return false;
+        }
+        ray_camera = cv::Vec3d(dst.front().x, dst.front().y, 1.0);
+    } else {
+        ray_camera = cv::Vec3d((pixel.x - cx) / fx, (pixel.y - cy) / fy, 1.0);
+    }
+
     const double norm = cv::norm(ray_camera);
     if (norm <= 1e-9) {
         return false;
@@ -79,48 +116,24 @@ static bool pixelToRectifiedRay(const cv::Point2f& pixel,
     return true;
 }
 
-static void projectPointsRectified(const std::vector<cv::Point3f>& world_points,
-                                   const cv::Mat& world_rvec,
-                                   const cv::Mat& world_tvec,
-                                   const cv::Mat& camera_matrix,
-                                   std::vector<cv::Point2f>& image_points)
+static void projectPointsCameraModel(const std::vector<cv::Point3f>& world_points,
+                                     const cv::Mat& world_rvec,
+                                     const cv::Mat& world_tvec,
+                                     const cv::Mat& camera_matrix,
+                                     const cv::Mat& dist_coeffs,
+                                     std::vector<cv::Point2f>& image_points)
 {
     image_points.clear();
-    image_points.reserve(world_points.size());
-
-    cv::Mat R;
-    cv::Rodrigues(world_rvec, R);
-    R.convertTo(R, CV_64F);
-
-    cv::Mat tvec;
-    world_tvec.convertTo(tvec, CV_64F);
-    if (tvec.rows == 1 && tvec.cols == 3) {
-        tvec = tvec.t();
+    if (world_points.empty()) {
+        return;
     }
 
-    const cv::Mat K = makeCameraMatrix64(camera_matrix);
-    const double fx = K.at<double>(0, 0);
-    const double fy = K.at<double>(1, 1);
-    const double cx = K.at<double>(0, 2);
-    const double cy = K.at<double>(1, 2);
-
-    for (const auto& point : world_points) {
-        cv::Mat pw = (cv::Mat_<double>(3, 1) << point.x, point.y, point.z);
-        cv::Mat pc = R * pw + tvec;
-        const double z = pc.at<double>(2, 0);
-        if (std::abs(z) < 1e-9) {
-            image_points.emplace_back(
-                std::numeric_limits<float>::quiet_NaN(),
-                std::numeric_limits<float>::quiet_NaN());
-            continue;
-        }
-
-        const double x = pc.at<double>(0, 0) / z;
-        const double y = pc.at<double>(1, 0) / z;
-        image_points.emplace_back(
-            static_cast<float>(fx * x + cx),
-            static_cast<float>(fy * y + cy));
-    }
+    cv::projectPoints(world_points,
+                      world_rvec,
+                      world_tvec,
+                      makeCameraMatrix64(camera_matrix),
+                      makeDistCoeffs64(dist_coeffs),
+                      image_points);
 }
 
 Resolve::Resolve(const rclcpp::NodeOptions& node_options)
@@ -244,6 +257,14 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<double>("uav_quality_size_ref", 12.0);
     this->declare_parameter<double>("uav_quality_measurement_threshold", 0.60);
     this->declare_parameter<double>("uav_quality_z_prior_threshold", 0.75);
+    this->declare_parameter<double>(
+        "uav_world_to_field_y_offset",
+        std::numeric_limits<double>::quiet_NaN());
+    this->declare_parameter<double>("uav_field_min_x", 0.0);
+    this->declare_parameter<double>("uav_field_max_x", 28.0);
+    this->declare_parameter<double>("uav_field_min_y", 0.0);
+    this->declare_parameter<double>("uav_field_max_y", 15.0);
+    this->declare_parameter<double>("uav_field_margin_m", 0.20);
 
     this->declare_parameter<double>("uav_z_ema_alpha", 0.90);
     this->declare_parameter<double>("uav_z_jump_max", 0.80);
@@ -310,6 +331,13 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
         this->get_parameter("uav_quality_measurement_threshold").as_double();
     uav_quality_z_prior_threshold_ =
         this->get_parameter("uav_quality_z_prior_threshold").as_double();
+    const double uav_world_to_field_y_offset_param =
+        this->get_parameter("uav_world_to_field_y_offset").as_double();
+    uav_field_min_x_ = this->get_parameter("uav_field_min_x").as_double();
+    uav_field_max_x_ = this->get_parameter("uav_field_max_x").as_double();
+    uav_field_min_y_ = this->get_parameter("uav_field_min_y").as_double();
+    uav_field_max_y_ = this->get_parameter("uav_field_max_y").as_double();
+    uav_field_margin_m_ = this->get_parameter("uav_field_margin_m").as_double();
 
     uav_z_ema_alpha_ = this->get_parameter("uav_z_ema_alpha").as_double();
     uav_z_jump_max_ = this->get_parameter("uav_z_jump_max").as_double();
@@ -336,6 +364,18 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
         std::clamp(uav_quality_measurement_threshold_, 0.0, 1.0);
     uav_quality_z_prior_threshold_ =
         std::clamp(uav_quality_z_prior_threshold_, 0.0, 1.0);
+    if (uav_field_min_x_ > uav_field_max_x_) {
+        std::swap(uav_field_min_x_, uav_field_max_x_);
+    }
+    if (uav_field_min_y_ > uav_field_max_y_) {
+        std::swap(uav_field_min_y_, uav_field_max_y_);
+    }
+    uav_field_margin_m_ = std::max(0.0, uav_field_margin_m_);
+    if (std::isfinite(uav_world_to_field_y_offset_param)) {
+        uav_world_to_field_y_offset_ = uav_world_to_field_y_offset_param;
+    } else {
+        InferUavFieldTransform();
+    }
     uav_z_prior_alpha_ = std::clamp(uav_z_prior_alpha_, 0.0, 0.99);
     uav_z_prior_window_ms_ = std::max(100, uav_z_prior_window_ms_);
     uav_z_prior_update_min_interval_ms_ =
@@ -390,6 +430,13 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
         uav_z_prior_[idx] = ClampUavZ(uav_default_z_);
         uav_z_prior_inited_[idx] = true;
     }
+
+    RCLCPP_INFO(this->get_logger(),
+                "[INIT] UAV frame: field=(camera_world.x, camera_world.y + %.3f), bounds x=[%.2f, %.2f] y=[%.2f, %.2f], margin=%.2f",
+                uav_world_to_field_y_offset_,
+                uav_field_min_x_, uav_field_max_x_,
+                uav_field_min_y_, uav_field_max_y_,
+                uav_field_margin_m_);
 }
 Resolve::~Resolve()
 {
@@ -418,7 +465,7 @@ void Resolve::callback(const geometry_msgs::msg::Vector3::SharedPtr msg)
         new pcl::PointCloud<pcl::PointXYZ>);
     pcl::PointXYZ p;
     p.x = center_point.x;
-    p.y = 15 - center_point.y;
+    p.y = center_point.y + static_cast<float>(uav_world_to_field_y_offset_);
     p.z = 1.0;
     cloud->points.push_back(p);
 
@@ -499,6 +546,92 @@ double Resolve::ClampUavZ(double z) const
     return std::clamp(z, uav_point_min_z_, uav_point_max_z_);
 }
 
+void Resolve::InferUavFieldTransform()
+{
+    uav_world_to_field_y_offset_ = 15.0;
+    if (parser_ == nullptr || parser_->points_map.empty()) {
+        return;
+    }
+
+    double min_y = std::numeric_limits<double>::infinity();
+    double max_y = -std::numeric_limits<double>::infinity();
+    for (const auto& kv : parser_->points_map) {
+        if (kv.second == nullptr) {
+            continue;
+        }
+        for (const auto& point : kv.second->Points_3D) {
+            min_y = std::min(min_y, static_cast<double>(point.y));
+            max_y = std::max(max_y, static_cast<double>(point.y));
+        }
+    }
+
+    if (!std::isfinite(min_y) || !std::isfinite(max_y)) {
+        return;
+    }
+
+    // RM2025 calibration points use y in [-15, 0], while some newer maps
+    // already use the public rm_frame y axis. Keep the old +15 transform only
+    // for the negative-y calibration convention.
+    if (min_y < -1.0 && max_y <= 1.0) {
+        uav_world_to_field_y_offset_ = std::max(0.0, uav_field_max_y_);
+    } else {
+        uav_world_to_field_y_offset_ = 0.0;
+    }
+}
+
+cv::Point3f Resolve::UavFieldToCameraWorld(const pcl::PointXYZ& point) const
+{
+    return cv::Point3f(point.x,
+                       static_cast<float>(point.y - uav_world_to_field_y_offset_),
+                       point.z);
+}
+
+cv::Vec3d Resolve::UavCameraWorldToField(const cv::Vec3d& point) const
+{
+    return cv::Vec3d(point[0],
+                     point[1] + uav_world_to_field_y_offset_,
+                     point[2]);
+}
+
+bool Resolve::IsUavFieldPointInside(double x, double y) const
+{
+    const double margin = std::max(0.0, uav_field_margin_m_);
+    return x >= uav_field_min_x_ - margin &&
+           x <= uav_field_max_x_ + margin &&
+           y >= uav_field_min_y_ - margin &&
+           y <= uav_field_max_y_ + margin;
+}
+
+bool Resolve::IntersectUavPixelWithZ(const cv::Point2f& pixel,
+                                     double z_plane,
+                                     cv::Vec3d& point_field,
+                                     cv::Vec3d* point_camera_world) const
+{
+    cv::Vec3d origin_world;
+    cv::Vec3d dir_world;
+    if (!BuildUavCenterRay(pixel, origin_world, dir_world)) {
+        return false;
+    }
+
+    if (std::abs(dir_world[2]) < 1e-9) {
+        return false;
+    }
+
+    const double depth = (z_plane - origin_world[2]) / dir_world[2];
+    if (depth <= 1e-6 || !std::isfinite(depth)) {
+        return false;
+    }
+
+    const cv::Vec3d point_world = origin_world + dir_world * depth;
+    if (point_camera_world != nullptr) {
+        *point_camera_world = point_world;
+    }
+    point_field = UavCameraWorldToField(point_world);
+    return std::isfinite(point_field[0]) &&
+           std::isfinite(point_field[1]) &&
+           std::isfinite(point_field[2]);
+}
+
 bool Resolve::BuildUavCenterRay(const cv::Point2f& pixel,
                                 cv::Vec3d& origin_world,
                                 cv::Vec3d& dir_world) const
@@ -508,7 +641,10 @@ bool Resolve::BuildUavCenterRay(const cv::Point2f& pixel,
     }
 
     cv::Vec3d cam_dir_vec;
-    if (!pixelToRectifiedRay(pixel, parser_->camera_matrix, cam_dir_vec)) {
+    if (!pixelToCameraRay(pixel,
+                          parser_->camera_matrix,
+                          parser_->dist_coeffs,
+                          cam_dir_vec)) {
         return false;
     }
 
@@ -626,6 +762,7 @@ bool Resolve::SolveUavFrustumMeasurement(
     UavFrustumMeasurement& out) const
 {
     out = UavFrustumMeasurement{};
+    out.input_size = static_cast<int>(points.size());
     if (roi.width <= 1.0f || roi.height <= 1.0f || points.empty() || parser_ == nullptr) {
         return false;
     }
@@ -647,18 +784,20 @@ bool Resolve::SolveUavFrustumMeasurement(
             continue;
         }
         valid_points.push_back(p);
-        world_points.emplace_back(p.x, p.y - 15.0f, p.z);
+        world_points.push_back(UavFieldToCameraWorld(p));
     }
+    out.z_valid_size = static_cast<int>(valid_points.size());
     if (world_points.empty()) {
         return false;
     }
 
     std::vector<cv::Point2f> image_points;
-    projectPointsRectified(world_points,
-                           parser_->world_rvec,
-                           parser_->world_tvec,
-                           parser_->camera_matrix,
-                           image_points);
+    projectPointsCameraModel(world_points,
+                             parser_->world_rvec,
+                             parser_->world_tvec,
+                             parser_->camera_matrix,
+                             parser_->dist_coeffs,
+                             image_points);
 
     const float margin = static_cast<float>(std::max(0.0, uav_proj_pixel_margin_));
     const cv::Rect2f expanded_roi(
@@ -688,6 +827,7 @@ bool Resolve::SolveUavFrustumMeasurement(
         intersected_uvs.push_back(uv);
         out.debug_uvs.push_back(uv);
     }
+    out.roi_point_size = static_cast<int>(intersected->size());
 
     if (intersected->size() < static_cast<size_t>(std::max(1, uav_cluster_min_size_))) {
         return false;
@@ -705,6 +845,7 @@ bool Resolve::SolveUavFrustumMeasurement(
 
     std::vector<pcl::PointIndices> cluster_indices;
     ec.extract(cluster_indices);
+    out.cluster_count = static_cast<int>(cluster_indices.size());
     if (cluster_indices.empty()) {
         return false;
     }
@@ -976,6 +1117,16 @@ void Resolve::DetectCallback(
     if (is_stamp_zero(send_data.header.stamp)) {
         send_data.header.stamp = this->now();
     }
+    for (int i = 0; i < 7; ++i) {
+        send_data.blue_car_box_x1[i] = msg->blue_car_box_x1[i];
+        send_data.blue_car_box_y1[i] = msg->blue_car_box_y1[i];
+        send_data.blue_car_box_x2[i] = msg->blue_car_box_x2[i];
+        send_data.blue_car_box_y2[i] = msg->blue_car_box_y2[i];
+        send_data.red_car_box_x1[i] = msg->red_car_box_x1[i];
+        send_data.red_car_box_y1[i] = msg->red_car_box_y1[i];
+        send_data.red_car_box_x2[i] = msg->red_car_box_x2[i];
+        send_data.red_car_box_y2[i] = msg->red_car_box_y2[i];
+    }
 
     geometry_msgs::msg::PoseArray uav_out;
     uav_out.header = msg->header;
@@ -1057,15 +1208,24 @@ void Resolve::DetectCallback(
         std::lock_guard<std::mutex> lk(uav_other_mutex_);
         other_points = uav_other_points_;
 
-        const auto dt_ns = (detect_stamp - uav_other_stamp_).nanoseconds();
-        const auto dt_ms = std::llabs(dt_ns) / 1000000LL;
-        other_fresh = (dt_ms <= uav_other_timeout_ms_);
+        const bool has_other_stamp = (uav_other_stamp_.nanoseconds() != 0);
+        long long dt_ms = -1;
+        if (has_other_stamp) {
+            const auto dt_ns = (detect_stamp - uav_other_stamp_).nanoseconds();
+            dt_ms = std::llabs(dt_ns) / 1000000LL;
+        }
+        other_fresh = has_other_stamp && (dt_ms <= uav_other_timeout_ms_);
 
         if (has_blue_uav || has_red_uav) {
             RCLCPP_INFO(this->get_logger(), "========== [阶段二：读取 lidar_other 原始点云] ==========");
-            RCLCPP_INFO(this->get_logger(),
-                        "  点云数量: %zu, 时间差: %lld ms, 数据新鲜: %s",
-                        other_points.size(), (long long)dt_ms, other_fresh ? "是" : "否");
+            if (has_other_stamp) {
+                RCLCPP_INFO(this->get_logger(),
+                            "  点云数量: %zu, 时间差: %lld ms, 数据新鲜: %s",
+                            other_points.size(), dt_ms, other_fresh ? "是" : "否");
+            } else {
+                RCLCPP_WARN(this->get_logger(),
+                            "  尚未收到 /livox/lidar_other，无法计算点云-图像时间差");
+            }
 
             if (other_points.empty()) {
                 RCLCPP_WARN(this->get_logger(), "  ⚠️ 无可用 lidar_other 点");
@@ -1076,14 +1236,14 @@ void Resolve::DetectCallback(
         }
     }
 
-    // Lambda: 使用透视变换方法做纯视觉 fallback
-    auto solve_xy_on_z = [&](float px, float py, float z_plane) -> cv::Point2f {
-        cv::Point2f pixel(px, py);
-        cv::Point2f world_xy = parser_->parse_with_height(pixel, z_plane - 0.15f);
-        float y_offset = world_xy.y + 15.0f;
-        float clamp_x = std::clamp(world_xy.x, 0.0f, 28.0f);
-        float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-        return cv::Point2f(clamp_x, clamp_y);
+    // Lambda: pure vision fallback uses the same calibrated ray as frustum scoring.
+    auto solve_xy_on_z = [&](float px,
+                             float py,
+                             float z_plane,
+                             cv::Vec3d& point_field) -> bool {
+        return IntersectUavPixelWithZ(cv::Point2f(px, py),
+                                      static_cast<double>(z_plane),
+                                      point_field);
     };
     // ========== 阶段三：视锥体求交 + 聚类中心 ==========
     bool   meas_ok[2]{false, false};
@@ -1143,8 +1303,13 @@ void Resolve::DetectCallback(
                     const cv::Point2f roi_center(
                         roi.x + roi.width * 0.5f,
                         roi.y + roi.height * 0.5f);
-                    const cv::Point2f pv = solve_xy_on_z(
-                        roi_center.x, roi_center.y, static_cast<float>(meas_z[idx]));
+                    cv::Vec3d pv(std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::quiet_NaN(),
+                                  std::numeric_limits<double>::quiet_NaN());
+                    (void)solve_xy_on_z(roi_center.x,
+                                        roi_center.y,
+                                        static_cast<float>(meas_z[idx]),
+                                        pv);
 
                     RCLCPP_INFO(
                         this->get_logger(),
@@ -1157,7 +1322,7 @@ void Resolve::DetectCallback(
                         frustum_meas.ray_dist_spread,
                         frustum_meas.cluster_size,
                         GetUavFallbackZ(idx),
-                        pv.x, pv.y);
+                        pv[0], pv[1]);
                     return;
                 }
 
@@ -1175,17 +1340,38 @@ void Resolve::DetectCallback(
 
             if (!has_cluster_candidate) {
                 RCLCPP_WARN(this->get_logger(),
-                            "  %s: ROI 视锥求交未得到有效聚类，转入纯视觉 fallback",
-                            side_name);
+                            "  %s: ROI 视锥求交未得到有效聚类 input=%d, z_ok=%d, roi_ok=%d, clusters=%d, min_cluster=%d，转入纯视觉 fallback",
+                            side_name,
+                            frustum_meas.input_size,
+                            frustum_meas.z_valid_size,
+                            frustum_meas.roi_point_size,
+                            frustum_meas.cluster_count,
+                            uav_cluster_min_size_);
             }
         }
 
         if (px != 0.0f && py != 0.0f) {
             const float z_plane = static_cast<float>(GetUavFallbackZ(idx));
-            const cv::Point2f pv = solve_xy_on_z(px, py, z_plane);
+            cv::Vec3d pv;
+            if (!solve_xy_on_z(px, py, z_plane, pv)) {
+                RCLCPP_WARN(this->get_logger(),
+                            "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f 射线无法与高度平面求交",
+                            side_name, px, py, z_plane);
+                return;
+            }
+
+            if (!IsUavFieldPointInside(pv[0], pv[1])) {
+                RCLCPP_WARN(
+                    this->get_logger(),
+                    "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f -> raw=(%.3f, %.3f, %.3f) 场外，丢弃该视觉测量",
+                    side_name, px, py, z_plane,
+                    pv[0], pv[1], pv[2]);
+                return;
+            }
+
             meas_ok[idx] = true;
-            meas_x[idx] = pv.x;
-            meas_y[idx] = pv.y;
+            meas_x[idx] = pv[0];
+            meas_y[idx] = pv[1];
             meas_z[idx] = z_plane;
 
             RCLCPP_WARN(this->get_logger(),
@@ -1363,7 +1549,7 @@ void Resolve::DetectCallback(
                     send_data.blue_y[i] = cp.y;
                 } else {
                     // 原逻辑：做y偏移和clamp
-                    float y_offset = cp.y + 15.0f;
+                    float y_offset = cp.y + static_cast<float>(uav_world_to_field_y_offset_);
                     float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
                     float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
                     send_data.blue_x[i] = clamp_x;
@@ -1400,7 +1586,7 @@ void Resolve::DetectCallback(
                     send_data.red_y[i] = cp.y;
                 } else {
                     // 原逻辑：做y偏移和clamp
-                    float y_offset = cp.y + 15.0f;
+                    float y_offset = cp.y + static_cast<float>(uav_world_to_field_y_offset_);
                     float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
                     float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
                     send_data.red_x[i] = clamp_x;

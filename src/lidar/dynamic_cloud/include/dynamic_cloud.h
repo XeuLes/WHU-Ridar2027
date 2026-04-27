@@ -94,6 +94,13 @@ private:
     double actual_map_voxel_size_{0.20};
     double actual_map_min_observe_ratio_{0.60};
 
+    double uav_other_min_x_{0.0};
+    double uav_other_max_x_{28.0};
+    double uav_other_min_y_{0.0};
+    double uav_other_max_y_{15.0};
+    double uav_other_min_z_{1.2};
+    double uav_other_max_z_{4.5};
+
     int actual_map_accumulated_frames_{0};
 
     std::unordered_map<std::string, int> actual_voxel_hit_count_;
