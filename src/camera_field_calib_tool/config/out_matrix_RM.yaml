@@ -1,0 +1,18 @@
+%YAML:1.0
+---
+world_rvec: !!opencv-matrix
+   rows: 3
+   cols: 1
+   dt: d
+   data: [ 1.5041324499940469e+00, -1.2717324791782696e+00,
+       9.7150453358810696e-01 ]
+world_tvec: !!opencv-matrix
+   rows: 3
+   cols: 1
+   dt: d
+   data: [ -1.0068865297257473e+01, 2.7930686596431573e+00,
+       3.3534699045388683e+00 ]
+num_points: 5
+reproj_rmse: 5.2758447529876085e+00
+reproj_max: 8.1470033908415473e+00
+image_topic: "/camera_image"

@@ -82,6 +82,27 @@ def _build_launch(context):
     auto_aim_info_cfg = os.path.join(auto_aim_share, "config", "camera_info.yaml")
 
     intra = [{"use_intra_process_comms": True}]
+    enemy_uav_coord = (27.131, 2.369, 1.7)
+    enemy_uav_default = {
+        "uav_default_out_blue_x": 0.0,
+        "uav_default_out_blue_y": 0.0,
+        "uav_default_out_blue_z": 0.0,
+        "uav_default_out_red_x": 0.0,
+        "uav_default_out_red_y": 0.0,
+        "uav_default_out_red_z": 0.0,
+    }
+    if team["match_self_color"] == 2:
+        enemy_uav_default.update({
+            "uav_default_out_blue_x": enemy_uav_coord[0],
+            "uav_default_out_blue_y": enemy_uav_coord[1],
+            "uav_default_out_blue_z": enemy_uav_coord[2],
+        })
+    else:
+        enemy_uav_default.update({
+            "uav_default_out_red_x": enemy_uav_coord[0],
+            "uav_default_out_red_y": enemy_uav_coord[1],
+            "uav_default_out_red_z": enemy_uav_coord[2],
+        })
 
     def make_rectifier_component(camera_name: str):
         return ComposableNode(
@@ -112,7 +133,14 @@ def _build_launch(context):
         package="tdt_vision",
         plugin="tdt_radar::Detect",
         name="radar_detect_node",
-        parameters=[{"image_topic": "/camera0_rect/image"}],
+        parameters=[
+            {
+                "image_topic": "/camera0_rect/image",
+                "show_debug_window": False,
+                "publish_debug_image": True,
+                "debug_image_topic": "/detect/debug_image",
+            }
+        ],
         extra_arguments=intra,
     )
 
@@ -186,13 +214,8 @@ def _build_launch(context):
                 "region_points_path": resolve_region_points_yaml,
                 "minimap_path": resolve_minimap_png,
                 "is_test": True,
-                "uav_publish_default_output": False,
-                "uav_default_out_blue_x": 0.0,
-                "uav_default_out_blue_y": 0.0,
-                "uav_default_out_blue_z": 0.0,
-                "uav_default_out_red_x": 0.0,
-                "uav_default_out_red_y": 0.0,
-                "uav_default_out_red_z": 0.0,
+                "uav_publish_default_output": True,
+                **enemy_uav_default,
             }
         ],
         extra_arguments=intra,
@@ -556,6 +579,22 @@ def _build_launch(context):
         ],
     )
 
+    detect_debug_image_view_node = Node(
+        package="image_view",
+        executable="image_view",
+        name="detect_debug_image_view",
+        output="screen",
+        remappings=[("image", "/detect/debug_image")],
+        parameters=[
+            {
+                "window_name": "detect",
+                "autosize": False,
+                "width": 1080,
+                "height": 960,
+            }
+        ],
+    )
+
     return [
         LogInfo(msg=f"radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"decision params file: {decision_params_file}"),
@@ -574,6 +613,7 @@ def _build_launch(context):
         radar_decision_comm_container,
         map_pcd_publisher,
         track_status_window_node,
+        detect_debug_image_view_node,
         rviz_node,
     ]
 

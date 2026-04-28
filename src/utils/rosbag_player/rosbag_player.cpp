@@ -1,5 +1,7 @@
 #include <cv_bridge/cv_bridge.h>  // 用于OpenCV图像与ROS图像消息的转换
 #include <thread>                 // 用于多线程操作
+#include <chrono>
+#include <algorithm>
 #include <opencv2/opencv.hpp>  // OpenCV库，用于图像处理
 #include <rclcpp/rclcpp.hpp>   // ROS2 C++核心库
 #include <rclcpp_components/register_node_macro.hpp>  // 用于注册ROS2组件节点
@@ -42,6 +44,11 @@ public:
         // 声明并获取"rosbag_file"参数（bag文件路径），默认值为空
         this->declare_parameter<std::string>("rosbag_file", "");
         this->get_parameter("rosbag_file", rosbag_file);
+        this->declare_parameter<bool>("static_image_only", false);
+        this->declare_parameter<double>("static_image_publish_rate", 5.0);
+        this->get_parameter("static_image_only", static_image_only_);
+        this->get_parameter("static_image_publish_rate",
+                            static_image_publish_rate_);
 
         // 创建点云发布者，话题为"/livox/lidar"，队列长度10
         pointcloud_publisher_ =
@@ -64,8 +71,13 @@ public:
         reader_.open(rosbag_file);
 
         // 启动线程处理bag播放逻辑
-        processing_thread_ =
-            std::make_shared<std::thread>(&RosbagPlayer::play_bag, this);
+        if (static_image_only_) {
+            processing_thread_ = std::make_shared<std::thread>(
+                &RosbagPlayer::publish_static_image_from_bag, this);
+        } else {
+            processing_thread_ =
+                std::make_shared<std::thread>(&RosbagPlayer::play_bag, this);
+        }
     }
 
     /**
@@ -80,6 +92,64 @@ public:
     }
 
 private:
+    bool read_next_compressed_image(sensor_msgs::msg::Image& output_msg)
+    {
+        while (rclcpp::ok() && reader_.has_next()) {
+            auto bag_message = reader_.read_next();
+            if (bag_message->topic_name != "/compressed_image") {
+                continue;
+            }
+
+            auto image_msg =
+                std::make_shared<sensor_msgs::msg::CompressedImage>();
+            rclcpp::Serialization<sensor_msgs::msg::CompressedImage>
+                serialization;
+            rclcpp::SerializedMessage serialized_msg(
+                *bag_message->serialized_data);
+            serialization.deserialize_message(&serialized_msg,
+                                              image_msg.get());
+
+            auto img = cv::imdecode(image_msg->data, cv::IMREAD_COLOR);
+            if (img.empty()) {
+                RCLCPP_WARN(this->get_logger(),
+                            "Decoded /compressed_image is empty, skipping.");
+                continue;
+            }
+
+            auto msg = cv_bridge::CvImage(std_msgs::msg::Header(), "bgr8", img)
+                           .toImageMsg();
+            output_msg = *msg;
+            return true;
+        }
+
+        return false;
+    }
+
+    void publish_static_image_from_bag()
+    {
+        sensor_msgs::msg::Image static_image;
+        if (!read_next_compressed_image(static_image)) {
+            RCLCPP_ERROR(this->get_logger(),
+                         "No valid /compressed_image found in rosbag: %s",
+                         rosbag_file.c_str());
+            return;
+        }
+
+        const double safe_rate =
+            std::max(0.1, static_image_publish_rate_);
+        const auto sleep_duration = std::chrono::duration<double>(1.0 / safe_rate);
+
+        RCLCPP_INFO(this->get_logger(),
+                    "Static rosbag image mode: publishing first image at %.2f Hz.",
+                    safe_rate);
+
+        while (rclcpp::ok()) {
+            static_image.header.stamp = this->now();
+            image_publisher_->publish(static_image);
+            std::this_thread::sleep_for(sleep_duration);
+        }
+    }
+
     /**
      * @brief 播放bag文件的核心函数，循环读取并发布消息
      */
@@ -188,6 +258,9 @@ private:
     std::shared_ptr<std::thread> processing_thread_;
     // rosbag文件路径
     std::string rosbag_file;
+    // 只从 rosbag 读取第一帧图像并静态发布，用于启动前 PnP 标定
+    bool static_image_only_{false};
+    double static_image_publish_rate_{5.0};
 };
 
 // 注册节点为ROS2组件，使其可被发现和加载

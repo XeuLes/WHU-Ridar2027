@@ -1,0 +1,7 @@
+%YAML:1.0
+reference_points:
+  - {name: "self_FORTRESS", pos: [5.471, -7.5, 0.0]}
+  - {name: "self_Tower", pos: [10.936, -11.161, 0.868]}
+  - {name: "enemy_Base", pos: [25.49, -7.5, 1.24524]}
+  - {name: "enemy_Tower", pos: [16.925, -3.625, 1.745]}
+  - {name: "enemy_High", pos: [20.20, -10.8, 0.8]}

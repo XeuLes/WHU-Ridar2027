@@ -1,8 +1,19 @@
 import os
+import signal
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction, Shutdown
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    LogInfo,
+    OpaqueFunction,
+    RegisterEventHandler,
+    Shutdown,
+    TimerAction,
+)
+from launch.event_handlers import OnProcessExit
+from launch.events.process import ShutdownProcess, matches_executable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
@@ -41,6 +52,8 @@ def _build_launch(context):
     referee_serial_device = LaunchConfiguration("referee_serial_device").perform(context)
     referee_serial_baudrate = int(LaunchConfiguration("referee_serial_baudrate").perform(context))
     rosbag_file = LaunchConfiguration("rosbag_file").perform(context)
+    calib_first = LaunchConfiguration("calib_first").perform(context).strip().lower()
+    calib_first = calib_first in ("1", "true", "yes", "on")
 
     bringup_share = get_package_share_directory("radar_bringup")
     localization_share = get_package_share_directory("localization")
@@ -48,20 +61,48 @@ def _build_launch(context):
 
     bringup_config = os.path.join(bringup_share, "config")
     map_pcd_path = os.path.join(localization_share, "config", "RM2025.pcd")
-    camera_extrinsic_yaml = os.path.join(bringup_config, "out_matrix.yaml")
+    camera_extrinsic_yaml = LaunchConfiguration("calib_out_matrix_yaml").perform(context)
     camera_to_lidar_yaml = os.path.join(localization_share, "config", "camera_to_lidar.yaml")
     manual_yaml = os.path.join(localization_share, "config", "livox_rm_manual.yaml")
     rviz_config_path = os.path.join(localization_share, "config", "localization_rviz_config.rviz")
 
     intra = [{"use_intra_process_comms": True}]
+    enemy_uav_coord = (27.131, 2.369, 1.7)
+    enemy_uav_default = {
+        "uav_default_out_blue_x": 0.0,
+        "uav_default_out_blue_y": 0.0,
+        "uav_default_out_blue_z": 0.0,
+        "uav_default_out_red_x": 0.0,
+        "uav_default_out_red_y": 0.0,
+        "uav_default_out_red_z": 0.0,
+    }
+    if team["match_self_color"] == 2:
+        enemy_uav_default.update({
+            "uav_default_out_blue_x": enemy_uav_coord[0],
+            "uav_default_out_blue_y": enemy_uav_coord[1],
+            "uav_default_out_blue_z": enemy_uav_coord[2],
+        })
+    else:
+        enemy_uav_default.update({
+            "uav_default_out_red_x": enemy_uav_coord[0],
+            "uav_default_out_red_y": enemy_uav_coord[1],
+            "uav_default_out_red_z": enemy_uav_coord[2],
+        })
 
-    rosbag_player_component = ComposableNode(
-        package="rosbag_player",
-        plugin="RosbagPlayer",
-        name="rosbag_player_node",
-        parameters=[{"rosbag_file": rosbag_file}],
-        extra_arguments=intra,
-    )
+    def make_rosbag_player_component(extra_params=None, remappings=None):
+        params = {"rosbag_file": rosbag_file}
+        if extra_params:
+            params.update(extra_params)
+        return ComposableNode(
+            package="rosbag_player",
+            plugin="RosbagPlayer",
+            name="rosbag_player_node",
+            parameters=[params],
+            remappings=remappings or [],
+            extra_arguments=intra,
+        )
+
+    rosbag_player_component = make_rosbag_player_component()
 
     localization_component = ComposableNode(
         package="localization",
@@ -154,13 +195,8 @@ def _build_launch(context):
                 "camera_params_path": os.path.join(bringup_config, "camera_params.yaml"),
                 "region_points_path": os.path.join(bringup_config, "RM2025_Points.yaml"),
                 "minimap_path": os.path.join(bringup_config, "RM2025.png"),
-                "uav_publish_default_output": False,
-                "uav_default_out_blue_x": 0.0,
-                "uav_default_out_blue_y": 0.0,
-                "uav_default_out_blue_z": 0.0,
-                "uav_default_out_red_x": 0.0,
-                "uav_default_out_red_y": 0.0,
-                "uav_default_out_red_z": 0.0,
+                "uav_publish_default_output": True,
+                **enemy_uav_default,
             }
         ],
         extra_arguments=intra,
@@ -396,7 +432,7 @@ def _build_launch(context):
         ],
     )
 
-    return [
+    normal_flow_actions = [
         LogInfo(msg=f"rosbag_radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"rosbag file: {rosbag_file}"),
         replay_container,
@@ -406,11 +442,100 @@ def _build_launch(context):
         rviz_node,
     ]
 
+    if not calib_first:
+        return normal_flow_actions
+
+    calib_rosbag_container = ComposableNodeContainer(
+        name="radar_calib_rosbag_container",
+        namespace="",
+        package="rclcpp_components",
+        executable="component_container_mt",
+        composable_node_descriptions=[
+            make_rosbag_player_component(
+                {
+                    "static_image_only": True,
+                    "static_image_publish_rate": LaunchConfiguration(
+                        "calib_static_image_rate"
+                    ),
+                },
+                remappings=[("camera_image", LaunchConfiguration("calib_image_topic"))],
+            )
+        ],
+        output="both",
+        emulate_tty=True,
+    )
+
+    pnp_calib_node = Node(
+        package="camera_field_calib_tool",
+        executable="pnp_calib_node_new",
+        name="pnp_calib_node_new",
+        output="screen",
+        parameters=[
+            {
+                "image_topic": LaunchConfiguration("calib_image_topic"),
+                "intrinsics_yaml": LaunchConfiguration("calib_intrinsics_yaml"),
+                "out_matrix_yaml": LaunchConfiguration("calib_out_matrix_yaml"),
+                "reference_points_yaml": LaunchConfiguration("calib_reference_points_yaml"),
+                "use_refine": LaunchConfiguration("calib_use_refine"),
+                "pnp_method": LaunchConfiguration("calib_pnp_method"),
+                "min_points": LaunchConfiguration("calib_min_points"),
+            }
+        ],
+    )
+
+    stop_calib_rosbag = EmitEvent(
+        event=ShutdownProcess(
+            process_matcher=matches_executable("component_container_mt"),
+        )
+    )
+
+    start_normal_flow_after_calib = RegisterEventHandler(
+        OnProcessExit(
+            target_action=pnp_calib_node,
+            on_exit=[
+                LogInfo(msg="PnP calibration exited; stopping static rosbag image publisher."),
+                stop_calib_rosbag,
+            ],
+        )
+    )
+
+    start_normal_flow_after_calib_rosbag_exit = RegisterEventHandler(
+        OnProcessExit(
+            target_action=calib_rosbag_container,
+            on_exit=[
+                LogInfo(msg="Static calibration rosbag publisher exited."),
+                LogInfo(msg="Starting normal rosbag radar flow with the saved calibration."),
+                *normal_flow_actions,
+            ],
+        )
+    )
+
+    return [
+        LogInfo(msg="calib_first=true: start PnP calibration first. Press P to solve, S to save, then Q/Esc to continue."),
+        LogInfo(msg="calibration uses the first /compressed_image frame from the rosbag and keeps it still."),
+        LogInfo(msg=f"calibration output: {LaunchConfiguration('calib_out_matrix_yaml').perform(context)}"),
+        calib_rosbag_container,
+        pnp_calib_node,
+        start_normal_flow_after_calib,
+        start_normal_flow_after_calib_rosbag_exit,
+    ]
+
 
 def generate_launch_description():
     radar_decision_share = get_package_share_directory("radar_decision_comm")
+    calib_tool_share = get_package_share_directory("camera_field_calib_tool")
+    bringup_share = get_package_share_directory("radar_bringup")
     default_decision_params = os.path.join(
         radar_decision_share, "config", "radar_decision_comm.yaml"
+    )
+    default_calib_intrinsics = os.path.join(
+        calib_tool_share, "config", "camera_intrinsics.yaml"
+    )
+    default_calib_reference_points = os.path.join(
+        calib_tool_share, "config", "reference_points_RM.yaml"
+    )
+    default_calib_out_matrix = os.path.join(
+        bringup_share, "config", "out_matrix_RM.yaml"
     )
 
     return LaunchDescription(
@@ -449,6 +574,51 @@ def generate_launch_description():
                 "referee_serial_baudrate",
                 default_value="115200",
                 description="referee serial baudrate for bridge mode",
+            ),
+            DeclareLaunchArgument(
+                "calib_first",
+                default_value="true",
+                description="run pnp_calib_node_new before starting the normal replay flow",
+            ),
+            DeclareLaunchArgument(
+                "calib_image_topic",
+                default_value="/calib_camera_image",
+                description="image topic used by pnp_calib_node_new during static rosbag-image calibration",
+            ),
+            DeclareLaunchArgument(
+                "calib_static_image_rate",
+                default_value="5.0",
+                description="publish rate for the first rosbag image during calibration",
+            ),
+            DeclareLaunchArgument(
+                "calib_intrinsics_yaml",
+                default_value=default_calib_intrinsics,
+                description="camera intrinsics yaml used by pnp_calib_node_new",
+            ),
+            DeclareLaunchArgument(
+                "calib_out_matrix_yaml",
+                default_value=default_calib_out_matrix,
+                description="output out_matrix yaml; normal flow reads this after calibration exits",
+            ),
+            DeclareLaunchArgument(
+                "calib_reference_points_yaml",
+                default_value=default_calib_reference_points,
+                description="reference 3D points yaml used by pnp_calib_node_new",
+            ),
+            DeclareLaunchArgument(
+                "calib_use_refine",
+                default_value="true",
+                description="whether pnp_calib_node_new refines solvePnP result",
+            ),
+            DeclareLaunchArgument(
+                "calib_pnp_method",
+                default_value="0",
+                description="OpenCV solvePnP method flag for pnp_calib_node_new",
+            ),
+            DeclareLaunchArgument(
+                "calib_min_points",
+                default_value="5",
+                description="minimum selected point count before pnp_calib_node_new solves",
             ),
             OpaqueFunction(function=_build_launch),
         ]

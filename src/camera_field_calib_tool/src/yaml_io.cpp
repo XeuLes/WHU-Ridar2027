@@ -62,15 +62,6 @@ static bool ParseMat33(const YAML::Node & node, cv::Matx33d & out)
   return false;
 }
 
-static YAML::Node ToYamlVec3(const cv::Vec3d & v)
-{
-  YAML::Node n(YAML::NodeType::Sequence);
-  n.push_back(v[0]);
-  n.push_back(v[1]);
-  n.push_back(v[2]);
-  return n;
-}
-
 static YAML::Node ToYamlMat33(const cv::Matx33d & m)
 {
   // Write as 3x3 nested list for readability
@@ -248,6 +239,38 @@ bool LoadExtrinsicsYaml(
       return false;
     }
 
+    try {
+      cv::FileStorage fs(yaml_path, cv::FileStorage::READ);
+      if (fs.isOpened()) {
+        cv::Mat rvec;
+        cv::Mat tvec;
+        fs["world_rvec"] >> rvec;
+        fs["world_tvec"] >> tvec;
+
+        if (!rvec.empty() && !tvec.empty() && rvec.total() == 3 && tvec.total() == 3) {
+          rvec = rvec.reshape(1, 3);
+          tvec = tvec.reshape(1, 3);
+          ext.rvec = cv::Vec3d(
+            rvec.at<double>(0, 0),
+            rvec.at<double>(1, 0),
+            rvec.at<double>(2, 0));
+          ext.tvec = cv::Vec3d(
+            tvec.at<double>(0, 0),
+            tvec.at<double>(1, 0),
+            tvec.at<double>(2, 0));
+
+          if (!fs["num_points"].empty()) fs["num_points"] >> ext.num_points;
+          if (!fs["reproj_rmse"].empty()) fs["reproj_rmse"] >> ext.reproj_rmse;
+          if (!fs["reproj_max"].empty()) fs["reproj_max"] >> ext.reproj_max;
+          if (!fs["image_topic"].empty()) fs["image_topic"] >> ext.image_topic;
+          if (!fs["timestamp"].empty()) fs["timestamp"] >> ext.timestamp;
+          return true;
+        }
+      }
+    } catch (const cv::Exception &) {
+      // Fall through to the legacy plain-YAML parser below.
+    }
+
     YAML::Node root = YAML::LoadFile(yaml_path);
 
     // Required fields
@@ -280,24 +303,22 @@ bool SaveExtrinsicsYaml(
   std::string * err)
 {
   try {
-    YAML::Node root(YAML::NodeType::Map);
-
-    root["world_rvec"] = ToYamlVec3(ext.rvec);
-    root["world_tvec"] = ToYamlVec3(ext.tvec);
-
-    // Optional metadata
-    root["num_points"] = ext.num_points;
-    root["reproj_rmse"] = ext.reproj_rmse;
-    root["reproj_max"] = ext.reproj_max;
-    if (!ext.image_topic.empty()) root["image_topic"] = ext.image_topic;
-    if (!ext.timestamp.empty()) root["timestamp"] = ext.timestamp;
-
-    std::ofstream ofs(yaml_path);
-    if (!ofs.is_open()) {
+    cv::FileStorage fs(yaml_path, cv::FileStorage::WRITE);
+    if (!fs.isOpened()) {
       SetErr(err, "Failed to open for write: " + yaml_path);
       return false;
     }
-    ofs << root;
+
+    cv::Mat rvec = (cv::Mat_<double>(3, 1) << ext.rvec[0], ext.rvec[1], ext.rvec[2]);
+    cv::Mat tvec = (cv::Mat_<double>(3, 1) << ext.tvec[0], ext.tvec[1], ext.tvec[2]);
+    fs << "world_rvec" << rvec;
+    fs << "world_tvec" << tvec;
+    fs << "num_points" << ext.num_points;
+    fs << "reproj_rmse" << ext.reproj_rmse;
+    fs << "reproj_max" << ext.reproj_max;
+    if (!ext.image_topic.empty()) fs << "image_topic" << ext.image_topic;
+    if (!ext.timestamp.empty()) fs << "timestamp" << ext.timestamp;
+    fs.release();
     return true;
   } catch (const std::exception & e) {
     SetErr(err, std::string("Exception while saving extrinsics YAML: ") + e.what());

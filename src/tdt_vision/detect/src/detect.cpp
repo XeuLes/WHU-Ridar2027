@@ -334,8 +334,16 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     : Node("radar_detect_node", node_options)
 {
     // 1. 初始化调试窗口
-    debug = 1;  // 默认开启调试绘制
-    cv::namedWindow("detect", cv::WINDOW_NORMAL);
+    debug = this->declare_parameter<int>("debug", 1);  // 默认开启调试绘制
+    show_debug_window_ =
+        this->declare_parameter<bool>("show_debug_window", true);
+    publish_debug_image_ =
+        this->declare_parameter<bool>("publish_debug_image", true);
+    debug_image_topic_ = this->declare_parameter<std::string>(
+        "debug_image_topic", "/detect/debug_image");
+    if (show_debug_window_) {
+        cv::namedWindow("detect", cv::WINDOW_NORMAL);
+    }
 
     // 2. 检查CUDA环境
     if (system("nvidia-smi") == 0) {
@@ -395,7 +403,7 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
 
 
     // 6. 加载UAV检测器
-    constexpr float kUavConfThreshold = 0.20f;
+    constexpr float kUavConfThreshold = 0.15f;
     constexpr float kUavNmsThreshold = 0.25f;
     constexpr int kUavMinBatch = 1;
     constexpr int kUavOptBatch = 4;
@@ -474,8 +482,17 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
 
     pub = this->create_publisher<vision_interface::msg::DetectResult>(
         "detect_result", rclcpp::SensorDataQoS());
+    if (publish_debug_image_) {
+        debug_img_pub_ = this->create_publisher<sensor_msgs::msg::Image>(
+            debug_image_topic_, rclcpp::QoS(1));
+    }
 
-    RCLCPP_INFO(this->get_logger(), "Detect node has been started.");
+    RCLCPP_INFO(
+        this->get_logger(),
+        "Detect node has been started. show_debug_window=%d publish_debug_image=%d debug_image_topic=%s",
+        show_debug_window_ ? 1 : 0,
+        publish_debug_image_ ? 1 : 0,
+        debug_image_topic_.c_str());
 }
 
 void Detect::uavIntersectionDebugCallback(
@@ -1324,13 +1341,21 @@ for (const auto& b : result) {
         cv::putText(final_img, "NO UAV DETECTED!", cv::Point(10, 70), cv::FONT_HERSHEY_SIMPLEX, 1.0, cv::Scalar(0, 0, 255), 2);
     }
     
-    // 5.4 显示调试窗口
-    cv::imshow("detect", final_img);
+    if (debug_img_pub_) {
+        auto debug_msg =
+            cv_bridge::CvImage(msg->header, "bgr8", final_img).toImageMsg();
+        debug_img_pub_->publish(*debug_msg);
+    }
 
-    // 5.5 处理键盘输入（r键切换调试模式）
-    auto key = cv::waitKey(1);
-    if (key == 'r') {
-        debug = !debug;
+    // 5.4 显示调试窗口
+    if (show_debug_window_) {
+        cv::imshow("detect", final_img);
+
+        // 5.5 处理键盘输入（r键切换调试模式）
+        auto key = cv::waitKey(1);
+        if (key == 'r') {
+            debug = !debug;
+        }
     }
 }
 

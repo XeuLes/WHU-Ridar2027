@@ -41,6 +41,7 @@
 
   <!-- 运行依赖：可视化 -->
   <exec_depend>rviz2</exec_depend>
+  <exec_depend>image_view</exec_depend>
 
   <!-- 测试相关依赖（可选） -->
   <test_depend>ament_lint_auto</test_depend>
