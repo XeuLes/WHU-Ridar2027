@@ -5,7 +5,7 @@ auto_aim_node:
     tracker.confirm_track_frames: 3
     tracker.lost_to_lost_frames: 5
     tracker.lost_to_search_frames: 20
-    tracker.min_conf_to_track: 0.3
+    tracker.min_conf_to_track: 0.75
 
     tracker.roi_base_size: 0
     tracker.roi_expand_lost: 1.3

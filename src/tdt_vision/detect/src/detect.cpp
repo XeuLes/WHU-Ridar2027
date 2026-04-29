@@ -324,7 +324,7 @@ static cv::Rect build_uav_upper_middle_roi(const cv::Rect& bbox)
  *      - yolo: 车辆检测（RM2025.onnx）
  *      - armor_yolo: 装甲板检测（armor_yolo.onnx）
  *      - classifier: 数字分类（classify.onnx）
- *      - uav_detector: UAV检测（best.onnx, conf=0.15）
+ *      - uav_detector: UAV检测（best.onnx, conf=0.5）
  *   5. 初始化UAV跟踪系统：
  *      - uav_tracker_: DeepSORT跟踪器（IOU阈值0.7）
  *      - light_bar_detector_: 灯条精细检测器
@@ -363,10 +363,15 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     fs["armor_path"] >> armor_path;
     fs["classify_path"] >> classify_path;
     fs["uav_path"] >> uav_path;
+    double uav_conf_threshold = 0.5;
+    if (!fs["uav_conf_threshold"].empty()) {
+        fs["uav_conf_threshold"] >> uav_conf_threshold;
+    }
     fs.release();
     
-    RCLCPP_INFO(this->get_logger(), "[INIT] Config loaded: yolo=%s, armor=%s, classify=%s, uav=%s", 
-                yolo_path.c_str(), armor_path.c_str(), classify_path.c_str(), uav_path.c_str());
+    RCLCPP_INFO(this->get_logger(), "[INIT] Config loaded: yolo=%s, armor=%s, classify=%s, uav=%s, uav_conf=%.2f",
+                yolo_path.c_str(), armor_path.c_str(), classify_path.c_str(), uav_path.c_str(),
+                uav_conf_threshold);
 
     // 4. 自动转换ONNX为TensorRT引擎（如不存在）
     std::ifstream file1(yolo_path.c_str());
@@ -403,7 +408,7 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
 
 
     // 6. 加载UAV检测器
-    constexpr float kUavConfThreshold = 0.15f;
+    const float kUavConfThreshold = static_cast<float>(uav_conf_threshold);
     constexpr float kUavNmsThreshold = 0.25f;
     constexpr int kUavMinBatch = 1;
     constexpr int kUavOptBatch = 4;

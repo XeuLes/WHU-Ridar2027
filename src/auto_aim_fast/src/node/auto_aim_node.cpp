@@ -100,7 +100,7 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("tracker.confirm_track_frames", 3);
   this->declare_parameter<int>("tracker.lost_to_lost_frames", 5);
   this->declare_parameter<int>("tracker.lost_to_search_frames", 20);
-  this->declare_parameter<double>("tracker.min_conf_to_track", 0.3);
+  this->declare_parameter<double>("tracker.min_conf_to_track", 0.5);
 
   this->declare_parameter<int>("tracker.roi_base_size", 200);
   this->declare_parameter<double>("tracker.roi_expand_lost", 1.3);
@@ -147,9 +147,9 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("detector.yolo.input_h", 640);
   this->declare_parameter<int>("detector.yolo.max_det", 300);
   this->declare_parameter<int>("detector.yolo.target_class_id", 0);
-  this->declare_parameter<double>("detector.yolo.conf_thresh", 0.25);
+  this->declare_parameter<double>("detector.yolo.conf_thresh", 0.5);
   this->declare_parameter<double>("detector.yolo.nms_thresh", 0.45);
-  this->declare_parameter<double>("detector.yolo.kpt_conf_thresh", 0.25);
+  this->declare_parameter<double>("detector.yolo.kpt_conf_thresh", 0.5);
   this->declare_parameter<double>("detector.yolo.min_w_ratio", 0.045);
   this->declare_parameter<double>("detector.yolo.min_h_ratio", 0.055);
   this->declare_parameter<double>("detector.yolo.min_area_ratio", 0.0025);

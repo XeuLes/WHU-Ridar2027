@@ -372,19 +372,6 @@ void stepAxisReference(
   }
 }
 
-double computeScanEnvelopeTarget(double err_deg, double full_on_err_deg, double full_off_err_deg)
-{
-  if (err_deg <= full_on_err_deg) {
-    return 1.0;
-  }
-  if (err_deg >= full_off_err_deg) {
-    return 0.0;
-  }
-  const double denom = std::max(1e-6, full_off_err_deg - full_on_err_deg);
-  const double t = (err_deg - full_on_err_deg) / denom;
-  return 1.0 - clampFree(t, 0.0, 1.0);
-}
-
 double moveToward(double current, double target, double max_step)
 {
   if (target > current) {
@@ -528,7 +515,7 @@ void LaserAimControllerNode::declareAndLoadParameters()
   this->declare_parameter<double>("pnp_only_output_filter_alpha", 1.0);
   this->declare_parameter<double>("recover_output_filter_alpha", 0.25);
   this->declare_parameter<double>("hold_output_filter_alpha", 0.20);
-  this->declare_parameter<double>("scan_output_filter_alpha", 1.0);
+  this->declare_parameter<double>("scan_output_filter_alpha", 0.30);
 
   this->declare_parameter<double>("min_valid_z_m", 0.05);
   this->declare_parameter<double>("control_rate_hz", 100.0);
@@ -962,6 +949,10 @@ double LaserAimControllerNode::computeVelocityLimitedAxisCommand(
   }
 
   double step = state_vel_deg_s * dt_s;
+  if (std::abs(pos_err) > stop_error_deg && step * pos_err < 0.0) {
+    state_vel_deg_s = 0.0;
+    return measured_pos_deg;
+  }
   step = clampValue(step, -std::abs(pos_err), std::abs(pos_err));
   return measured_pos_deg + step;
 }
@@ -1113,6 +1104,7 @@ void LaserAimControllerNode::resetControlStateTo(double yaw_deg, double pitch_de
   controller_state_initialized_ = true;
   last_auto_cmd_yaw_deg_ = yaw_deg;
   last_auto_cmd_pitch_deg_ = pitch_deg;
+  has_auto_command_reference_ = true;
   has_last_output_ = false;
 }
 
@@ -1238,10 +1230,6 @@ void LaserAimControllerNode::controlLoop()
   }
   last_control_time_ = now;
 
-  if (!gimbal.valid) {
-    return;
-  }
-
   auto & planner_params = g_track_planner_params[this];
   auto & filter_params = g_output_filter_params[this];
   auto & planner_state = g_track_planner_state[this];
@@ -1313,12 +1301,38 @@ void LaserAimControllerNode::controlLoop()
     }
   }
 
-  if (!controller_state_initialized_) {
-    resetControlStateTo(gimbal.yaw_deg, gimbal.pitch_deg);
+  const bool tracking_mode =
+    (mode_ == ControlMode::FINE_TRACK || mode_ == ControlMode::PNP_ONLY_TRACK);
+  if (tracking_mode && !gimbal.valid) {
+    return;
   }
 
+  auto commandReferenceYaw = [this]() -> double {
+    return (has_auto_command_reference_ && std::isfinite(last_auto_cmd_yaw_deg_))
+      ? last_auto_cmd_yaw_deg_
+      : 0.0;
+  };
+  auto commandReferencePitch = [this]() -> double {
+    return (has_auto_command_reference_ && std::isfinite(last_auto_cmd_pitch_deg_))
+      ? last_auto_cmd_pitch_deg_
+      : 0.0;
+  };
+
+  if (!controller_state_initialized_) {
+    resetControlStateTo(
+      tracking_mode ? gimbal.yaw_deg : commandReferenceYaw(),
+      tracking_mode ? gimbal.pitch_deg : commandReferencePitch());
+  }
+
+  double open_loop_yaw = commandReferenceYaw();
+  double open_loop_pitch = commandReferencePitch();
+
   if (!planner_state.initialized) {
-    resetTrackPlannerState(planner_state, gimbal.yaw_deg, gimbal.pitch_deg, now);
+    resetTrackPlannerState(
+      planner_state,
+      tracking_mode ? gimbal.yaw_deg : open_loop_yaw,
+      tracking_mode ? gimbal.pitch_deg : open_loop_pitch,
+      now);
   }
 
   const bool mode_changed = (mode_ != prev_mode);
@@ -1332,15 +1346,11 @@ void LaserAimControllerNode::controlLoop()
   }
 
   if (mode_changed && mode_ == ControlMode::LOST_RECOVER && search_stage_mode_ == "scan") {
-    const double init_yaw =
-      std::isfinite(last_auto_cmd_yaw_deg_) ? last_auto_cmd_yaw_deg_ : gimbal.yaw_deg;
-    const double init_pitch =
-      std::isfinite(last_auto_cmd_pitch_deg_) ? last_auto_cmd_pitch_deg_ : gimbal.pitch_deg;
-    resetRecoverScanState(recover_scan_state, init_yaw, init_pitch, now);
+    resetRecoverScanState(recover_scan_state, open_loop_yaw, open_loop_pitch, now);
   }
 
   const bool entering_track =
-    (mode_ == ControlMode::FINE_TRACK || mode_ == ControlMode::PNP_ONLY_TRACK) &&
+    tracking_mode &&
     !(prev_mode == ControlMode::FINE_TRACK || prev_mode == ControlMode::PNP_ONLY_TRACK);
 
   if (entering_track) {
@@ -1351,13 +1361,13 @@ void LaserAimControllerNode::controlLoop()
     resetTrackPlannerState(planner_state, init_yaw, init_pitch, now);
   }
 
-  if (mode_ == ControlMode::HOLD && !has_hold_auto_cmd_ && gimbal.valid) {
-    hold_auto_yaw_deg_ = gimbal.yaw_deg;
-    hold_auto_pitch_deg_ = gimbal.pitch_deg;
+  if (mode_ == ControlMode::HOLD && !has_hold_auto_cmd_) {
+    hold_auto_yaw_deg_ = open_loop_yaw;
+    hold_auto_pitch_deg_ = open_loop_pitch;
     has_hold_auto_cmd_ = true;
   }
 
-  if ((mode_ == ControlMode::FINE_TRACK || mode_ == ControlMode::PNP_ONLY_TRACK) &&
+  if (tracking_mode &&
       (std::abs(planner_state.yaw.ref_pos_deg - gimbal.yaw_deg) > planner_params.track_feedback_reset_deg ||
        std::abs(planner_state.pitch.ref_pos_deg - gimbal.pitch_deg) > planner_params.track_feedback_reset_deg))
   {
@@ -1365,8 +1375,8 @@ void LaserAimControllerNode::controlLoop()
     has_last_output_ = false;
   }
 
-  double desired_yaw = gimbal.yaw_deg;
-  double desired_pitch = gimbal.pitch_deg;
+  double desired_yaw = open_loop_yaw;
+  double desired_pitch = open_loop_pitch;
 
   double pixel_corr_yaw = 0.0;
   double pixel_corr_pitch = 0.0;
@@ -1470,7 +1480,7 @@ void LaserAimControllerNode::controlLoop()
 
   double pixel_abs_yaw_deg = 0.0;
   double pixel_abs_pitch_deg = 0.0;
-  if (pixel_geom_valid) {
+  if (tracking_mode && pixel_geom_valid) {
     pixel_abs_yaw_deg = gimbal.yaw_deg + pixel_full_inc_yaw_deg;
     pixel_abs_pitch_deg = gimbal.pitch_deg + pixel_full_inc_pitch_deg;
     track_meas_yaw_deg = pixel_abs_yaw_deg;
@@ -1481,7 +1491,7 @@ void LaserAimControllerNode::controlLoop()
 
   double pnp_abs_yaw_deg = 0.0;
   double pnp_abs_pitch_deg = 0.0;
-  if (inc_pnp_ok) {
+  if (tracking_mode && inc_pnp_ok) {
     pnp_abs_yaw_deg = gimbal.yaw_deg + inc_pnp.yaw_deg;
     pnp_abs_pitch_deg = gimbal.pitch_deg + inc_pnp.pitch_deg;
 
@@ -1522,7 +1532,7 @@ void LaserAimControllerNode::controlLoop()
     pnp_bias_pitch_deg_ = 0.0;
   }
 
-  if (pixel_geom_valid && inc_pnp_ok) {
+  if (tracking_mode && pixel_geom_valid && inc_pnp_ok) {
     const double dy = pnp_abs_yaw_deg - pixel_abs_yaw_deg;
     const double dp = pnp_abs_pitch_deg - pixel_abs_pitch_deg;
     if (std::abs(dy) > planner_params.pnp_reject_deg ||
@@ -1544,7 +1554,7 @@ void LaserAimControllerNode::controlLoop()
   planner_state.last_track_meas_pitch_deg =
     has_track_meas ? track_meas_pitch_deg : planner_state.last_track_meas_pitch_deg;
 
-  if (mode_ == ControlMode::FINE_TRACK || mode_ == ControlMode::PNP_ONLY_TRACK) {
+  if (tracking_mode) {
     if (has_track_meas) {
       const rclcpp::Time meas_stamp = obs.received ? obs.rx_time : now;
 
@@ -1607,11 +1617,7 @@ void LaserAimControllerNode::controlLoop()
   } else if (mode_ == ControlMode::LOST_RECOVER) {
     if (search_stage_mode_ == "scan") {
       if (!recover_scan_state.initialized) {
-        const double init_yaw =
-          std::isfinite(last_auto_cmd_yaw_deg_) ? last_auto_cmd_yaw_deg_ : gimbal.yaw_deg;
-        const double init_pitch =
-          std::isfinite(last_auto_cmd_pitch_deg_) ? last_auto_cmd_pitch_deg_ : gimbal.pitch_deg;
-        resetRecoverScanState(recover_scan_state, init_yaw, init_pitch, now);
+        resetRecoverScanState(recover_scan_state, open_loop_yaw, open_loop_pitch, now);
       }
 
       bool rough_fresh = false;
@@ -1675,17 +1681,13 @@ void LaserAimControllerNode::controlLoop()
       const double center_ref_yaw = recover_scan_state.center_yaw.ref_pos_deg;
       const double center_ref_pitch = recover_scan_state.center_pitch.ref_pos_deg;
 
+      const bool has_scan_center =
+        recover_scan_state.center_yaw.has_measurement &&
+        recover_scan_state.center_pitch.has_measurement;
       const double env_target_yaw =
-        recover_scan_params.yaw_env_max * computeScanEnvelopeTarget(
-          std::abs(center_ref_yaw - gimbal.yaw_deg),
-          recover_scan_params.yaw_envelope_full_on_err_deg,
-          recover_scan_params.yaw_envelope_full_off_err_deg);
-
+        has_scan_center ? recover_scan_params.yaw_env_max : 0.0;
       const double env_target_pitch =
-        computeScanEnvelopeTarget(
-          std::abs(center_ref_pitch - gimbal.pitch_deg),
-          recover_scan_params.pitch_envelope_full_on_err_deg,
-          recover_scan_params.pitch_envelope_full_off_err_deg);
+        has_scan_center ? 1.0 : 0.0;
 
       const double env_up_step =
         dt_s / std::max(0.05, recover_scan_params.envelope_rise_s);
@@ -1760,8 +1762,8 @@ void LaserAimControllerNode::controlLoop()
         desired_yaw = hold_auto_yaw_deg_;
         desired_pitch = hold_auto_pitch_deg_;
       } else {
-        desired_yaw = gimbal.yaw_deg;
-        desired_pitch = gimbal.pitch_deg;
+        desired_yaw = open_loop_yaw;
+        desired_pitch = open_loop_pitch;
       }
     }
   } else {
@@ -1769,24 +1771,29 @@ void LaserAimControllerNode::controlLoop()
       desired_yaw = hold_auto_yaw_deg_;
       desired_pitch = hold_auto_pitch_deg_;
     } else {
-      desired_yaw = gimbal.yaw_deg;
-      desired_pitch = gimbal.pitch_deg;
+      desired_yaw = open_loop_yaw;
+      desired_pitch = open_loop_pitch;
     }
   }
 
   double auto_yaw = desired_yaw;
   double auto_pitch = desired_pitch;
 
-  if (mode_ == ControlMode::LOST_RECOVER || mode_ == ControlMode::HOLD) {
+  const bool recover_scan_mode =
+    mode_ == ControlMode::LOST_RECOVER && search_stage_mode_ == "scan";
+  if (recover_scan_mode) {
+    command_vel_yaw_deg_s_ = 0.0;
+    command_vel_pitch_deg_s_ = 0.0;
+  } else if (mode_ == ControlMode::LOST_RECOVER || mode_ == ControlMode::HOLD) {
     const double max_vel =
       (mode_ == ControlMode::LOST_RECOVER) ? recover_max_vel_deg_s_ : fine_track_max_vel_deg_s_;
     const double max_acc =
       (mode_ == ControlMode::LOST_RECOVER) ? recover_max_acc_deg_s2_ : fine_track_max_acc_deg_s2_;
 
     auto_yaw = computeVelocityLimitedAxisCommand(
-      desired_yaw, gimbal.yaw_deg, command_vel_yaw_deg_s_, dt_s, max_vel, max_acc, stop_error_deg_);
+      desired_yaw, open_loop_yaw, command_vel_yaw_deg_s_, dt_s, max_vel, max_acc, stop_error_deg_);
     auto_pitch = computeVelocityLimitedAxisCommand(
-      desired_pitch, gimbal.pitch_deg, command_vel_pitch_deg_s_, dt_s, max_vel, max_acc, stop_error_deg_);
+      desired_pitch, open_loop_pitch, command_vel_pitch_deg_s_, dt_s, max_vel, max_acc, stop_error_deg_);
   }
 
   if (enable_output_filter_) {
@@ -1829,8 +1836,9 @@ void LaserAimControllerNode::controlLoop()
 
   last_auto_cmd_yaw_deg_ = auto_yaw;
   last_auto_cmd_pitch_deg_ = auto_pitch;
+  has_auto_command_reference_ = true;
 
-  if (mode_ == ControlMode::FINE_TRACK || mode_ == ControlMode::PNP_ONLY_TRACK) {
+  if (tracking_mode) {
     hold_auto_yaw_deg_ = auto_yaw;
     hold_auto_pitch_deg_ = auto_pitch;
     has_hold_auto_cmd_ = true;

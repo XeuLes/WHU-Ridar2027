@@ -212,6 +212,7 @@ private:
   uint64_t last_filtered_target_seq_{0};
 
   bool controller_state_initialized_{false};
+  bool has_auto_command_reference_{false};
   double command_vel_yaw_deg_s_{0.0};
   double command_vel_pitch_deg_s_{0.0};
   double last_auto_cmd_yaw_deg_{0.0};

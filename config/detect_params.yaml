@@ -4,3 +4,4 @@ yolo_path: "model/TensorRT/car_merged_200_fp16.engine"
 armor_path: "model/TensorRT/armor_yolo.engine"
 classify_path: "model/TensorRT/classify.engine"
 uav_path: "model/TensorRT/uav_best_fp16.engine"
+uav_conf_threshold: 0.5

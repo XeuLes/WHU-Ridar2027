@@ -19,7 +19,7 @@ struct TrackerParams
   int lost_to_lost_frames{5};
   int lost_to_search_frames{20};
 
-  float min_conf_to_track{0.3f};
+  float min_conf_to_track{0.5f};
 
   // ROI policy (normalized by a "base size" in pixels; later we will tie to target size)
   int roi_base_size{200};         // base square ROI size

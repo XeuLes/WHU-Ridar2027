@@ -6,10 +6,12 @@
 #include <geometry_msgs/msg/quaternion_stamped.hpp>
 
 #include <atomic>
+#include <algorithm>
 #include <cerrno>
 #include <chrono>
 #include <cstdint>
 #include <cstring>
+#include <deque>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -239,9 +241,14 @@ public:
 
         RCLCPP_INFO(
             this->get_logger(),
-            "Started. baud=%d cmd_topic=%s enable_topic=%s yaw_drift_rate=%.9f pitch_protocol_bias_deg=%.6f",
+            "Started. baud=%d cmd_topic=%s enable_topic=%s yaw_drift_rate=%.9f pitch_protocol_bias_deg=%.6f manual_bias=(yaw=%.6f pitch=%.6f) zero_init_sample_count=%d zero_stable_window_s=%.3f zero_stable_required_count=%d zero_stable_max_delta_deg=%.3f zero_init_timeout_s=%.3f gimbal_disconnect_timeout_s=%.3f",
             baud_, cmd_topic_.c_str(), enable_topic_.c_str(),
-            yaw_drift_rate_, pitch_protocol_bias_deg_);
+            yaw_drift_rate_, pitch_protocol_bias_deg_,
+            manual_yaw_bias_deg_, manual_pitch_bias_deg_,
+            zero_init_sample_count_,
+            zero_stable_window_s_, zero_stable_required_count_,
+            zero_stable_max_delta_deg_,
+            zero_init_timeout_s_, gimbal_disconnect_timeout_s_);
         RCLCPP_INFO(
             this->get_logger(),
             "Publish topics: angles_raw=%s angles_true=%s quaternion_raw=%s quaternion_true=%s mode=%s",
@@ -290,6 +297,12 @@ private:
         this->declare_parameter<int>("pitch_index", 1);
 
         this->declare_parameter<bool>("default_enable", true);
+        this->declare_parameter<int>("zero_init_sample_count", 20);
+        this->declare_parameter<double>("zero_stable_window_s", 0.1);
+        this->declare_parameter<int>("zero_stable_required_count", 10);
+        this->declare_parameter<double>("zero_stable_max_delta_deg", 0.1);
+        this->declare_parameter<double>("zero_init_timeout_s", 15.0);
+        this->declare_parameter<double>("gimbal_disconnect_timeout_s", 20.0);
 
         // same unit as yaw per second
         this->declare_parameter<double>("yaw_drift_rate", 0.05);
@@ -297,6 +310,8 @@ private:
         // tx to MCU   : pitch_hw   = pitch_ctrl + bias
         // rx to ctrl  : pitch_ctrl = pitch_hw   - bias
         this->declare_parameter<double>("pitch_protocol_bias_deg", 0.0);
+        this->declare_parameter<double>("manual_yaw_bias_deg", 0.0);
+        this->declare_parameter<double>("manual_pitch_bias_deg", 0.0);
     }
 
     void loadParams()
@@ -321,8 +336,31 @@ private:
         pitch_index_ = this->get_parameter("pitch_index").as_int();
 
         enable_.store(this->get_parameter("default_enable").as_bool());
+        const int64_t zero_init_samples =
+            this->get_parameter("zero_init_sample_count").as_int();
+        zero_init_sample_count_ =
+            static_cast<int>(std::max<int64_t>(0, zero_init_samples));
+        zero_initialized_ = (zero_init_sample_count_ == 0);
+        zero_stable_window_s_ =
+            std::max(0.0, this->get_parameter("zero_stable_window_s").as_double());
+        const int64_t zero_stable_required =
+            this->get_parameter("zero_stable_required_count").as_int();
+        zero_stable_required_count_ =
+            static_cast<int>(std::max<int64_t>(0, zero_stable_required));
+        zero_stable_max_delta_deg_ =
+            std::max(0.0, this->get_parameter("zero_stable_max_delta_deg").as_double());
+        zero_init_timeout_s_ =
+            std::max(0.0, this->get_parameter("zero_init_timeout_s").as_double());
+        gimbal_disconnect_timeout_s_ =
+            std::max(0.0, this->get_parameter("gimbal_disconnect_timeout_s").as_double());
+        {
+            std::lock_guard<std::mutex> lk(zero_mutex_);
+            resetZeroInitializationStateLocked();
+        }
         yaw_drift_rate_ = this->get_parameter("yaw_drift_rate").as_double();
         pitch_protocol_bias_deg_ = this->get_parameter("pitch_protocol_bias_deg").as_double();
+        manual_yaw_bias_deg_ = this->get_parameter("manual_yaw_bias_deg").as_double();
+        manual_pitch_bias_deg_ = this->get_parameter("manual_pitch_bias_deg").as_double();
     }
 
     void closeFd()
@@ -373,6 +411,134 @@ private:
         tx_cv_.notify_one();
     }
 
+    void resetZeroInitializationStateLocked()
+    {
+        zero_initialized_ = (zero_init_sample_count_ == 0);
+        zero_stable_ = (zero_initialized_ || zero_stable_required_count_ == 0);
+        zero_stable_count_ = 0;
+        zero_history_.clear();
+        zero_sample_count_ = 0;
+        zero_yaw_sum_ = 0.0;
+        zero_pitch_sum_ = 0.0;
+        zero_yaw_offset_ = 0.0;
+        zero_pitch_offset_ = 0.0;
+        zero_has_valid_frame_ = false;
+        zero_first_valid_tp_ = std::chrono::steady_clock::time_point{};
+    }
+
+    void resetZeroInitializationForRestart()
+    {
+        std::lock_guard<std::mutex> lk(zero_mutex_);
+        resetZeroInitializationStateLocked();
+    }
+
+    bool updateZeroInitialization(double stamp_s, double yaw_true, double pitch_true)
+    {
+        if (!std::isfinite(stamp_s) ||
+            !std::isfinite(yaw_true) ||
+            !std::isfinite(pitch_true)) {
+            return false;
+        }
+
+        const auto now_tp = std::chrono::steady_clock::now();
+
+        std::lock_guard<std::mutex> lk(zero_mutex_);
+        if (zero_initialized_) {
+            return true;
+        }
+
+        if (!zero_has_valid_frame_) {
+            zero_has_valid_frame_ = true;
+            zero_first_valid_tp_ = now_tp;
+        } else if (zero_init_timeout_s_ > 0.0) {
+            const double init_age_s =
+                std::chrono::duration<double>(now_tp - zero_first_valid_tp_).count();
+            if (init_age_s >= zero_init_timeout_s_) {
+                zero_yaw_offset_ = yaw_true;
+                zero_pitch_offset_ = pitch_true;
+                zero_initialized_ = true;
+                zero_stable_ = true;
+                zero_history_.clear();
+                zero_sample_count_ = 0;
+                zero_yaw_sum_ = 0.0;
+                zero_pitch_sum_ = 0.0;
+                RCLCPP_WARN(
+                    this->get_logger(),
+                    "Gimbal zero initialization timed out after %.3fs; using current angles as zero: yaw_offset=%.6f pitch_offset=%.6f",
+                    init_age_s, zero_yaw_offset_, zero_pitch_offset_);
+                return true;
+            }
+        }
+
+        if (!zero_stable_) {
+            zero_history_.push_back({stamp_s, yaw_true, pitch_true});
+            const double keep_s = std::max(1.0, zero_stable_window_s_ * 4.0);
+            while (!zero_history_.empty() &&
+                   stamp_s - zero_history_.front().stamp_s > keep_s) {
+                zero_history_.pop_front();
+            }
+
+            const double target_stamp = stamp_s - zero_stable_window_s_;
+            const ZeroSample* ref = nullptr;
+            for (auto it = zero_history_.rbegin(); it != zero_history_.rend(); ++it) {
+                if (it->stamp_s <= target_stamp) {
+                    ref = &(*it);
+                    break;
+                }
+            }
+
+            if (ref == nullptr) {
+                return false;
+            }
+
+            const double yaw_delta = std::abs(yaw_true - ref->yaw);
+            const double pitch_delta = std::abs(pitch_true - ref->pitch);
+            if (yaw_delta < zero_stable_max_delta_deg_ &&
+                pitch_delta < zero_stable_max_delta_deg_) {
+                zero_stable_count_++;
+                if (zero_stable_count_ >= zero_stable_required_count_) {
+                    zero_stable_ = true;
+                    zero_history_.clear();
+                    zero_yaw_sum_ = 0.0;
+                    zero_pitch_sum_ = 0.0;
+                    zero_sample_count_ = 0;
+                    RCLCPP_INFO(
+                        this->get_logger(),
+                        "Gimbal zero stability reached: %d consecutive samples, window=%.3fs, max_delta=%.6f",
+                        zero_stable_count_, zero_stable_window_s_, zero_stable_max_delta_deg_);
+                }
+            } else {
+                zero_stable_count_ = 0;
+            }
+
+            return false;
+        }
+
+        zero_yaw_sum_ += yaw_true;
+        zero_pitch_sum_ += pitch_true;
+        zero_sample_count_++;
+
+        if (zero_sample_count_ >= zero_init_sample_count_) {
+            zero_yaw_offset_ = zero_yaw_sum_ / static_cast<double>(zero_sample_count_);
+            zero_pitch_offset_ = zero_pitch_sum_ / static_cast<double>(zero_sample_count_);
+            zero_initialized_ = true;
+            RCLCPP_INFO(
+                this->get_logger(),
+                "Gimbal zero initialized with %d samples: yaw_offset=%.6f pitch_offset=%.6f",
+                zero_sample_count_, zero_yaw_offset_, zero_pitch_offset_);
+        }
+
+        return zero_initialized_;
+    }
+
+    bool getZeroOffsets(double& yaw_offset, double& pitch_offset)
+    {
+        std::lock_guard<std::mutex> lk(zero_mutex_);
+        yaw_offset = zero_yaw_offset_;
+        pitch_offset = zero_pitch_offset_;
+        return zero_initialized_;
+    }
+
     void onEnable(const std_msgs::msg::Bool::SharedPtr msg)
     {
         enable_.store(msg->data);
@@ -400,10 +566,54 @@ private:
 
     void updateLastRxTiming(uint32_t running_time_ms)
     {
-        std::lock_guard<std::mutex> lk(rx_state_mutex_);
-        last_mcu_running_time_ms_ = running_time_ms;
-        last_rx_host_tp_ = std::chrono::steady_clock::now();
-        has_last_mcu_time_ = true;
+        bool recovered_from_disconnect = false;
+        {
+            std::lock_guard<std::mutex> lk(rx_state_mutex_);
+            recovered_from_disconnect = gimbal_disconnected_;
+            last_mcu_running_time_ms_ = running_time_ms;
+            last_rx_host_tp_ = std::chrono::steady_clock::now();
+            has_last_mcu_time_ = true;
+            gimbal_disconnected_ = false;
+        }
+
+        if (recovered_from_disconnect) {
+            RCLCPP_INFO(
+                this->get_logger(),
+                "Gimbal valid message received after disconnect; waiting for zero re-initialization.");
+        }
+    }
+
+    void checkGimbalDisconnectTimeout()
+    {
+        if (gimbal_disconnect_timeout_s_ <= 0.0) {
+            return;
+        }
+
+        bool timed_out = false;
+        double rx_age_s = 0.0;
+        {
+            std::lock_guard<std::mutex> lk(rx_state_mutex_);
+            if (!has_last_mcu_time_ || gimbal_disconnected_) {
+                return;
+            }
+
+            const auto now = std::chrono::steady_clock::now();
+            rx_age_s = std::chrono::duration<double>(now - last_rx_host_tp_).count();
+            if (rx_age_s > gimbal_disconnect_timeout_s_) {
+                has_last_mcu_time_ = false;
+                gimbal_disconnected_ = true;
+                timed_out = true;
+            }
+        }
+
+        if (timed_out) {
+            resetZeroInitializationForRestart();
+            requestTx();
+            RCLCPP_ERROR(
+                this->get_logger(),
+                "Gimbal disconnected: no valid message for %.3fs; zero initialization reset and commands blocked until re-initialized.",
+                rx_age_s);
+        }
     }
 
     double computeTxDriftSeconds()
@@ -421,10 +631,7 @@ private:
         return t_mcu + t_local_delay;
     }
 
-    void publishRawAndTrue(
-        const GimbalToVision& rx,
-        double yaw_true,
-        const QuatWXYZ& q_true)
+    void publishRaw(const GimbalToVision& rx)
     {
         // raw angles (MCU/raw protocol frame)
         std_msgs::msg::Float64MultiArray angles_raw;
@@ -432,16 +639,6 @@ private:
         angles_raw.data[0] = static_cast<double>(rx.yaw);
         angles_raw.data[1] = static_cast<double>(rx.pitch);
         pub_angles_raw_->publish(angles_raw);
-
-        // true/control angles
-        const double pitch_true =
-            static_cast<double>(rx.pitch) - pitch_protocol_bias_deg_;
-
-        std_msgs::msg::Float64MultiArray angles_true;
-        angles_true.data.resize(2);
-        angles_true.data[0] = yaw_true;
-        angles_true.data[1] = pitch_true;
-        pub_angles_true_->publish(angles_true);
 
         // raw quaternion
         geometry_msgs::msg::QuaternionStamped qmsg_raw;
@@ -452,15 +649,31 @@ private:
         qmsg_raw.quaternion.y = static_cast<double>(rx.q[2]);
         qmsg_raw.quaternion.z = static_cast<double>(rx.q[3]);
         pub_quaternion_raw_->publish(qmsg_raw);
+    }
+
+    void publishRawAndTrue(
+        const GimbalToVision& rx,
+        double yaw_ctrl,
+        double pitch_ctrl,
+        const QuatWXYZ& q_ctrl)
+    {
+        publishRaw(rx);
+
+        // true/control angles
+        std_msgs::msg::Float64MultiArray angles_true;
+        angles_true.data.resize(2);
+        angles_true.data[0] = yaw_ctrl;
+        angles_true.data[1] = pitch_ctrl;
+        pub_angles_true_->publish(angles_true);
 
         // true quaternion
         geometry_msgs::msg::QuaternionStamped qmsg_true;
-        qmsg_true.header.stamp = qmsg_raw.header.stamp;
+        qmsg_true.header.stamp = this->now();
         qmsg_true.header.frame_id = "gimbal_frame";
-        qmsg_true.quaternion.w = q_true.w;
-        qmsg_true.quaternion.x = q_true.x;
-        qmsg_true.quaternion.y = q_true.y;
-        qmsg_true.quaternion.z = q_true.z;
+        qmsg_true.quaternion.w = q_ctrl.w;
+        qmsg_true.quaternion.x = q_ctrl.x;
+        qmsg_true.quaternion.y = q_ctrl.y;
+        qmsg_true.quaternion.z = q_ctrl.z;
         pub_quaternion_true_->publish(qmsg_true);
     }
     void rxLoop()
@@ -471,6 +684,8 @@ private:
         const size_t frame_len = sizeof(GimbalToVision);
 
         while (!quit_.load()) {
+            checkGimbalDisconnectTimeout();
+
             if (!ensureOpen()) {
                 std::this_thread::sleep_for(200ms);
                 continue;
@@ -539,28 +754,40 @@ private:
                 std::memcpy(&rx, frame_bytes, sizeof(rx));
                 rxbuf.erase(rxbuf.begin(), rxbuf.begin() + static_cast<long>(frame_len));
 
-                updateLastRxTiming(rx.running_time);
-
-                // raw/drifted yaw from MCU -> true yaw on host
+                // raw/drifted yaw from MCU -> absolute yaw on host
                 const double t_mcu = static_cast<double>(rx.running_time) / 1000.0;
-                const double yaw_true =
+                const double yaw_abs =
                     static_cast<double>(rx.yaw) - yaw_drift_rate_ * t_mcu;
-
-                // raw quaternion -> true quaternion by replacing yaw
-                QuatWXYZ q_raw;
-                q_raw.w = static_cast<double>(rx.q[0]);
-                q_raw.x = static_cast<double>(rx.q[1]);
-                q_raw.y = static_cast<double>(rx.q[2]);
-                q_raw.z = static_cast<double>(rx.q[3]);
-
-                // 如果协议中真正可信的双轴角度来源是 rx.yaw / rx.pitch，
-                // 那 true quaternion 应直接由补偿后的 yaw_true 和 rx.pitch 重建
-                const double roll_true = 0.0;
-                const double pitch_true =
+                const double pitch_abs =
                     static_cast<double>(rx.pitch) - pitch_protocol_bias_deg_;
-                QuatWXYZ q_true = quat_from_euler(roll_true, pitch_true, yaw_true);
 
-                publishRawAndTrue(rx, yaw_true, q_true);
+                const bool angles_valid = std::isfinite(yaw_abs) && std::isfinite(pitch_abs);
+                if (angles_valid) {
+                    updateLastRxTiming(rx.running_time);
+                }
+
+                const bool zero_ready =
+                    angles_valid && updateZeroInitialization(t_mcu, yaw_abs, pitch_abs);
+
+                if (zero_ready) {
+                    double zero_yaw_offset = 0.0;
+                    double zero_pitch_offset = 0.0;
+                    getZeroOffsets(zero_yaw_offset, zero_pitch_offset);
+
+                    const double yaw_ctrl =
+                        yaw_abs - zero_yaw_offset - manual_yaw_bias_deg_;
+                    const double pitch_ctrl =
+                        pitch_abs - zero_pitch_offset - manual_pitch_bias_deg_;
+
+                    // 如果协议中真正可信的双轴角度来源是 rx.yaw / rx.pitch，
+                    // 那 true quaternion 应直接由归零后的 yaw/pitch 重建。
+                    const double roll_ctrl = 0.0;
+                    QuatWXYZ q_ctrl = quat_from_euler(roll_ctrl, pitch_ctrl, yaw_ctrl);
+
+                    publishRawAndTrue(rx, yaw_ctrl, pitch_ctrl, q_ctrl);
+                } else {
+                    publishRaw(rx);
+                }
 
                 std_msgs::msg::UInt8 m;
                 m.data = rx.mode;
@@ -571,7 +798,7 @@ private:
                 //     "RX mode=%u yaw_raw=%.6f yaw_true=%.6f pitch=%.6f running_time=%u ms",
                 //     static_cast<unsigned>(rx.mode),
                 //     static_cast<double>(rx.yaw),
-                //     yaw_true,
+                //     yaw_abs,
                 //     static_cast<double>(rx.pitch),
                 //     static_cast<unsigned>(rx.running_time));
 
@@ -610,6 +837,15 @@ private:
             }
             if (fd_local < 0) continue;
 
+            double zero_yaw_offset = 0.0;
+            double zero_pitch_offset = 0.0;
+            if (!getZeroOffsets(zero_yaw_offset, zero_pitch_offset)) {
+                RCLCPP_DEBUG_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 1000,
+                    "Waiting for gimbal zero initialization before sending commands.");
+                continue;
+            }
+
             VisionToGimbal tx{};
             tx.head[0] = 'S';
             tx.head[1] = 'P';
@@ -625,8 +861,12 @@ private:
                 cmd_pitch = last_cmd_pitch_;
             }
 
-            const float base_yaw_true = has_cmd ? cmd_yaw_true : 0.0f;
-            const float base_pitch_ctrl = has_cmd ? cmd_pitch : 0.0f;
+            const float base_yaw_true =
+                (has_cmd ? cmd_yaw_true : 0.0f) +
+                static_cast<float>(zero_yaw_offset + manual_yaw_bias_deg_);
+            const float base_pitch_ctrl =
+                (has_cmd ? cmd_pitch : 0.0f) +
+                static_cast<float>(zero_pitch_offset + manual_pitch_bias_deg_);
             const float base_pitch_hw =
                 base_pitch_ctrl + static_cast<float>(pitch_protocol_bias_deg_);
 
@@ -675,6 +915,12 @@ private:
     }
 
 private:
+    struct ZeroSample {
+        double stamp_s{0.0};
+        double yaw{0.0};
+        double pitch{0.0};
+    };
+
     // serial
     std::string              serial_port_;
     std::vector<std::string> serial_ports_;
@@ -710,6 +956,7 @@ private:
     std::mutex rx_state_mutex_;
     uint32_t last_mcu_running_time_ms_{0};
     bool has_last_mcu_time_{false};
+    bool gimbal_disconnected_{false};
     std::chrono::steady_clock::time_point last_rx_host_tp_{};
 
     // TX wakeup
@@ -724,6 +971,28 @@ private:
     // tx to MCU   : pitch_hw   = pitch_ctrl + bias
     // rx to ctrl  : pitch_ctrl = pitch_hw   - bias
     double pitch_protocol_bias_deg_{0.0};
+    double manual_yaw_bias_deg_{0.0};
+    double manual_pitch_bias_deg_{0.0};
+
+    // Startup zeroing. Upper layers see and command angles relative to this averaged pose.
+    int zero_init_sample_count_{20};
+    double zero_stable_window_s_{0.1};
+    int zero_stable_required_count_{10};
+    double zero_stable_max_delta_deg_{0.1};
+    double zero_init_timeout_s_{15.0};
+    double gimbal_disconnect_timeout_s_{20.0};
+    std::mutex zero_mutex_;
+    bool zero_initialized_{false};
+    bool zero_stable_{false};
+    int zero_stable_count_{0};
+    std::deque<ZeroSample> zero_history_;
+    bool zero_has_valid_frame_{false};
+    std::chrono::steady_clock::time_point zero_first_valid_tp_{};
+    int zero_sample_count_{0};
+    double zero_yaw_sum_{0.0};
+    double zero_pitch_sum_{0.0};
+    double zero_yaw_offset_{0.0};
+    double zero_pitch_offset_{0.0};
 
     // ROS publishers/subscribers
     rclcpp::Publisher<std_msgs::msg::Float64MultiArray>::SharedPtr pub_angles_raw_;
