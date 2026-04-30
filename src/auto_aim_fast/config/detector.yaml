@@ -45,6 +45,15 @@ auto_aim_node:
     detector.yolo.use_fp16_input: true
     detector.yolo.swap_rb_input: true
 
+    # ========= 激光大圆光斑过滤 =========
+    # 只过滤外形接近正方/圆形、上下方向亮度结构过低的候选。
+    detector.laser_spot_filter.enable: true
+    detector.laser_spot_filter.max_near_circle_aspect: 1.35
+    detector.laser_spot_filter.min_side_px: 20.0
+    detector.laser_spot_filter.min_vertical_cv: 0.12
+    detector.laser_spot_filter.min_vertical_gradient: 0.04
+    detector.laser_spot_filter.roi_padding_ratio: 0.0
+
     # 关键点顺序为 8 点:
     # top_1, top_2, top_3, top_4, bottom_1, bottom_2, bottom_3, bottom_4
     # 用于外角点提取：左上、左下、右下、右上

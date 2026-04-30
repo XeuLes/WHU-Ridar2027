@@ -10,13 +10,17 @@
 #include "auto_aim_fast/tracking/target_tracker.hpp"
 #include "auto_aim_fast/prediction/aim_solution.hpp"
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
+#include <limits>
 #include <mutex>
 #include <optional>
 #include <thread>
+#include <vector>
 #include <cmath>
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace auto_aim_fast::pipeline
 {
@@ -33,6 +37,14 @@ struct Pipeline::Impl
 
   mutable std::mutex out_m;
   PipelineOutput last_out;
+
+  mutable std::mutex debug_m;
+  cv::Mat last_filtered_debug_bgr;
+  int32_t last_debug_stamp_sec{0};
+  uint32_t last_debug_stamp_nanosec{0};
+  std::string last_debug_frame_id;
+  uint64_t last_debug_sequence{0};
+  std::atomic<bool> debug_image_enabled{false};
 
   ROI last_roi;
   tracking::TrackState last_state{tracking::TrackState::SEARCH};
@@ -51,6 +63,8 @@ struct Pipeline::Impl
 
   tracking::TargetTracker tracker;
   prediction::AimSolver aim_solver;
+
+  LaserSpotFilterParams laser_spot_filter;
 };
 
 static std::string stateToString(tracking::TrackState s)
@@ -59,6 +73,142 @@ static std::string stateToString(tracking::TrackState s)
     case tracking::TrackState::TRACK: return "TRACK";
     case tracking::TrackState::LOST:  return "LOST";
     default: return "SEARCH";
+  }
+}
+
+static bool armorBounds(const vision::Armor2D & armor, cv::Rect2f & bounds)
+{
+  float min_x = std::numeric_limits<float>::infinity();
+  float min_y = std::numeric_limits<float>::infinity();
+  float max_x = -std::numeric_limits<float>::infinity();
+  float max_y = -std::numeric_limits<float>::infinity();
+
+  for (const auto & p : armor.corners) {
+    if (!std::isfinite(p.x) || !std::isfinite(p.y)) {
+      continue;
+    }
+    min_x = std::min(min_x, p.x);
+    min_y = std::min(min_y, p.y);
+    max_x = std::max(max_x, p.x);
+    max_y = std::max(max_y, p.y);
+  }
+
+  if (!std::isfinite(min_x) || !std::isfinite(min_y) ||
+      !std::isfinite(max_x) || !std::isfinite(max_y) ||
+      max_x <= min_x || max_y <= min_y)
+  {
+    return false;
+  }
+
+  bounds = cv::Rect2f(min_x, min_y, max_x - min_x, max_y - min_y);
+  return true;
+}
+
+static cv::Rect localCropRect(
+  const cv::Rect2f & bounds,
+  const vision::PreprocessResult & pre,
+  float padding_ratio)
+{
+  const float offset_x = pre.roi_used ? static_cast<float>(pre.roi_rect.x) : 0.0f;
+  const float offset_y = pre.roi_used ? static_cast<float>(pre.roi_rect.y) : 0.0f;
+  const float pad_x = std::max(0.0f, padding_ratio) * bounds.width;
+  const float pad_y = std::max(0.0f, padding_ratio) * bounds.height;
+
+  const int x0 = static_cast<int>(std::floor(bounds.x - offset_x - pad_x));
+  const int y0 = static_cast<int>(std::floor(bounds.y - offset_y - pad_y));
+  const int x1 = static_cast<int>(std::ceil(bounds.x + bounds.width - offset_x + pad_x));
+  const int y1 = static_cast<int>(std::ceil(bounds.y + bounds.height - offset_y + pad_y));
+
+  if (x1 <= x0 || y1 <= y0) {
+    return cv::Rect();
+  }
+
+  const cv::Rect image_rect(0, 0, pre.bgr.cols, pre.bgr.rows);
+  return cv::Rect(x0, y0, x1 - x0, y1 - y0) & image_rect;
+}
+
+static bool hasLowVerticalBrightnessStructure(
+  const cv::Mat & bgr,
+  const LaserSpotFilterParams & params)
+{
+  if (bgr.empty() || bgr.rows < 4 || bgr.cols < 4) {
+    return false;
+  }
+
+  cv::Mat gray;
+  if (bgr.channels() == 1) {
+    gray = bgr;
+  } else {
+    cv::cvtColor(bgr, gray, cv::COLOR_BGR2GRAY);
+  }
+
+  const int band_x = gray.cols / 5;
+  const int band_w = std::max(2, gray.cols - 2 * band_x);
+  const cv::Mat center_band = gray(cv::Rect(band_x, 0, band_w, gray.rows));
+
+  cv::Mat row_mean;
+  cv::reduce(center_band, row_mean, 1, cv::REDUCE_AVG, CV_32F);
+
+  cv::Scalar mean;
+  cv::Scalar stddev;
+  cv::meanStdDev(row_mean, mean, stddev);
+
+  const float mean_brightness = static_cast<float>(mean[0]);
+
+  const float vertical_cv =
+    static_cast<float>(stddev[0]) / std::max(1.0f, mean_brightness);
+
+  float diff_sum = 0.0f;
+  for (int r = 1; r < row_mean.rows; ++r) {
+    diff_sum += std::abs(row_mean.at<float>(r, 0) - row_mean.at<float>(r - 1, 0));
+  }
+  const float vertical_gradient =
+    diff_sum / (std::max(1, row_mean.rows - 1) * std::max(1.0f, mean_brightness));
+
+  return vertical_cv < params.min_vertical_cv &&
+         vertical_gradient < params.min_vertical_gradient;
+}
+
+static bool isBrightSmoothRoundSpot(
+  const vision::Armor2D & armor,
+  const vision::PreprocessResult & pre,
+  const LaserSpotFilterParams & params)
+{
+  if (!params.enable || pre.bgr.empty()) {
+    return false;
+  }
+
+  cv::Rect2f bounds;
+  if (!armorBounds(armor, bounds)) {
+    return false;
+  }
+
+  const float short_side = std::max(1.0f, std::min(bounds.width, bounds.height));
+  const float long_side = std::max(bounds.width, bounds.height);
+  if (short_side < std::max(1.0f, params.min_side_px)) {
+    return false;
+  }
+
+  const float aspect = long_side / short_side;
+  if (aspect > std::max(1.0f, params.max_near_circle_aspect)) {
+    return false;
+  }
+
+  const cv::Rect crop = localCropRect(bounds, pre, params.roi_padding_ratio);
+  if (crop.width < 4 || crop.height < 4) {
+    return false;
+  }
+
+  return hasLowVerticalBrightnessStructure(pre.bgr(crop), params);
+}
+
+static void drawArmorGlobal(
+  cv::Mat & image,
+  const vision::Armor2D & armor,
+  const cv::Scalar & color)
+{
+  for (int i = 0; i < 4; ++i) {
+    cv::line(image, armor.corners[i], armor.corners[(i + 1) % 4], color, 2);
   }
 }
 
@@ -164,15 +314,48 @@ void Pipeline::setYoloDetectorParams(const vision::YoloDetectorParams & p)
   impl_->pairing.setYoloParams(p);
 }
 
+void Pipeline::setLaserSpotFilterParams(const LaserSpotFilterParams & p)
+{
+  impl_->laser_spot_filter = p;
+}
+
+void Pipeline::setDebugImageEnabled(bool enable)
+{
+  impl_->debug_image_enabled.store(enable, std::memory_order_relaxed);
+}
+
 void Pipeline::setCamera(const cv::Mat & K, const cv::Mat & D)
 {
   impl_->pnp.setCamera(K, D);
 }
 
-bool Pipeline::getLastDebugImages(cv::Mat & out_debug_bgr, cv::Mat & out_binary) const
+bool Pipeline::getLastDebugImages(
+  cv::Mat & out_debug_bgr,
+  cv::Mat & out_binary,
+  int32_t & stamp_sec,
+  uint32_t & stamp_nanosec,
+  std::string & frame_id,
+  uint64_t & sequence) const
 {
-  // snapshots from Pairing (thread-safe internally)
-  const bool ok1 = impl_->pairing.getLastDebugBgr(out_debug_bgr);
+  bool ok1 = false;
+  stamp_sec = 0;
+  stamp_nanosec = 0;
+  frame_id.clear();
+  sequence = 0;
+  {
+    std::lock_guard<std::mutex> lk(impl_->debug_m);
+    if (!impl_->last_filtered_debug_bgr.empty()) {
+      out_debug_bgr = impl_->last_filtered_debug_bgr.clone();
+      stamp_sec = impl_->last_debug_stamp_sec;
+      stamp_nanosec = impl_->last_debug_stamp_nanosec;
+      frame_id = impl_->last_debug_frame_id;
+      sequence = impl_->last_debug_sequence;
+      ok1 = true;
+    }
+  }
+  if (!ok1) {
+    ok1 = impl_->pairing.getLastDebugBgr(out_debug_bgr);
+  }
   const bool ok2 = impl_->pairing.getLastBinary(out_binary);
   return ok1 || ok2;
 }
@@ -187,6 +370,7 @@ PipelineOutput Pipeline::processFrame(const Frame & f)
   out.stamp_sec = static_cast<int32_t>(f.stamp_ns / 1000000000LL);
   out.stamp_nanosec = static_cast<uint32_t>(f.stamp_ns % 1000000000LL);
   out.recv_ns = f.recv_ns;
+  out.frame_id = f.frame_id;
 
   util::StageTimer timer;
 
@@ -203,8 +387,9 @@ PipelineOutput Pipeline::processFrame(const Frame & f)
   out.roi_dbg.y = pre.roi_rect.y;
   out.roi_dbg.w = pre.roi_rect.width;
   out.roi_dbg.h = pre.roi_rect.height;
-  out.roi_dbg.img_w = pre.bgr.cols;
-  out.roi_dbg.img_h = pre.bgr.rows;
+  const cv::Mat & full_debug_source = pre.full_bgr.empty() ? pre.bgr : pre.full_bgr;
+  out.roi_dbg.img_w = full_debug_source.cols;
+  out.roi_dbg.img_h = full_debug_source.rows;
 
   timer.tic();
   auto lights = impl_->light_extractor.extract(pre);
@@ -221,7 +406,33 @@ PipelineOutput Pipeline::processFrame(const Frame & f)
   out.stats.pairing_ns = timer.tocNs();
 
   out.budget.pairs_in = static_cast<int>(armors.size());
-  out.budget.pairs_used = out.budget.pairs_in;
+  const auto armors_before_filter = armors;
+  if (impl_->laser_spot_filter.enable && !armors.empty()) {
+    armors.erase(
+      std::remove_if(
+        armors.begin(),
+        armors.end(),
+        [&](const vision::Armor2D & armor) {
+          return isBrightSmoothRoundSpot(armor, pre, impl_->laser_spot_filter);
+        }),
+      armors.end());
+  }
+  out.budget.pairs_used = static_cast<int>(armors.size());
+
+  if (impl_->debug_image_enabled.load(std::memory_order_relaxed)) {
+    cv::Mat dbg = full_debug_source.clone();
+    for (const auto & armor : armors_before_filter) {
+      drawArmorGlobal(dbg, armor, cv::Scalar(0, 255, 255));
+    }
+    {
+      std::lock_guard<std::mutex> lk(impl_->debug_m);
+      impl_->last_filtered_debug_bgr = dbg;
+      impl_->last_debug_stamp_sec = out.stamp_sec;
+      impl_->last_debug_stamp_nanosec = out.stamp_nanosec;
+      impl_->last_debug_frame_id = out.frame_id;
+      impl_->last_debug_sequence++;
+    }
+  }
 
   if (armors.empty()) {
     const pose::Pose3D meas{};

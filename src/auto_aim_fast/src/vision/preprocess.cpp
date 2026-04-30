@@ -29,6 +29,7 @@ PreprocessResult Preprocess::run(const auto_aim_fast::pipeline::Frame & frame) c
       r.ok = false;
       return r;
     }
+    r.full_bgr = full;
 
     // ROI view (zero-copy) if valid
     if (frame.roi.valid) {

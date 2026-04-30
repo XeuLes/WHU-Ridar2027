@@ -17,7 +17,7 @@ gimbal_serial_bridge:
     yaw_index: 0
     pitch_index: 1
 
-    yaw_drift_rate: 0.04903
+    yaw_drift_rate: 0.02503
     pitch_protocol_bias_deg: 0.0
     manual_yaw_bias_deg: 0.0
     manual_pitch_bias_deg: -10.0

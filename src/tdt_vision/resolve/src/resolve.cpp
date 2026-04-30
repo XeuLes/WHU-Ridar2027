@@ -1143,12 +1143,18 @@ void Resolve::DetectCallback(
         p.orientation.x = 0.0;
         p.orientation.y = 0.0;
         p.orientation.z = 0.0;
-        p.orientation.w = 1.0;
+        p.orientation.w = 0.0;
     };
     auto set_default_pose = [&](int idx, geometry_msgs::msg::Pose& p) {
         p.position.x = uav_default_out_x_[idx];
         p.position.y = uav_default_out_y_[idx];
         p.position.z = uav_default_out_z_[idx];
+        p.orientation.x = 0.0;
+        p.orientation.y = 0.0;
+        p.orientation.z = 0.0;
+        p.orientation.w = 0.0;
+    };
+    auto mark_observed_uav_pose = [](geometry_msgs::msg::Pose& p) {
         p.orientation.x = 0.0;
         p.orientation.y = 0.0;
         p.orientation.z = 0.0;
@@ -1484,10 +1490,12 @@ void Resolve::DetectCallback(
             uav_out.poses[idx].position.x = uav_x_[idx];
             uav_out.poses[idx].position.y = uav_y_[idx];
             uav_out.poses[idx].position.z = uav_z_[idx];
+            mark_observed_uav_pose(uav_out.poses[idx]);
         } else if (meas_ok[idx]) {
             uav_out.poses[idx].position.x = meas_x[idx];
             uav_out.poses[idx].position.y = meas_y[idx];
             uav_out.poses[idx].position.z = meas_z[idx];
+            mark_observed_uav_pose(uav_out.poses[idx]);
         }
     }
 

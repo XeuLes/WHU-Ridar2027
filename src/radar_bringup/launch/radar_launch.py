@@ -75,11 +75,11 @@ def _build_launch(context):
 
     bringup_config = os.path.join(bringup_share, "config")
     hik_params_file = os.path.join(hik_share, "config", "camera_params.yaml")
-    map_pcd_path = os.path.join(localization_share, "config", "基础制造_rm_frame.pcd")
+    map_pcd_path = os.path.join(localization_share, "config", "RM2025.pcd")
     camera_extrinsic_yaml = LaunchConfiguration("calib_out_matrix_yaml").perform(context)
     resolve_camera_params_yaml = os.path.join(bringup_config, "camera_params_rect.yaml")
-    resolve_region_points_yaml = os.path.join(bringup_config, "GCZX_Points.yaml")
-    resolve_minimap_png = os.path.join(bringup_config, "jichuzhizao.png")
+    resolve_region_points_yaml = os.path.join(bringup_config, "RM2025_Points.yaml")
+    resolve_minimap_png = os.path.join(bringup_config, "RM2025.png")
     camera_to_lidar_yaml = os.path.join(localization_share, "config", "camera_to_lidar.yaml")
     manual_yaml = os.path.join(localization_share, "config", "livox_rm_manual.yaml")
     rviz_config_path = os.path.join(localization_share, "config", "localization_rviz_config.rviz")
@@ -228,7 +228,7 @@ def _build_launch(context):
                 "camera_params_path": resolve_camera_params_yaml,
                 "region_points_path": resolve_region_points_yaml,
                 "minimap_path": resolve_minimap_png,
-                "is_test": True,
+                "is_test": False,
                 "uav_publish_default_output": True,
                 **enemy_uav_default,
             }
@@ -484,7 +484,7 @@ def _build_launch(context):
         output="screen",
         parameters=[
             {
-                "map_path": os.path.join(debug_map_share, "config", "jichuzhizao.png"),
+                "map_path": os.path.join(debug_map_share, "config", "RM2025.png"),
                 "homography_path": os.path.join(debug_map_share, "config", "debug_map_homography.yaml"),
                 "auto_load_homography": True,
                 "auto_save_homography": True,
@@ -729,10 +729,10 @@ def generate_launch_description():
         calib_tool_share, "config", "camera_intrinsics.yaml"
     )
     default_calib_reference_points = os.path.join(
-        calib_tool_share, "config", "reference_points.yaml"
+        calib_tool_share, "config", "reference_points_RM.yaml"
     )
     default_calib_out_matrix = os.path.join(
-        bringup_share, "config", "out_matrix_gc.yaml"
+        bringup_share, "config", "out_matrix_RM.yaml"
     )
 
     return LaunchDescription(
@@ -774,7 +774,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "enable_calibration",
-                default_value="false",
+                default_value="true",
                 description="whether to run pnp_calib_new.launch.py before starting the normal radar flow",
             ),
             DeclareLaunchArgument(
@@ -824,7 +824,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "calib_min_points",
-                default_value="6",
+                default_value="5",
                 description="minimum selected point count before pnp_calib_node_new solves",
             ),
             OpaqueFunction(function=_build_launch),

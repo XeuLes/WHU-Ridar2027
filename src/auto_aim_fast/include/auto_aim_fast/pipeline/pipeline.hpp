@@ -41,11 +41,22 @@ struct RoiDebug
   int img_w{0}, img_h{0};
 };
 
+struct LaserSpotFilterParams
+{
+  bool enable{false};
+  float max_near_circle_aspect{1.25f};
+  float min_side_px{20.0f};
+  float min_vertical_cv{0.12f};
+  float min_vertical_gradient{0.05f};
+  float roi_padding_ratio{0.05f};
+};
+
 struct PipelineOutput
 {
   int32_t stamp_sec{0};
   uint32_t stamp_nanosec{0};
   int64_t recv_ns{0};
+  std::string frame_id;
 
   bool has_pose{false};
   float tx{0}, ty{0}, tz{0};
@@ -91,10 +102,18 @@ public:
   void setDetectorParams(const SimpleLightDetector::Params & p);
   void setDetectorMode(const vision::DetectorMode mode);
   void setYoloDetectorParams(const vision::YoloDetectorParams & p);
+  void setLaserSpotFilterParams(const LaserSpotFilterParams & p);
+  void setDebugImageEnabled(bool enable);
   void setCamera(const cv::Mat & K, const cv::Mat & D);
 
   // Debug images from legacy detector (thread-safe snapshots)
-  bool getLastDebugImages(cv::Mat & out_debug_bgr, cv::Mat & out_binary) const;
+  bool getLastDebugImages(
+    cv::Mat & out_debug_bgr,
+    cv::Mat & out_binary,
+    int32_t & stamp_sec,
+    uint32_t & stamp_nanosec,
+    std::string & frame_id,
+    uint64_t & sequence) const;
 
 private:
   PipelineOutput processFrame(const Frame & f);

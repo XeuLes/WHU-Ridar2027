@@ -193,7 +193,8 @@ Eigen::Matrix3d GimbalAimSolverNode::rotationFromSolvedYawPitchDeg(
 
 bool GimbalAimSolverNode::selectTargetWorldPoint(
   const geometry_msgs::msg::PoseArray::SharedPtr& msg,
-  Eigen::Vector3d& p_world)
+  Eigen::Vector3d& p_world,
+  bool& target_observed)
 {
   if (msg->poses.size() < 2) {
     RCLCPP_WARN_THROTTLE(
@@ -211,6 +212,9 @@ bool GimbalAimSolverNode::selectTargetWorldPoint(
     msg->poses[0].position.x,
     msg->poses[0].position.y,
     msg->poses[0].position.z);
+
+  const bool red_observed = msg->poses[1].orientation.w > 0.5;
+  const bool blue_observed = msg->poses[0].orientation.w > 0.5;
 
   const auto is_zero_point = [](const Eigen::Vector3d& p) {
     constexpr double kZeroPointEps = 1e-6;
@@ -238,6 +242,7 @@ bool GimbalAimSolverNode::selectTargetWorldPoint(
     }
 
     p_world = red_p;
+    target_observed = red_observed;
     return true;
   }
 
@@ -255,6 +260,7 @@ bool GimbalAimSolverNode::selectTargetWorldPoint(
     }
 
     p_world = blue_p;
+    target_observed = blue_observed;
     return true;
   }
 
@@ -265,12 +271,16 @@ bool GimbalAimSolverNode::selectTargetWorldPoint(
   return false;
 }
 
-void GimbalAimSolverNode::publishTargetAngles(double yaw_deg, double pitch_deg) const
+void GimbalAimSolverNode::publishTargetAngles(
+  double yaw_deg,
+  double pitch_deg,
+  bool target_observed) const
 {
   std_msgs::msg::Float64MultiArray msg;
-  msg.data.resize(2);
+  msg.data.resize(3);
   msg.data[0] = yaw_deg;
   msg.data[1] = pitch_deg;
+  msg.data[2] = target_observed ? 1.0 : 0.0;
   target_angles_pub_->publish(msg);
 
   std_msgs::msg::Bool enable_msg;
@@ -324,7 +334,8 @@ void GimbalAimSolverNode::uavCallback(
   }
 
   Eigen::Vector3d p_world;
-  if (!selectTargetWorldPoint(msg, p_world)) {
+  bool target_observed = false;
+  if (!selectTargetWorldPoint(msg, p_world, target_observed)) {
     return;
   }
 
@@ -408,7 +419,7 @@ void GimbalAimSolverNode::uavCallback(
     out_pitch_deg = last_output_pitch_deg_;
   }
 
-  publishTargetAngles(out_yaw_deg, out_pitch_deg);
+  publishTargetAngles(out_yaw_deg, out_pitch_deg, target_observed);
 
   if (publish_debug_) {
     if (use_increment_output_) {
@@ -416,7 +427,8 @@ void GimbalAimSolverNode::uavCallback(
         this->get_logger(), *this->get_clock(), 200,
         "[%s] world=(%.3f, %.3f, %.3f), camera=(%.3f, %.3f, %.3f), gimbal=(%.3f, %.3f, %.3f), "
         "laser_rel=(%.3f, %.3f, %.3f), raw_abs=(yaw=%.2f, pitch=%.2f), "
-        "target_abs=(yaw=%.2f, pitch=%.2f), current=(yaw=%.2f, pitch=%.2f), out_inc=(yaw=%.2f, pitch=%.2f)",
+        "target_abs=(yaw=%.2f, pitch=%.2f), current=(yaw=%.2f, pitch=%.2f), "
+        "out_inc=(yaw=%.2f, pitch=%.2f), observed=%s",
         target_side_.c_str(),
         p_world.x(), p_world.y(), p_world.z(),
         p_camera.x(), p_camera.y(), p_camera.z(),
@@ -425,19 +437,22 @@ void GimbalAimSolverNode::uavCallback(
         raw_target.yaw_deg, raw_target.pitch_deg,
         target.yaw_deg, target.pitch_deg,
         current_gimbal_state_.yaw_deg, current_gimbal_state_.pitch_deg,
-        out_yaw_deg, out_pitch_deg);
+        out_yaw_deg, out_pitch_deg,
+        target_observed ? "true" : "false");
     } else {
       RCLCPP_INFO_THROTTLE(
         this->get_logger(), *this->get_clock(), 200,
         "[%s] world=(%.3f, %.3f, %.3f), camera=(%.3f, %.3f, %.3f), gimbal=(%.3f, %.3f, %.3f), "
-        "laser_rel=(%.3f, %.3f, %.3f), raw_abs=(yaw=%.2f, pitch=%.2f), out_abs=(yaw=%.2f, pitch=%.2f)",
+        "laser_rel=(%.3f, %.3f, %.3f), raw_abs=(yaw=%.2f, pitch=%.2f), "
+        "out_abs=(yaw=%.2f, pitch=%.2f), observed=%s",
         target_side_.c_str(),
         p_world.x(), p_world.y(), p_world.z(),
         p_camera.x(), p_camera.y(), p_camera.z(),
         p_gimbal.x(), p_gimbal.y(), p_gimbal.z(),
         p_from_laser.x(), p_from_laser.y(), p_from_laser.z(),
         raw_target.yaw_deg, raw_target.pitch_deg,
-        out_yaw_deg, out_pitch_deg);
+        out_yaw_deg, out_pitch_deg,
+        target_observed ? "true" : "false");
     }
   }
 }

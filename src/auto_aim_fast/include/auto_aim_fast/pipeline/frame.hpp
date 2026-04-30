@@ -5,6 +5,7 @@
 
 #include <cstdint>
 #include <memory>
+#include <string>
 
 namespace auto_aim_fast::pipeline
 {
@@ -28,6 +29,7 @@ struct Frame
   rclcpp::Time stamp_ros;
   int64_t stamp_ns{0};
   int64_t recv_ns{0};
+  std::string frame_id;
 
   ROI roi;
   Budget budget;

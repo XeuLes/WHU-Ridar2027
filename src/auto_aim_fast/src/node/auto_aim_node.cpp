@@ -157,6 +157,12 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<bool>("detector.yolo.use_fp16_input", true);
   this->declare_parameter<bool>("detector.yolo.swap_rb_input", false);
   this->declare_parameter<std::vector<int64_t>>("detector.yolo.outer_corner_indices", std::vector<int64_t>{0, 4, 7, 3});
+  this->declare_parameter<bool>("detector.laser_spot_filter.enable", true);
+  this->declare_parameter<double>("detector.laser_spot_filter.max_near_circle_aspect", 1.35);
+  this->declare_parameter<double>("detector.laser_spot_filter.min_side_px", 20.0);
+  this->declare_parameter<double>("detector.laser_spot_filter.min_vertical_cv", 0.12);
+  this->declare_parameter<double>("detector.laser_spot_filter.min_vertical_gradient", 0.04);
+  this->declare_parameter<double>("detector.laser_spot_filter.roi_padding_ratio", 0.0);
 
   // 配对模式参数
   this->declare_parameter<int>("detector.pair_mode", 1);
@@ -290,6 +296,34 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   yolo_params_ = yp;
   pipeline_.setYoloDetectorParams(yp);
 
+  pipeline::LaserSpotFilterParams laser_filter;
+  laser_filter.enable =
+    this->get_parameter("detector.laser_spot_filter.enable").as_bool();
+  laser_filter.max_near_circle_aspect =
+    static_cast<float>(
+      std::max(
+        1.0,
+        this->get_parameter("detector.laser_spot_filter.max_near_circle_aspect").as_double()));
+  laser_filter.min_side_px =
+    static_cast<float>(
+      std::max(1.0, this->get_parameter("detector.laser_spot_filter.min_side_px").as_double()));
+  laser_filter.min_vertical_cv =
+    static_cast<float>(
+      std::max(0.0, this->get_parameter("detector.laser_spot_filter.min_vertical_cv").as_double()));
+  laser_filter.min_vertical_gradient =
+    static_cast<float>(
+      std::max(
+        0.0,
+        this->get_parameter("detector.laser_spot_filter.min_vertical_gradient").as_double()));
+  laser_filter.roi_padding_ratio =
+    static_cast<float>(
+      std::clamp(
+        this->get_parameter("detector.laser_spot_filter.roi_padding_ratio").as_double(),
+        0.0,
+        0.5));
+  pipeline_.setLaserSpotFilterParams(laser_filter);
+  pipeline_.setDebugImageEnabled(this->get_parameter("debug.publish_debug_image").as_bool());
+
   // camera fallback
   if (!this->get_parameter("camera.use_camera_info").as_bool()) {
     const double fx = this->get_parameter("camera.fx").as_double();
@@ -406,6 +440,7 @@ void AutoAimNode::onImage(const sensor_msgs::msg::Image::SharedPtr msg)
     static_cast<int64_t>(msg->header.stamp.sec) * 1000000000LL +
     static_cast<int64_t>(msg->header.stamp.nanosec);
   f.recv_ns = util::nowSteadyNs();
+  f.frame_id = msg->header.frame_id;
 
   f.budget.max_lights = static_cast<int>(this->get_parameter("budget.max_lights").as_int());
   f.budget.max_pairs  = static_cast<int>(this->get_parameter("budget.max_pairs").as_int());
@@ -583,20 +618,43 @@ void AutoAimNode::onPublish()
   // ---- debug image publish (复现优先) ----
   const bool pub_dbg = this->get_parameter("debug.publish_debug_image").as_bool();
   const bool pub_bin = this->get_parameter("debug.publish_binary_image").as_bool();
+  pipeline_.setDebugImageEnabled(pub_dbg || pub_bin);
   const int64_t debug_decimation_raw = this->get_parameter("debug.decimation").as_int();
   const int debug_decimation = static_cast<int>(std::max<int64_t>(1, debug_decimation_raw));
 
-  static uint64_t debug_frame_counter = 0;
-  debug_frame_counter++;
-
-  const bool debug_this_frame = ((debug_frame_counter % static_cast<uint64_t>(debug_decimation)) == 0);
-
-  if ((pub_dbg || pub_bin) && debug_this_frame) {
+  if (pub_dbg || pub_bin) {
     cv::Mat dbg_bgr, bin;
-    if (pipeline_.getLastDebugImages(dbg_bgr, bin)) {
+    int32_t debug_stamp_sec = 0;
+    uint32_t debug_stamp_nanosec = 0;
+    std::string debug_frame_id;
+    uint64_t debug_sequence = 0;
+    if (pipeline_.getLastDebugImages(
+          dbg_bgr, bin, debug_stamp_sec, debug_stamp_nanosec, debug_frame_id, debug_sequence)) {
+      static uint64_t last_debug_published_sequence = 0;
+      static uint64_t debug_frame_counter = 0;
+      if (debug_sequence == 0 || debug_sequence == last_debug_published_sequence) {
+        return;
+      }
+      last_debug_published_sequence = debug_sequence;
+      debug_frame_counter++;
+      const bool debug_this_frame =
+        ((debug_frame_counter % static_cast<uint64_t>(debug_decimation)) == 0);
+      if (!debug_this_frame) {
+        return;
+      }
+
+      std_msgs::msg::Header debug_header;
+      if (debug_stamp_sec != 0 || debug_stamp_nanosec != 0) {
+        debug_header.stamp.sec = debug_stamp_sec;
+        debug_header.stamp.nanosec = debug_stamp_nanosec;
+      } else {
+        debug_header.stamp = now;
+      }
+      debug_header.frame_id = debug_frame_id;
+
       if (pub_dbg && !dbg_bgr.empty()) {
         auto msg = cv_bridge::CvImage(
-          std_msgs::msg::Header(),
+          debug_header,
           sensor_msgs::image_encodings::BGR8,
           dbg_bgr).toImageMsg();
         pub_debug_image_->publish(*msg);
@@ -608,7 +666,7 @@ void AutoAimNode::onPublish()
           cv::cvtColor(bin, mono, cv::COLOR_BGR2GRAY);
         }
         auto msg = cv_bridge::CvImage(
-          std_msgs::msg::Header(),
+          debug_header,
           sensor_msgs::image_encodings::MONO8,
           mono).toImageMsg();
         pub_binary_image_->publish(*msg);
@@ -621,9 +679,10 @@ void AutoAimNode::onReport()
 {
   const auto out = pipeline_.getLatestOutput();
   RCLCPP_INFO(this->get_logger(),
-              "state=%s pairs=%d roi_used=%d",
+              "state=%s pairs=%d->%d roi_used=%d",
               out.state.c_str(),
               out.budget.pairs_in,
+              out.budget.pairs_used,
               out.roi_dbg.used ? 1 : 0);
 }
 

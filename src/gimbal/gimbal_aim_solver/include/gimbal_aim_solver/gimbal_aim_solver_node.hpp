@@ -34,11 +34,12 @@ private:
     const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg);
 
   bool selectTargetWorldPoint(const geometry_msgs::msg::PoseArray::SharedPtr& msg,
-                              Eigen::Vector3d& p_world) ;
+                              Eigen::Vector3d& p_world,
+                              bool& target_observed);
 
   bool isFinitePoint(const Eigen::Vector3d& p) const;
 
-  void publishTargetAngles(double yaw_deg, double pitch_deg) const;
+  void publishTargetAngles(double yaw_deg, double pitch_deg, bool target_observed) const;
 
 
 

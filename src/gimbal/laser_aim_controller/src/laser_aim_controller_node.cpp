@@ -148,6 +148,14 @@ struct RecoverScanState
 {
   RecoverScanState()
   : initialized(false),
+    wide_scan(false),
+    wide_phase_resync_pending(false),
+    wide_pitch_cycles_per_yaw_sweep(1),
+    wide_yaw_speed_deg_s(0.0),
+    wide_yaw_full_period_s(0.0),
+    wide_pitch_max_speed_deg_s(0.0),
+    wide_fov_x_deg(0.0),
+    wide_fov_y_deg(0.0),
     center_yaw(),
     center_pitch(),
     scan_phase_yaw_rad(0.0),
@@ -163,6 +171,14 @@ struct RecoverScanState
   {}
 
   bool initialized;
+  bool wide_scan;
+  bool wide_phase_resync_pending;
+  int wide_pitch_cycles_per_yaw_sweep;
+  double wide_yaw_speed_deg_s;
+  double wide_yaw_full_period_s;
+  double wide_pitch_max_speed_deg_s;
+  double wide_fov_x_deg;
+  double wide_fov_y_deg;
 
   AxisTrackState center_yaw;
   AxisTrackState center_pitch;
@@ -230,6 +246,14 @@ void resetRecoverScanState(
   resetAxisTrackState(state.center_yaw, yaw_deg, stamp);
   resetAxisTrackState(state.center_pitch, pitch_deg, stamp);
   state.initialized = true;
+  state.wide_scan = false;
+  state.wide_phase_resync_pending = false;
+  state.wide_pitch_cycles_per_yaw_sweep = 1;
+  state.wide_yaw_speed_deg_s = 0.0;
+  state.wide_yaw_full_period_s = 0.0;
+  state.wide_pitch_max_speed_deg_s = 0.0;
+  state.wide_fov_x_deg = 0.0;
+  state.wide_fov_y_deg = 0.0;
   state.scan_phase_yaw_rad = 0.0;
   state.scan_phase_pitch_rad = 0.0;
   state.scan_env_yaw = 0.0;
@@ -391,6 +415,135 @@ double wrapAngleRad(double x)
   return x;
 }
 
+double triangleWave(double phase_rad)
+{
+  double x = std::fmod(phase_rad, 2.0 * kPi);
+  if (x < 0.0) {
+    x += 2.0 * kPi;
+  }
+  if (x < kPi) {
+    return -1.0 + 2.0 * x / kPi;
+  }
+  return 3.0 - 2.0 * x / kPi;
+}
+
+double cameraFovDeg(double pixels, double focal_px)
+{
+  if (pixels <= 1.0 || focal_px <= 1.0) {
+    return 1.0;
+  }
+  return 2.0 * std::atan(0.5 * pixels / focal_px) * kRadToDeg;
+}
+
+int chooseWidePitchCyclesPerYawSweep(
+  double half_yaw_deg,
+  double fov_x_deg,
+  double overlap,
+  int max_cycles)
+{
+  const double usable_fov = std::max(0.2, fov_x_deg * clampFree(overlap, 0.1, 1.0));
+  const int cycles = static_cast<int>(std::ceil((2.0 * std::abs(half_yaw_deg)) / usable_fov));
+  return std::max(1, std::min(std::max(1, max_cycles), cycles));
+}
+
+double wideYawSpeedDegS(
+  double small_half_yaw_deg,
+  double scan_period_s,
+  double speed_scale)
+{
+  const double small_nominal_speed =
+    2.0 * kPi * std::max(0.1, std::abs(small_half_yaw_deg)) /
+    std::max(1e-3, scan_period_s);
+  return small_nominal_speed * std::max(0.1, speed_scale);
+}
+
+double wideYawPhaseRateRadS(
+  double yaw_speed_deg_s,
+  double wide_half_yaw_deg)
+{
+  return std::max(0.01, std::abs(yaw_speed_deg_s)) * kPi /
+    (2.0 * std::max(0.1, std::abs(wide_half_yaw_deg)));
+}
+
+double widePitchLimitedPhaseRateRadS(
+  double pitch_max_speed_deg_s,
+  double wide_half_pitch_deg,
+  int pitch_cycles_per_yaw_sweep)
+{
+  return std::max(0.01, std::abs(pitch_max_speed_deg_s)) /
+    (2.0 *
+     std::max(0.1, std::abs(wide_half_pitch_deg)) *
+     std::max(1, pitch_cycles_per_yaw_sweep));
+}
+
+double wideYawSpeedFromPhaseRateDegS(
+  double phase_rate_rad_s,
+  double wide_half_yaw_deg)
+{
+  return std::abs(wide_half_yaw_deg) * 2.0 * std::max(0.0, phase_rate_rad_s) / kPi;
+}
+
+double wideYawFullPeriodS(double phase_rate_rad_s)
+{
+  return 2.0 * kPi / std::max(1e-6, phase_rate_rad_s);
+}
+
+void computeWideScanOffset(
+  double phase_rad,
+  int pitch_cycles_per_yaw_sweep,
+  double half_yaw_deg,
+  double half_pitch_deg,
+  double yaw_phase_offset_rad,
+  double pitch_phase_offset_rad,
+  double & scan_yaw_deg,
+  double & scan_pitch_deg)
+{
+  const double yaw_wave = triangleWave(phase_rad + yaw_phase_offset_rad);
+  const double pitch_wave =
+    std::sin(2.0 * std::max(1, pitch_cycles_per_yaw_sweep) * phase_rad +
+             pitch_phase_offset_rad);
+  scan_yaw_deg = half_yaw_deg * yaw_wave;
+  scan_pitch_deg = half_pitch_deg * pitch_wave;
+}
+
+double nearestWideScanPhase(
+  double center_yaw_deg,
+  double center_pitch_deg,
+  double ref_yaw_deg,
+  double ref_pitch_deg,
+  int pitch_cycles_per_yaw_sweep,
+  double half_yaw_deg,
+  double half_pitch_deg,
+  double yaw_phase_offset_rad,
+  double pitch_phase_offset_rad)
+{
+  const int samples = std::max(720, std::max(1, pitch_cycles_per_yaw_sweep) * 64);
+  double best_phase = 0.0;
+  double best_score = std::numeric_limits<double>::infinity();
+  for (int i = 0; i < samples; ++i) {
+    const double phase = 2.0 * kPi * static_cast<double>(i) / static_cast<double>(samples);
+    double scan_yaw = 0.0;
+    double scan_pitch = 0.0;
+    computeWideScanOffset(
+      phase,
+      pitch_cycles_per_yaw_sweep,
+      half_yaw_deg,
+      half_pitch_deg,
+      yaw_phase_offset_rad,
+      pitch_phase_offset_rad,
+      scan_yaw,
+      scan_pitch);
+    const double dy = (center_yaw_deg + scan_yaw) - ref_yaw_deg;
+    const double dp = (center_pitch_deg + scan_pitch) - ref_pitch_deg;
+    const double score = dy * dy + dp * dp;
+    if (score < best_score) {
+      best_score = score;
+      best_phase = phase;
+    }
+  }
+  return best_phase;
+}
+
 }  // namespace
 
 LaserAimControllerNode::LaserAimControllerNode(const rclcpp::NodeOptions & options)
@@ -454,6 +607,17 @@ LaserAimControllerNode::LaserAimControllerNode(const rclcpp::NodeOptions & optio
   RCLCPP_INFO(this->get_logger(), "scan_window_half_yaw_deg: %.3f", scan_window_half_yaw_deg_);
   RCLCPP_INFO(this->get_logger(), "scan_window_half_pitch_deg: %.3f", scan_window_half_pitch_deg_);
   RCLCPP_INFO(this->get_logger(), "scan_period_s: %.3f", scan_period_s_);
+  RCLCPP_INFO(
+    this->get_logger(),
+    "wide_scan: half_window=(yaw=%.3f pitch=%.3f) speed_scale=%.3f pitch_max_speed=%.3f fov_overlap=%.3f image=(%.0fx%.0f) max_pitch_cycles=%d",
+    wide_scan_window_half_yaw_deg_,
+    wide_scan_window_half_pitch_deg_,
+    wide_scan_speed_scale_,
+    wide_scan_pitch_max_speed_deg_s_,
+    wide_scan_fov_overlap_,
+    wide_scan_camera_image_width_px_,
+    wide_scan_camera_image_height_px_,
+    wide_scan_max_pitch_cycles_per_yaw_sweep_);
 
   const auto & planner_params = g_track_planner_params[this];
   const auto & filter_params = g_output_filter_params[this];
@@ -519,6 +683,14 @@ void LaserAimControllerNode::declareAndLoadParameters()
   this->declare_parameter<double>("scan_period_s", 4.0);
   this->declare_parameter<double>("scan_phase_x_rad", 0.0);
   this->declare_parameter<double>("scan_phase_y_rad", 1.57079632679);
+  this->declare_parameter<double>("wide_scan_window_half_yaw_deg", 10.0);
+  this->declare_parameter<double>("wide_scan_window_half_pitch_deg", 30.0);
+  this->declare_parameter<double>("wide_scan_speed_scale", 3.0);
+  this->declare_parameter<double>("wide_scan_pitch_max_speed_deg_s", 10.0);
+  this->declare_parameter<double>("wide_scan_fov_overlap", 0.65);
+  this->declare_parameter<int>("wide_scan_max_pitch_cycles_per_yaw_sweep", 64);
+  this->declare_parameter<double>("wide_scan_camera_image_width_px", 1624.0);
+  this->declare_parameter<double>("wide_scan_camera_image_height_px", 1240.0);
 
   this->declare_parameter<double>("output_filter_alpha", 0.15);
   this->declare_parameter<double>("track_output_filter_alpha", 1.0);
@@ -684,6 +856,25 @@ void LaserAimControllerNode::declareAndLoadParameters()
   scan_period_s_ = this->get_parameter("scan_period_s").as_double();
   scan_phase_x_rad_ = this->get_parameter("scan_phase_x_rad").as_double();
   scan_phase_y_rad_ = this->get_parameter("scan_phase_y_rad").as_double();
+  wide_scan_window_half_yaw_deg_ =
+    std::max(0.1, this->get_parameter("wide_scan_window_half_yaw_deg").as_double());
+  wide_scan_window_half_pitch_deg_ =
+    std::max(0.1, this->get_parameter("wide_scan_window_half_pitch_deg").as_double());
+  wide_scan_speed_scale_ =
+    std::max(0.1, this->get_parameter("wide_scan_speed_scale").as_double());
+  wide_scan_pitch_max_speed_deg_s_ =
+    std::max(0.1, this->get_parameter("wide_scan_pitch_max_speed_deg_s").as_double());
+  wide_scan_fov_overlap_ =
+    clampValue(this->get_parameter("wide_scan_fov_overlap").as_double(), 0.1, 1.0);
+  wide_scan_max_pitch_cycles_per_yaw_sweep_ =
+    std::max(
+      1,
+      static_cast<int>(
+        this->get_parameter("wide_scan_max_pitch_cycles_per_yaw_sweep").as_int()));
+  wide_scan_camera_image_width_px_ =
+    std::max(1.0, this->get_parameter("wide_scan_camera_image_width_px").as_double());
+  wide_scan_camera_image_height_px_ =
+    std::max(1.0, this->get_parameter("wide_scan_camera_image_height_px").as_double());
 
   output_filter_alpha_ = this->get_parameter("output_filter_alpha").as_double();
   min_valid_z_m_ = this->get_parameter("min_valid_z_m").as_double();
@@ -1227,6 +1418,8 @@ void LaserAimControllerNode::roughCommandCallback(
   rough_yaw_deg_ = msg->data[0];
   rough_pitch_deg_ = msg->data[1];
   has_rough_cmd_ = std::isfinite(rough_yaw_deg_) && std::isfinite(rough_pitch_deg_);
+  rough_target_observed_ =
+    (msg->data.size() < 3) ? true : (std::isfinite(msg->data[2]) && msg->data[2] > 0.5);
   if (has_rough_cmd_) {
     g_rough_cmd_stamp_ns[this] = this->get_clock()->now().nanoseconds();
   }
@@ -1258,6 +1451,7 @@ void LaserAimControllerNode::controlLoop()
   bool has_rough = false;
   double rough_yaw = 0.0;
   double rough_pitch = 0.0;
+  bool rough_target_observed = true;
   int64_t rough_stamp_ns = 0;
   bool has_manual = false;
   double manual_yaw = 0.0;
@@ -1270,6 +1464,7 @@ void LaserAimControllerNode::controlLoop()
     has_rough = has_rough_cmd_;
     rough_yaw = rough_yaw_deg_;
     rough_pitch = rough_pitch_deg_;
+    rough_target_observed = rough_target_observed_;
     auto rough_it = g_rough_cmd_stamp_ns.find(this);
     if (rough_it != g_rough_cmd_stamp_ns.end()) {
       rough_stamp_ns = rough_it->second;
@@ -1438,13 +1633,25 @@ void LaserAimControllerNode::controlLoop()
     lost_auto_hold_expired_logged_ = true;
   }
 
-  if (hold_last_auto_after_loss &&
-      mode_ == ControlMode::LOST_RECOVER &&
-      search_stage_mode_ == "scan")
-  {
+  const bool recover_scan_requested =
+    mode_ == ControlMode::LOST_RECOVER && search_stage_mode_ == "scan";
+  const bool wide_scan_requested = recover_scan_requested && has_rough && !rough_target_observed;
+
+  if (hold_last_auto_after_loss && recover_scan_requested) {
     recover_scan_state.initialized = false;
-  } else if (mode_changed && mode_ == ControlMode::LOST_RECOVER && search_stage_mode_ == "scan") {
+    recover_scan_state.wide_scan = wide_scan_requested;
+    recover_scan_state.wide_phase_resync_pending = wide_scan_requested;
+  } else if (mode_changed && recover_scan_requested) {
     resetRecoverScanState(recover_scan_state, open_loop_yaw, open_loop_pitch, now);
+    recover_scan_state.wide_scan = wide_scan_requested;
+    recover_scan_state.wide_phase_resync_pending = wide_scan_requested;
+  } else if (recover_scan_requested &&
+             recover_scan_state.initialized &&
+             recover_scan_state.wide_scan != wide_scan_requested)
+  {
+    resetRecoverScanState(recover_scan_state, open_loop_yaw, open_loop_pitch, now);
+    recover_scan_state.wide_scan = wide_scan_requested;
+    recover_scan_state.wide_phase_resync_pending = wide_scan_requested;
   }
 
   const bool entering_track =
@@ -1720,6 +1927,8 @@ void LaserAimControllerNode::controlLoop()
     } else if (search_stage_mode_ == "scan") {
       if (!recover_scan_state.initialized) {
         resetRecoverScanState(recover_scan_state, open_loop_yaw, open_loop_pitch, now);
+        recover_scan_state.wide_scan = wide_scan_requested;
+        recover_scan_state.wide_phase_resync_pending = wide_scan_requested;
       }
 
       bool rough_fresh = false;
@@ -1732,18 +1941,21 @@ void LaserAimControllerNode::controlLoop()
         }
       }
 
-      if (rough_fresh) {
+      const bool rough_default_center = has_rough && !rough_target_observed;
+      const bool rough_center_usable = rough_fresh || rough_default_center;
+      if (rough_center_usable) {
+        const rclcpp::Time center_stamp = rough_fresh ? rough_stamp : now;
         updateAxisMeasurement(
           recover_scan_state.center_yaw,
           rough_yaw,
-          rough_stamp,
+          center_stamp,
           recover_scan_params.rough_measurement_alpha,
           recover_scan_params.rough_velocity_alpha);
 
         updateAxisMeasurement(
           recover_scan_state.center_pitch,
           rough_pitch,
-          rough_stamp,
+          center_stamp,
           recover_scan_params.rough_measurement_alpha,
           recover_scan_params.rough_velocity_alpha);
       }
@@ -1786,73 +1998,160 @@ void LaserAimControllerNode::controlLoop()
       const bool has_scan_center =
         recover_scan_state.center_yaw.has_measurement &&
         recover_scan_state.center_pitch.has_measurement;
-      const double env_target_yaw =
-        has_scan_center ? recover_scan_params.yaw_env_max : 0.0;
-      const double env_target_pitch =
-        has_scan_center ? 1.0 : 0.0;
+      if (wide_scan_requested) {
+        const double fov_x_deg = cameraFovDeg(wide_scan_camera_image_width_px_, camera_fx_);
+        const double fov_y_deg = cameraFovDeg(wide_scan_camera_image_height_px_, camera_fy_);
+        const int pitch_cycles = chooseWidePitchCyclesPerYawSweep(
+          wide_scan_window_half_yaw_deg_,
+          fov_x_deg,
+          wide_scan_fov_overlap_,
+          wide_scan_max_pitch_cycles_per_yaw_sweep_);
+        const double yaw_speed_deg_s = wideYawSpeedDegS(
+          scan_window_half_yaw_deg_,
+          scan_period_s_,
+          wide_scan_speed_scale_);
+        const double yaw_speed_phase_rate = wideYawPhaseRateRadS(
+          yaw_speed_deg_s,
+          wide_scan_window_half_yaw_deg_);
+        const double pitch_speed_phase_rate = widePitchLimitedPhaseRateRadS(
+          wide_scan_pitch_max_speed_deg_s_,
+          wide_scan_window_half_pitch_deg_,
+          pitch_cycles);
+        const double yaw_phase_rate =
+          std::min(yaw_speed_phase_rate, pitch_speed_phase_rate);
+        const double actual_yaw_speed_deg_s = wideYawSpeedFromPhaseRateDegS(
+          yaw_phase_rate,
+          wide_scan_window_half_yaw_deg_);
+        const double actual_pitch_max_speed_deg_s =
+          2.0 *
+          std::max(1, pitch_cycles) *
+          wide_scan_window_half_pitch_deg_ *
+          yaw_phase_rate;
 
-      const double env_up_step =
-        dt_s / std::max(0.05, recover_scan_params.envelope_rise_s);
-      const double env_down_step =
-        dt_s / std::max(0.05, recover_scan_params.envelope_fall_s);
+        recover_scan_state.wide_scan = true;
+        recover_scan_state.wide_pitch_cycles_per_yaw_sweep = pitch_cycles;
+        recover_scan_state.wide_yaw_speed_deg_s = actual_yaw_speed_deg_s;
+        recover_scan_state.wide_yaw_full_period_s = wideYawFullPeriodS(yaw_phase_rate);
+        recover_scan_state.wide_pitch_max_speed_deg_s = actual_pitch_max_speed_deg_s;
+        recover_scan_state.wide_fov_x_deg = fov_x_deg;
+        recover_scan_state.wide_fov_y_deg = fov_y_deg;
+        recover_scan_state.scan_env_yaw = has_scan_center ? 1.0 : 0.0;
+        recover_scan_state.scan_env_pitch = has_scan_center ? 1.0 : 0.0;
 
-      if (env_target_yaw >= recover_scan_state.scan_env_yaw) {
-        recover_scan_state.scan_env_yaw = moveToward(
-          recover_scan_state.scan_env_yaw, env_target_yaw, env_up_step);
+        if (has_scan_center) {
+          if (recover_scan_state.wide_phase_resync_pending) {
+            recover_scan_state.scan_phase_yaw_rad = nearestWideScanPhase(
+              center_ref_yaw,
+              center_ref_pitch,
+              open_loop_yaw,
+              open_loop_pitch,
+              pitch_cycles,
+              wide_scan_window_half_yaw_deg_,
+              wide_scan_window_half_pitch_deg_,
+              scan_phase_x_rad_,
+              scan_phase_y_rad_);
+            recover_scan_state.scan_phase_pitch_rad = recover_scan_state.scan_phase_yaw_rad;
+            recover_scan_state.wide_phase_resync_pending = false;
+          } else {
+            recover_scan_state.scan_phase_yaw_rad =
+              wrapAngleRad(recover_scan_state.scan_phase_yaw_rad + yaw_phase_rate * dt_s);
+            recover_scan_state.scan_phase_pitch_rad = recover_scan_state.scan_phase_yaw_rad;
+          }
+
+          double scan_yaw = 0.0;
+          double scan_pitch = 0.0;
+          computeWideScanOffset(
+            recover_scan_state.scan_phase_yaw_rad,
+            pitch_cycles,
+            wide_scan_window_half_yaw_deg_,
+            wide_scan_window_half_pitch_deg_,
+            scan_phase_x_rad_,
+            scan_phase_y_rad_,
+            scan_yaw,
+            scan_pitch);
+
+          desired_yaw = center_ref_yaw + scan_yaw;
+          desired_pitch = center_ref_pitch + scan_pitch;
+          recover_scan_state.last_scan_yaw_deg = scan_yaw;
+          recover_scan_state.last_scan_pitch_deg = scan_pitch;
+        } else {
+          desired_yaw = center_ref_yaw;
+          desired_pitch = center_ref_pitch;
+          recover_scan_state.last_scan_yaw_deg = 0.0;
+          recover_scan_state.last_scan_pitch_deg = 0.0;
+        }
       } else {
-        recover_scan_state.scan_env_yaw = moveToward(
-          recover_scan_state.scan_env_yaw, env_target_yaw, env_down_step);
+        recover_scan_state.wide_scan = false;
+
+        const double env_target_yaw =
+          has_scan_center ? recover_scan_params.yaw_env_max : 0.0;
+        const double env_target_pitch =
+          has_scan_center ? 1.0 : 0.0;
+
+        const double env_up_step =
+          dt_s / std::max(0.05, recover_scan_params.envelope_rise_s);
+        const double env_down_step =
+          dt_s / std::max(0.05, recover_scan_params.envelope_fall_s);
+
+        if (env_target_yaw >= recover_scan_state.scan_env_yaw) {
+          recover_scan_state.scan_env_yaw = moveToward(
+            recover_scan_state.scan_env_yaw, env_target_yaw, env_up_step);
+        } else {
+          recover_scan_state.scan_env_yaw = moveToward(
+            recover_scan_state.scan_env_yaw, env_target_yaw, env_down_step);
+        }
+        recover_scan_state.scan_env_yaw =
+          clampValue(recover_scan_state.scan_env_yaw, 0.0, recover_scan_params.yaw_env_max);
+
+        if (env_target_pitch >= recover_scan_state.scan_env_pitch) {
+          recover_scan_state.scan_env_pitch = moveToward(
+            recover_scan_state.scan_env_pitch, env_target_pitch, env_up_step);
+        } else {
+          recover_scan_state.scan_env_pitch = moveToward(
+            recover_scan_state.scan_env_pitch, env_target_pitch, env_down_step);
+        }
+        recover_scan_state.scan_env_pitch =
+          clampValue(recover_scan_state.scan_env_pitch, 0.0, 1.0);
+
+        const double base_w = 2.0 * kPi / std::max(1e-6, scan_period_s_);
+        const double wyaw = base_w * recover_scan_params.yaw_freq_scale;
+        const double wpitch = base_w * recover_scan_params.pitch_freq_scale;
+
+        recover_scan_state.scan_phase_yaw_rad =
+          wrapAngleRad(recover_scan_state.scan_phase_yaw_rad + wyaw * dt_s);
+        recover_scan_state.scan_phase_pitch_rad =
+          wrapAngleRad(recover_scan_state.scan_phase_pitch_rad + wpitch * dt_s);
+
+        const double yaw_wave =
+          std::sin(recover_scan_state.scan_phase_yaw_rad + scan_phase_x_rad_);
+        const double pitch_wave =
+          std::sin(recover_scan_state.scan_phase_pitch_rad + scan_phase_y_rad_);
+
+        const double scan_yaw =
+          recover_scan_state.scan_env_yaw *
+          (scan_window_half_yaw_deg_ * recover_scan_params.yaw_amp_scale) *
+          yaw_wave;
+
+        const double pitch_amp =
+          (pitch_wave >= 0.0)
+          ? (scan_window_half_pitch_deg_ * recover_scan_params.pitch_amp_up_scale)
+          : (scan_window_half_pitch_deg_ * recover_scan_params.pitch_amp_down_scale);
+
+        const double scan_pitch =
+          recover_scan_state.scan_env_pitch *
+          (recover_scan_params.pitch_up_bias_deg + pitch_wave * pitch_amp);
+
+        desired_yaw = center_ref_yaw + scan_yaw;
+        desired_pitch = center_ref_pitch + scan_pitch;
+
+        recover_scan_state.last_scan_yaw_deg = scan_yaw;
+        recover_scan_state.last_scan_pitch_deg = scan_pitch;
       }
-      recover_scan_state.scan_env_yaw =
-        clampValue(recover_scan_state.scan_env_yaw, 0.0, recover_scan_params.yaw_env_max);
-
-      if (env_target_pitch >= recover_scan_state.scan_env_pitch) {
-        recover_scan_state.scan_env_pitch = moveToward(
-          recover_scan_state.scan_env_pitch, env_target_pitch, env_up_step);
-      } else {
-        recover_scan_state.scan_env_pitch = moveToward(
-          recover_scan_state.scan_env_pitch, env_target_pitch, env_down_step);
-      }
-      recover_scan_state.scan_env_pitch =
-        clampValue(recover_scan_state.scan_env_pitch, 0.0, 1.0);
-
-      const double base_w = 2.0 * kPi / std::max(1e-6, scan_period_s_);
-      const double wyaw = base_w * recover_scan_params.yaw_freq_scale;
-      const double wpitch = base_w * recover_scan_params.pitch_freq_scale;
-
-      recover_scan_state.scan_phase_yaw_rad =
-        wrapAngleRad(recover_scan_state.scan_phase_yaw_rad + wyaw * dt_s);
-      recover_scan_state.scan_phase_pitch_rad =
-        wrapAngleRad(recover_scan_state.scan_phase_pitch_rad + wpitch * dt_s);
-
-      const double yaw_wave =
-        std::sin(recover_scan_state.scan_phase_yaw_rad + scan_phase_x_rad_);
-      const double pitch_wave =
-        std::sin(recover_scan_state.scan_phase_pitch_rad + scan_phase_y_rad_);
-
-      const double scan_yaw =
-        recover_scan_state.scan_env_yaw *
-        (scan_window_half_yaw_deg_ * recover_scan_params.yaw_amp_scale) *
-        yaw_wave;
-
-      const double pitch_amp =
-        (pitch_wave >= 0.0)
-        ? (scan_window_half_pitch_deg_ * recover_scan_params.pitch_amp_up_scale)
-        : (scan_window_half_pitch_deg_ * recover_scan_params.pitch_amp_down_scale);
-
-      const double scan_pitch =
-        recover_scan_state.scan_env_pitch *
-        (recover_scan_params.pitch_up_bias_deg + pitch_wave * pitch_amp);
-
-      desired_yaw = center_ref_yaw + scan_yaw;
-      desired_pitch = center_ref_pitch + scan_pitch;
 
       recover_scan_state.last_center_target_yaw_deg = center_target_yaw;
       recover_scan_state.last_center_target_pitch_deg = center_target_pitch;
       recover_scan_state.last_center_ref_yaw_deg = center_ref_yaw;
       recover_scan_state.last_center_ref_pitch_deg = center_ref_pitch;
-      recover_scan_state.last_scan_yaw_deg = scan_yaw;
-      recover_scan_state.last_scan_pitch_deg = scan_pitch;
     } else {
       if (has_rough) {
         desired_yaw = rough_yaw;
@@ -2038,9 +2337,14 @@ void LaserAimControllerNode::controlLoop()
 
       RCLCPP_INFO_THROTTLE(
         this->get_logger(), *this->get_clock(), 100,
-        "[RECOVER_SCAN] rough_fresh=%s center_target=(%.3f, %.3f) center_ref=(%.3f, %.3f) "
-        "scan=(%.3f, %.3f) env=(yaw=%.3f pitch=%.3f) phase=(%.3f, %.3f)",
+        "[RECOVER_SCAN] type=%s rough_fresh=%s rough_observed=%s "
+        "center_target=(%.3f, %.3f) center_ref=(%.3f, %.3f) "
+        "scan=(%.3f, %.3f) env=(yaw=%.3f pitch=%.3f) phase=(%.3f, %.3f) "
+        "wide_cycles=%d wide_yaw_speed=%.3f wide_yaw_period=%.3f "
+        "wide_pitch_max_speed=%.3f fov=(%.3f, %.3f)",
+        recover_scan_state.wide_scan ? "wide" : "small",
         rough_fresh_dbg ? "true" : "false",
+        rough_target_observed ? "true" : "false",
         recover_scan_state.last_center_target_yaw_deg,
         recover_scan_state.last_center_target_pitch_deg,
         recover_scan_state.last_center_ref_yaw_deg,
@@ -2050,12 +2354,19 @@ void LaserAimControllerNode::controlLoop()
         recover_scan_state.scan_env_yaw,
         recover_scan_state.scan_env_pitch,
         recover_scan_state.scan_phase_yaw_rad,
-        recover_scan_state.scan_phase_pitch_rad);
+        recover_scan_state.scan_phase_pitch_rad,
+        recover_scan_state.wide_pitch_cycles_per_yaw_sweep,
+        recover_scan_state.wide_yaw_speed_deg_s,
+        recover_scan_state.wide_yaw_full_period_s,
+        recover_scan_state.wide_pitch_max_speed_deg_s,
+        recover_scan_state.wide_fov_x_deg,
+        recover_scan_state.wide_fov_y_deg);
     }
 
     RCLCPP_INFO_THROTTLE(
       this->get_logger(), *this->get_clock(), 200,
-      "mode=%s search_mode=%s target_fresh=%s has_target=%s pixel_valid=%s pnp_valid=%s has_rough=%s "
+      "mode=%s search_mode=%s target_fresh=%s has_target=%s pixel_valid=%s pnp_valid=%s "
+      "has_rough=%s rough_observed=%s "
       "lost_hold=(%s %.2f/%.2f) "
       "gimbal=(%.3f, %.3f) hold_auto=(%.3f, %.3f) rough=(%.3f, %.3f) "
       "laser_ref=(%.1f, %.1f) dist=%.2f "
@@ -2069,6 +2380,7 @@ void LaserAimControllerNode::controlLoop()
       pixel_valid ? "true" : "false",
       pnp_valid ? "true" : "false",
       has_rough ? "true" : "false",
+      rough_target_observed ? "true" : "false",
       hold_last_auto_after_loss ? "active" :
         (lost_auto_hold_active_ ? "expired" : "idle"),
       lost_auto_hold_age_s,
