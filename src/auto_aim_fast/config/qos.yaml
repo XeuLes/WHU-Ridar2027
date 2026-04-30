@@ -13,7 +13,11 @@ auto_aim_node:
     prediction.max_rate_deg_s: 720.0
     prediction.extra_latency_ns: 0
 
-    debug.publish_debug_image: true
+    debug.publish_debug_image: false
     debug.publish_binary_image: false
     debug.debug_topic: "/auto_aim/debug_image"
     debug.binary_topic: "/auto_aim/binary_image"
+
+    gimbal.require_ready: true
+    gimbal.angles_topic: "/gimbal/angles_true"
+    gimbal.max_msg_age_s: 10.0

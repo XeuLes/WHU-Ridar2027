@@ -206,9 +206,7 @@ const std::vector<SimpleLightDetector::PairResult>& SimpleLightDetector::getLast
 
 // 获取调试图像
 cv::Mat SimpleLightDetector::getBinaryImage() const {
-    cv::Mat color_binary;
-    cv::cvtColor(last_binary_, color_binary, cv::COLOR_GRAY2BGR);
-    return color_binary;
+    return last_binary_;
 }
 
 cv::Mat SimpleLightDetector::getDebugImage() const {

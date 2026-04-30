@@ -302,7 +302,7 @@ private:
         this->declare_parameter<int>("zero_stable_required_count", 10);
         this->declare_parameter<double>("zero_stable_max_delta_deg", 0.1);
         this->declare_parameter<double>("zero_init_timeout_s", 15.0);
-        this->declare_parameter<double>("gimbal_disconnect_timeout_s", 20.0);
+        this->declare_parameter<double>("gimbal_disconnect_timeout_s", 10.0);
 
         // same unit as yaw per second
         this->declare_parameter<double>("yaw_drift_rate", 0.05);
@@ -980,7 +980,7 @@ private:
     int zero_stable_required_count_{10};
     double zero_stable_max_delta_deg_{0.1};
     double zero_init_timeout_s_{15.0};
-    double gimbal_disconnect_timeout_s_{20.0};
+    double gimbal_disconnect_timeout_s_{10.0};
     std::mutex zero_mutex_;
     bool zero_initialized_{false};
     bool zero_stable_{false};

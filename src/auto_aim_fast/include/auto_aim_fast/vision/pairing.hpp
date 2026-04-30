@@ -7,6 +7,7 @@
 #include <string>
 
 #include <array>
+#include <atomic>
 #include <mutex>
 #include <vector>
 
@@ -71,6 +72,7 @@ public:
   void setLegacyParams(const SimpleLightDetector::Params & p);
   void setDetectorMode(DetectorMode mode);
   void setYoloParams(const YoloDetectorParams & p);
+  void setDebugEnabled(bool enable);
 
   std::vector<Armor2D> pair(const std::vector<LightBar> & lights,
                             const PreprocessResult & pre);
@@ -86,6 +88,7 @@ private:
   YoloDetectorParams yolo_params_{};
   bool yolo_init_ok_{false};
   bool yolo_init_attempted_{false};
+  std::atomic<bool> debug_enabled_{false};
 
   // stored debug images
   mutable std::mutex dbg_m_;

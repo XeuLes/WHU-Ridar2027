@@ -96,6 +96,7 @@ public:
   void stop();
 
   void pushFrame(const Frame & frame);
+  void clearPending();
   PipelineOutput getLatestOutput() const;
 
   void setTrackerParams(const tracking::TrackerParams & p);

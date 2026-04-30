@@ -288,6 +288,16 @@ void Pipeline::pushFrame(const Frame & in_frame)
   impl_->cv.notify_one();
 }
 
+void Pipeline::clearPending()
+{
+  std::lock_guard<std::mutex> lk(impl_->m);
+  if (impl_->latest.has_value()) {
+    impl_->latest.reset();
+    impl_->has_new = false;
+    impl_->dropped.fetch_add(1, std::memory_order_relaxed);
+  }
+}
+
 PipelineOutput Pipeline::getLatestOutput() const
 {
   std::lock_guard<std::mutex> lk(impl_->out_m);
@@ -322,6 +332,7 @@ void Pipeline::setLaserSpotFilterParams(const LaserSpotFilterParams & p)
 void Pipeline::setDebugImageEnabled(bool enable)
 {
   impl_->debug_image_enabled.store(enable, std::memory_order_relaxed);
+  impl_->pairing.setDebugEnabled(enable);
 }
 
 void Pipeline::setCamera(const cv::Mat & K, const cv::Mat & D)
@@ -345,7 +356,7 @@ bool Pipeline::getLastDebugImages(
   {
     std::lock_guard<std::mutex> lk(impl_->debug_m);
     if (!impl_->last_filtered_debug_bgr.empty()) {
-      out_debug_bgr = impl_->last_filtered_debug_bgr.clone();
+      out_debug_bgr = impl_->last_filtered_debug_bgr;
       stamp_sec = impl_->last_debug_stamp_sec;
       stamp_nanosec = impl_->last_debug_stamp_nanosec;
       frame_id = impl_->last_debug_frame_id;

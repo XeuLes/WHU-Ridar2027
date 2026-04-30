@@ -26,6 +26,6 @@ gimbal_serial_bridge:
     zero_stable_required_count: 10
     zero_stable_max_delta_deg: 0.1
     zero_init_timeout_s: 15.0
-    gimbal_disconnect_timeout_s: 20.0
+    gimbal_disconnect_timeout_s: 10.0
 
     default_enable: false

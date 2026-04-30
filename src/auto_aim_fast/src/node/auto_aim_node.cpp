@@ -70,6 +70,9 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("camera_info_topic", "/camera0/camera_info");
   this->declare_parameter<bool>("use_referee_identity_color", true);
   this->declare_parameter<std::string>("referee_identity_topic", "/radar/referee/robot_identity");
+  this->declare_parameter<bool>("gimbal.require_ready", true);
+  this->declare_parameter<std::string>("gimbal.angles_topic", "/gimbal/angles_true");
+  this->declare_parameter<double>("gimbal.max_msg_age_s", 10.0);
 
   this->declare_parameter<bool>("qos.use_sensor_data_qos", true);
   this->declare_parameter<int>("qos.depth", 1);
@@ -174,10 +177,15 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<double>("detector.max_connect_angle", 120.0);
 
 
-  const auto image_topic = this->get_parameter("image_topic").as_string();
-  const auto info_topic = this->get_parameter("camera_info_topic").as_string();
+  image_topic_ = this->get_parameter("image_topic").as_string();
+  camera_info_topic_ = this->get_parameter("camera_info_topic").as_string();
   use_referee_identity_color_ = this->get_parameter("use_referee_identity_color").as_bool();
   referee_identity_topic_ = this->get_parameter("referee_identity_topic").as_string();
+  require_gimbal_ready_ = this->get_parameter("gimbal.require_ready").as_bool();
+  gimbal_angles_topic_ = this->get_parameter("gimbal.angles_topic").as_string();
+  gimbal_max_msg_age_s_ =
+    std::max(0.01, this->get_parameter("gimbal.max_msg_age_s").as_double());
+  use_camera_info_ = this->get_parameter("camera.use_camera_info").as_bool();
 
   // tracker inject
   tracking::TrackerParams tp;
@@ -322,10 +330,12 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
         0.0,
         0.5));
   pipeline_.setLaserSpotFilterParams(laser_filter);
-  pipeline_.setDebugImageEnabled(this->get_parameter("debug.publish_debug_image").as_bool());
+  pipeline_.setDebugImageEnabled(
+    this->get_parameter("debug.publish_debug_image").as_bool() ||
+    this->get_parameter("debug.publish_binary_image").as_bool());
 
   // camera fallback
-  if (!this->get_parameter("camera.use_camera_info").as_bool()) {
+  if (!use_camera_info_) {
     const double fx = this->get_parameter("camera.fx").as_double();
     const double fy = this->get_parameter("camera.fy").as_double();
     const double cx = this->get_parameter("camera.cx").as_double();
@@ -346,19 +356,18 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
     this->get_parameter("debug.binary_topic").as_string(), rclcpp::QoS(1));
 
   // subscriptions
-  sub_image_ = this->create_subscription<sensor_msgs::msg::Image>(
-    image_topic, makeImageQoS(*this),
-    std::bind(&AutoAimNode::onImage, this, std::placeholders::_1));
-
-  sub_info_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
-    info_topic, makeInfoQoS(),
-    std::bind(&AutoAimNode::onCameraInfo, this, std::placeholders::_1));
+  if (require_gimbal_ready_) {
+    sub_gimbal_angles_ = this->create_subscription<std_msgs::msg::Float64MultiArray>(
+      gimbal_angles_topic_, rclcpp::SensorDataQoS(),
+      std::bind(&AutoAimNode::onGimbalAngles, this, std::placeholders::_1));
+  }
 
   sub_identity_ = this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
     referee_identity_topic_, 10,
     std::bind(&AutoAimNode::onRefereeIdentity, this, std::placeholders::_1));
 
   pipeline_.start();
+  updateImageSubscriptions(!require_gimbal_ready_);
 
   const int publish_hz = std::max(1, static_cast<int>(this->get_parameter("publish_hz").as_int()));
   publish_timer_ = this->create_wall_timer(
@@ -370,10 +379,13 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
     std::bind(&AutoAimNode::onReport, this));
 
   RCLCPP_INFO(this->get_logger(),
-              "auto_aim_node started. detector_mode=%s debug_pub=%d binary_pub=%d",
+              "auto_aim_node started. detector_mode=%s debug_pub=%d binary_pub=%d gimbal_gate=%s topic=%s timeout=%.3fs",
               this->get_parameter("detector.mode").as_string().c_str(),
               this->get_parameter("debug.publish_debug_image").as_bool() ? 1 : 0,
-              this->get_parameter("debug.publish_binary_image").as_bool() ? 1 : 0);
+              this->get_parameter("debug.publish_binary_image").as_bool() ? 1 : 0,
+              require_gimbal_ready_ ? "enabled" : "disabled",
+              gimbal_angles_topic_.c_str(),
+              gimbal_max_msg_age_s_);
 }
 
 void AutoAimNode::onRefereeIdentity(
@@ -414,9 +426,124 @@ AutoAimNode::~AutoAimNode()
   pipeline_.stop();
 }
 
+void AutoAimNode::updateImageSubscriptions(bool active)
+{
+  std::lock_guard<std::mutex> lk(subscription_mutex_);
+  if (active) {
+    if (image_subscriptions_active_) {
+      return;
+    }
+
+    sub_image_ = this->create_subscription<sensor_msgs::msg::Image>(
+      image_topic_, makeImageQoS(*this),
+      std::bind(&AutoAimNode::onImage, this, std::placeholders::_1));
+
+    if (use_camera_info_) {
+      sub_info_ = this->create_subscription<sensor_msgs::msg::CameraInfo>(
+        camera_info_topic_, makeInfoQoS(),
+        std::bind(&AutoAimNode::onCameraInfo, this, std::placeholders::_1));
+    }
+
+    image_subscriptions_active_ = true;
+    RCLCPP_INFO(
+      this->get_logger(),
+      "auto_aim image input active: image=%s camera_info=%s",
+      image_topic_.c_str(),
+      use_camera_info_ ? camera_info_topic_.c_str() : "disabled");
+    return;
+  }
+
+  if (!image_subscriptions_active_ && !sub_image_ && !sub_info_) {
+    return;
+  }
+
+  sub_image_.reset();
+  sub_info_.reset();
+  image_subscriptions_active_ = false;
+  pipeline_.clearPending();
+  RCLCPP_WARN(
+    this->get_logger(),
+    "auto_aim image input suspended; waiting for initialized gimbal feedback.");
+}
+
+void AutoAimNode::onGimbalAngles(const std_msgs::msg::Float64MultiArray::SharedPtr msg)
+{
+  if (!msg || msg->data.size() < 2 ||
+      !std::isfinite(msg->data[0]) ||
+      !std::isfinite(msg->data[1]))
+  {
+    return;
+  }
+
+  bool became_ready = false;
+  {
+    std::lock_guard<std::mutex> lk(gimbal_mutex_);
+    became_ready = !gimbal_ready_;
+    gimbal_ready_ = true;
+    last_gimbal_msg_time_ = this->get_clock()->now();
+  }
+
+  if (became_ready) {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Initialized gimbal feedback received; auto_aim inference can resume.");
+  }
+  updateImageSubscriptions(true);
+}
+
+bool AutoAimNode::isGimbalReady(const rclcpp::Time & now, double * age_s)
+{
+  if (!require_gimbal_ready_) {
+    if (age_s) {
+      *age_s = 0.0;
+    }
+    return true;
+  }
+
+  bool timed_out = false;
+  double age = std::numeric_limits<double>::infinity();
+  {
+    std::lock_guard<std::mutex> lk(gimbal_mutex_);
+    if (!gimbal_ready_) {
+      if (age_s) {
+        *age_s = age;
+      }
+      return false;
+    }
+
+    age = (now - last_gimbal_msg_time_).seconds();
+    if (!std::isfinite(age) || age < 0.0) {
+      age = 0.0;
+    }
+
+    if (age <= gimbal_max_msg_age_s_) {
+      if (age_s) {
+        *age_s = age;
+      }
+      return true;
+    }
+
+    gimbal_ready_ = false;
+    timed_out = true;
+  }
+
+  if (timed_out) {
+    if (age_s) {
+      *age_s = age;
+    }
+    updateImageSubscriptions(false);
+    RCLCPP_ERROR(
+      this->get_logger(),
+      "Gimbal feedback timed out after %.3fs; auto_aim inference is paused.",
+      age);
+  }
+
+  return false;
+}
+
 void AutoAimNode::onCameraInfo(const sensor_msgs::msg::CameraInfo::SharedPtr msg)
 {
-  if (!this->get_parameter("camera.use_camera_info").as_bool()) return;
+  if (!use_camera_info_) return;
 
   const bool set_once = this->get_parameter("camera.set_once").as_bool();
   if (set_once && camera_set_) return;
@@ -433,6 +560,12 @@ void AutoAimNode::onCameraInfo(const sensor_msgs::msg::CameraInfo::SharedPtr msg
 
 void AutoAimNode::onImage(const sensor_msgs::msg::Image::SharedPtr msg)
 {
+  double gimbal_age_s = 0.0;
+  if (!isGimbalReady(this->get_clock()->now(), &gimbal_age_s)) {
+    gimbal_wait_skipped_frames_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+
   pipeline::Frame f;
   f.image = msg;
   f.stamp_ros = rclcpp::Time(msg->header.stamp);
@@ -449,10 +582,81 @@ void AutoAimNode::onImage(const sensor_msgs::msg::Image::SharedPtr msg)
   pipeline_.pushFrame(f);
 }
 
+void AutoAimNode::publishWaitingForGimbal(const rclcpp::Time & now, double gimbal_age_s)
+{
+  pipeline_.setDebugImageEnabled(false);
+  const auto out = pipeline_.getLatestOutput();
+  const std::string unit = this->get_parameter("output.angle_unit").as_string();
+
+  auto_aim_fast::msg::AimTarget tgt;
+  tgt.stamp = now;
+  tgt.state = "WAIT_GIMBAL";
+  tgt.has_target = false;
+  tgt.yaw = 0.0f;
+  tgt.pitch = 0.0f;
+  tgt.yaw_pred = 0.0f;
+  tgt.pitch_pred = 0.0f;
+  tgt.angle_unit = unit;
+  tgt.distance = 0.0f;
+  tgt.confidence = 0.0f;
+  tgt.has_pose = false;
+  tgt.tx = 0.0f;
+  tgt.ty = 0.0f;
+  tgt.tz = 0.0f;
+  tgt.latency_ns = 0;
+  tgt.extra_latency_ns = this->get_parameter("prediction.extra_latency_ns").as_int();
+  tgt.roi_used = false;
+  tgt.roi_x = 0;
+  tgt.roi_y = 0;
+  tgt.roi_w = 0;
+  tgt.roi_h = 0;
+  tgt.u = std::numeric_limits<float>::quiet_NaN();
+  tgt.v = std::numeric_limits<float>::quiet_NaN();
+  tgt.pushed_frames = out.pushed_frames;
+  tgt.processed_frames = out.processed_frames;
+  tgt.dropped_frames = out.dropped_frames;
+  pub_target_->publish(tgt);
+
+  auto_aim_fast::msg::DebugStats st;
+  st.stamp = now;
+  st.state = "WAIT_GIMBAL";
+  st.pushed_frames = out.pushed_frames;
+  st.processed_frames = out.processed_frames;
+  st.dropped_frames = out.dropped_frames;
+  st.good_count = 0;
+  st.miss_count = 0;
+  st.roi_used = false;
+  st.roi_x = 0;
+  st.roi_y = 0;
+  st.roi_w = 0;
+  st.roi_h = 0;
+  st.roi_img_w = out.roi_dbg.img_w;
+  st.roi_img_h = out.roi_dbg.img_h;
+  st.has_pose = false;
+  st.tx = 0.0f;
+  st.ty = 0.0f;
+  st.tz = 0.0f;
+  st.preprocess_ms = 0.0f;
+  st.pairing_ms = 0.0f;
+  st.pnp_ms = 0.0f;
+  st.tracker_ms = 0.0f;
+  (void)gimbal_age_s;
+  pub_stats_->publish(st);
+}
+
 void AutoAimNode::onPublish()
 {
-  const auto out = pipeline_.getLatestOutput();
   const rclcpp::Time now = this->get_clock()->now();
+  double gimbal_age_s = 0.0;
+  if (!isGimbalReady(now, &gimbal_age_s)) {
+    pred_inited_ = false;
+    yaw_rate_ = 0.0f;
+    pitch_rate_ = 0.0f;
+    publishWaitingForGimbal(now, gimbal_age_s);
+    return;
+  }
+
+  const auto out = pipeline_.getLatestOutput();
 
   const bool has_img_stamp = !(out.stamp_sec == 0 && out.stamp_nanosec == 0);
 
@@ -677,13 +881,25 @@ void AutoAimNode::onPublish()
 
 void AutoAimNode::onReport()
 {
+  double gimbal_age_s = 0.0;
+  if (!isGimbalReady(this->get_clock()->now(), &gimbal_age_s)) {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "state=WAIT_GIMBAL skipped_frames=%lu gimbal_age=%.3f timeout=%.3f",
+      static_cast<unsigned long>(gimbal_wait_skipped_frames_.load(std::memory_order_relaxed)),
+      std::isfinite(gimbal_age_s) ? gimbal_age_s : -1.0,
+      gimbal_max_msg_age_s_);
+    return;
+  }
+
   const auto out = pipeline_.getLatestOutput();
   RCLCPP_INFO(this->get_logger(),
-              "state=%s pairs=%d->%d roi_used=%d",
+              "state=%s pairs=%d->%d roi_used=%d skipped_wait=%lu",
               out.state.c_str(),
               out.budget.pairs_in,
               out.budget.pairs_used,
-              out.roi_dbg.used ? 1 : 0);
+              out.roi_dbg.used ? 1 : 0,
+              static_cast<unsigned long>(gimbal_wait_skipped_frames_.load(std::memory_order_relaxed)));
 }
 
 }  // namespace auto_aim_fast

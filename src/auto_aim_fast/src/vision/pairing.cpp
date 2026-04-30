@@ -103,6 +103,11 @@ void Pairing::setYoloParams(const YoloDetectorParams & p)
   yolo_detector_.reset();
 }
 
+void Pairing::setDebugEnabled(bool enable)
+{
+  debug_enabled_.store(enable, std::memory_order_relaxed);
+}
+
 std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
                                    const PreprocessResult & pre)
 {
@@ -113,6 +118,7 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
   }
 
   std::vector<SimpleLightDetector::PairResult> pairs;
+  const bool build_debug = debug_enabled_.load(std::memory_order_relaxed);
 
   if (mode_ == DetectorMode::YOLO) {
     if (!yolo_detector_) {
@@ -143,39 +149,41 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
     if (yolo_init_ok_ && yolo_detector_->isReady()) {
       pairs = yolo_detector_->detectDetailed(pre.bgr);
 
-      cv::Mat dbg = pre.bgr.clone();
-      for (const auto & pr : pairs) {
-        cv::Scalar box_color(0, 255, 255);
-        if (pr.has_precise_corners) {
-          cv::line(dbg, pr.precise_left_top, pr.precise_right_top, box_color, 2);
-          cv::line(dbg, pr.precise_right_top, pr.precise_right_bottom, box_color, 2);
-          cv::line(dbg, pr.precise_right_bottom, pr.precise_left_bottom, box_color, 2);
-          cv::line(dbg, pr.precise_left_bottom, pr.precise_left_top, box_color, 2);
-        } else {
-          std::array<cv::Point2f, 4> c{};
-          pairResultToFallbackCorners(pr, c);
-          for (int i = 0; i < 4; ++i) {
-            cv::line(dbg, c[i], c[(i + 1) % 4], box_color, 2);
+      if (build_debug) {
+        cv::Mat dbg = pre.bgr.clone();
+        for (const auto & pr : pairs) {
+          cv::Scalar box_color(0, 255, 255);
+          if (pr.has_precise_corners) {
+            cv::line(dbg, pr.precise_left_top, pr.precise_right_top, box_color, 2);
+            cv::line(dbg, pr.precise_right_top, pr.precise_right_bottom, box_color, 2);
+            cv::line(dbg, pr.precise_right_bottom, pr.precise_left_bottom, box_color, 2);
+            cv::line(dbg, pr.precise_left_bottom, pr.precise_left_top, box_color, 2);
+          } else {
+            std::array<cv::Point2f, 4> c{};
+            pairResultToFallbackCorners(pr, c);
+            for (int i = 0; i < 4; ++i) {
+              cv::line(dbg, c[i], c[(i + 1) % 4], box_color, 2);
+            }
+          }
+
+          cv::circle(dbg, pr.center, 4, cv::Scalar(0, 0, 255), -1);
+
+          if (pr.has_keypoints) {
+            for (size_t i = 0; i < pr.keypoints.size(); ++i) {
+              const auto & kp = pr.keypoints[i];
+              const float ks = pr.keypoint_scores[i];
+              cv::circle(dbg, kp, 3, ks >= yolo_params_.kpt_conf_thresh ?
+                cv::Scalar(0, 255, 0) : cv::Scalar(255, 0, 0), -1);
+            }
           }
         }
 
-        cv::circle(dbg, pr.center, 4, cv::Scalar(0, 0, 255), -1);
-
-        if (pr.has_keypoints) {
-          for (size_t i = 0; i < pr.keypoints.size(); ++i) {
-            const auto & kp = pr.keypoints[i];
-            const float ks = pr.keypoint_scores[i];
-            cv::circle(dbg, kp, 3, ks >= yolo_params_.kpt_conf_thresh ?
-              cv::Scalar(0, 255, 0) : cv::Scalar(255, 0, 0), -1);
-          }
+        cv::Mat bin(pre.bgr.rows, pre.bgr.cols, CV_8UC1, cv::Scalar(0));
+        {
+          std::lock_guard<std::mutex> lk(dbg_m_);
+          last_debug_bgr_ = dbg;
+          last_binary_ = bin;
         }
-      }
-
-      cv::Mat bin(pre.bgr.rows, pre.bgr.cols, CV_8UC1, cv::Scalar(0));
-      {
-        std::lock_guard<std::mutex> lk(dbg_m_);
-        last_debug_bgr_ = dbg;
-        last_binary_ = bin;
       }
     }
   }
@@ -187,7 +195,7 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
     constexpr uint64_t kDebugDecimation = 3;
     debug_build_counter++;
 
-    if ((debug_build_counter % kDebugDecimation) == 0) {
+    if (build_debug && (debug_build_counter % kDebugDecimation) == 0) {
       cv::Mat dbg = pre.bgr.clone();
       detector_->drawResults(dbg, true, true);
 
@@ -195,7 +203,7 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
 
       std::lock_guard<std::mutex> lk(dbg_m_);
       last_debug_bgr_ = dbg;
-      last_binary_ = bin.clone();
+      last_binary_ = bin;
     }
   } else if (pairs.empty()) {
     // YOLO mode failed or no result: keep debug image but fall back to empty result.
@@ -227,7 +235,7 @@ bool Pairing::getLastDebugBgr(cv::Mat & out_bgr) const
 {
   std::lock_guard<std::mutex> lk(dbg_m_);
   if (last_debug_bgr_.empty()) return false;
-  out_bgr = last_debug_bgr_.clone();
+  out_bgr = last_debug_bgr_;
   return true;
 }
 
@@ -235,7 +243,7 @@ bool Pairing::getLastBinary(cv::Mat & out_bin) const
 {
   std::lock_guard<std::mutex> lk(dbg_m_);
   if (last_binary_.empty()) return false;
-  out_bin = last_binary_.clone();
+  out_bin = last_binary_;
   return true;
 }
 
