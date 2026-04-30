@@ -35,6 +35,8 @@
   <exec_depend>livox_cloud_integrator</exec_depend>
   <exec_depend>radar_decision_comm</exec_depend>
   <exec_depend>radar_pdu_bridge</exec_depend>
+  <exec_depend>camera_field_calib_tool</exec_depend>
+  <exec_depend>image_publisher</exec_depend>
 
   <!-- 运行依赖：点云处理 -->
   <exec_depend>pcl_ros</exec_depend>

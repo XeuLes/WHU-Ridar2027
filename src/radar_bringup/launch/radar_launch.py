@@ -2,7 +2,18 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, LogInfo, OpaqueFunction, Shutdown
+from launch.actions import (
+    DeclareLaunchArgument,
+    EmitEvent,
+    IncludeLaunchDescription,
+    LogInfo,
+    OpaqueFunction,
+    RegisterEventHandler,
+    Shutdown,
+)
+from launch.event_handlers import OnProcessExit
+from launch.events.process import ShutdownProcess, matches_executable
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
@@ -47,8 +58,12 @@ def _build_launch(context):
     referee_serial_baudrate = int(LaunchConfiguration("referee_serial_baudrate").perform(context))
     decision_params_file = LaunchConfiguration("decision_params_file").perform(context)
     pdu_poll_period_ms = int(LaunchConfiguration("pdu_poll_period_ms").perform(context))
+    enable_calibration = LaunchConfiguration("enable_calibration").perform(context).strip().lower()
+    enable_calibration = enable_calibration in ("1", "true", "yes", "on")
+    calib_image_file = LaunchConfiguration("calib_image_file").perform(context).strip()
 
     bringup_share = get_package_share_directory("radar_bringup")
+    calib_tool_share = get_package_share_directory("camera_field_calib_tool")
     localization_share = get_package_share_directory("localization")
     livox_share = get_package_share_directory("livox_ros2_driver")
     debug_map_share = get_package_share_directory("debug_map")
@@ -61,7 +76,7 @@ def _build_launch(context):
     bringup_config = os.path.join(bringup_share, "config")
     hik_params_file = os.path.join(hik_share, "config", "camera_params.yaml")
     map_pcd_path = os.path.join(localization_share, "config", "基础制造_rm_frame.pcd")
-    camera_extrinsic_yaml = os.path.join(bringup_config, "out_matrix_gc.yaml")
+    camera_extrinsic_yaml = LaunchConfiguration("calib_out_matrix_yaml").perform(context)
     resolve_camera_params_yaml = os.path.join(bringup_config, "camera_params_rect.yaml")
     resolve_region_points_yaml = os.path.join(bringup_config, "GCZX_Points.yaml")
     resolve_minimap_png = os.path.join(bringup_config, "jichuzhizao.png")
@@ -595,7 +610,7 @@ def _build_launch(context):
         ],
     )
 
-    return [
+    normal_flow_actions = [
         LogInfo(msg=f"radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"decision params file: {decision_params_file}"),
         LogInfo(msg=f"referee rx_mode={referee_rx_mode} tx_mode={referee_tx_mode}"),
@@ -617,11 +632,107 @@ def _build_launch(context):
         rviz_node,
     ]
 
+    if not enable_calibration:
+        return normal_flow_actions
+
+    calib_launch_file = os.path.join(calib_tool_share, "launch", "pnp_calib_new.launch.py")
+    use_static_image_file = bool(calib_image_file)
+
+    pnp_calib_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(calib_launch_file),
+        launch_arguments={
+            "start_hik_camera": "false" if use_static_image_file else "true",
+            "start_static_image_publisher": "true" if use_static_image_file else "false",
+            "static_image_file": LaunchConfiguration("calib_image_file"),
+            "static_image_rate": LaunchConfiguration("calib_static_image_rate"),
+            "static_image_frame": LaunchConfiguration("calib_camera_frame"),
+            "image_topic": LaunchConfiguration("calib_image_topic"),
+            "intrinsics_yaml": LaunchConfiguration("calib_intrinsics_yaml"),
+            "out_matrix_yaml": LaunchConfiguration("calib_out_matrix_yaml"),
+            "reference_points_yaml": LaunchConfiguration("calib_reference_points_yaml"),
+            "use_refine": LaunchConfiguration("calib_use_refine"),
+            "pnp_method": LaunchConfiguration("calib_pnp_method"),
+            "min_points": LaunchConfiguration("calib_min_points"),
+            "freeze_first_frame": "false" if use_static_image_file else "true",
+            "shutdown_on_save": "true",
+        }.items(),
+    )
+
+    calib_source_executable = (
+        "image_publisher_node" if use_static_image_file else "hik_camera_ros2_driver_node"
+    )
+    stop_calib_image_source = EmitEvent(
+        event=ShutdownProcess(
+            process_matcher=matches_executable(calib_source_executable),
+        )
+    )
+
+    start_normal_flow_after_source_exit = RegisterEventHandler(
+        OnProcessExit(
+            target_action=matches_executable(calib_source_executable),
+            on_exit=[
+                LogInfo(msg="Calibration image source exited."),
+                LogInfo(msg="Starting normal radar flow with the saved out_matrix_gc.yaml."),
+                *normal_flow_actions,
+            ],
+        )
+    )
+
+    def on_pnp_calib_exit(event, _context):
+        if event.returncode != 0:
+            return [
+                LogInfo(
+                    msg=(
+                        "PnP calibration exited without a saved result; "
+                        "normal radar flow will not start."
+                    )
+                ),
+                stop_calib_image_source,
+                Shutdown(reason="PnP calibration did not save out_matrix_gc.yaml"),
+            ]
+        return [
+            LogInfo(msg="PnP calibration saved and exited; stopping calibration image source."),
+            start_normal_flow_after_source_exit,
+            stop_calib_image_source,
+        ]
+
+    start_normal_flow_after_calib = RegisterEventHandler(
+        OnProcessExit(
+            target_action=matches_executable("pnp_calib_node_new"),
+            on_exit=on_pnp_calib_exit,
+        )
+    )
+
+    calib_source_msg = (
+        f"calibration uses static image file: {calib_image_file}"
+        if use_static_image_file
+        else "calibration captures the first panoramic camera frame and keeps it still"
+    )
+
+    return [
+        LogInfo(msg="enable_calibration=true: start PnP calibration first. Press P to solve, S to save and continue."),
+        LogInfo(msg=calib_source_msg),
+        LogInfo(msg=f"calibration output: {camera_extrinsic_yaml}"),
+        start_normal_flow_after_calib,
+        pnp_calib_launch,
+    ]
+
 
 def generate_launch_description():
     radar_decision_share = get_package_share_directory("radar_decision_comm")
+    calib_tool_share = get_package_share_directory("camera_field_calib_tool")
+    bringup_share = get_package_share_directory("radar_bringup")
     default_decision_params = os.path.join(
         radar_decision_share, "config", "radar_decision_comm.yaml"
+    )
+    default_calib_intrinsics = os.path.join(
+        calib_tool_share, "config", "camera_intrinsics.yaml"
+    )
+    default_calib_reference_points = os.path.join(
+        calib_tool_share, "config", "reference_points.yaml"
+    )
+    default_calib_out_matrix = os.path.join(
+        bringup_share, "config", "out_matrix_gc.yaml"
     )
 
     return LaunchDescription(
@@ -660,6 +771,61 @@ def generate_launch_description():
                 "pdu_poll_period_ms",
                 default_value="2",
                 description="shared-memory PDU poll period in milliseconds",
+            ),
+            DeclareLaunchArgument(
+                "enable_calibration",
+                default_value="false",
+                description="whether to run pnp_calib_new.launch.py before starting the normal radar flow",
+            ),
+            DeclareLaunchArgument(
+                "calib_image_file",
+                default_value="",
+                description="optional static panoramic image file; empty captures and freezes the first live camera frame",
+            ),
+            DeclareLaunchArgument(
+                "calib_image_topic",
+                default_value="/camera0/image",
+                description="image topic used by pnp_calib_node_new during calibration",
+            ),
+            DeclareLaunchArgument(
+                "calib_static_image_rate",
+                default_value="5.0",
+                description="publish rate when calib_image_file is used",
+            ),
+            DeclareLaunchArgument(
+                "calib_camera_frame",
+                default_value="calib_camera",
+                description="frame id for static calibration image publishing",
+            ),
+            DeclareLaunchArgument(
+                "calib_intrinsics_yaml",
+                default_value=default_calib_intrinsics,
+                description="camera intrinsics yaml used by pnp_calib_node_new",
+            ),
+            DeclareLaunchArgument(
+                "calib_out_matrix_yaml",
+                default_value=default_calib_out_matrix,
+                description="output out_matrix yaml; normal flow reads this after calibration exits",
+            ),
+            DeclareLaunchArgument(
+                "calib_reference_points_yaml",
+                default_value=default_calib_reference_points,
+                description="reference 3D points yaml used by pnp_calib_node_new",
+            ),
+            DeclareLaunchArgument(
+                "calib_use_refine",
+                default_value="true",
+                description="whether pnp_calib_node_new refines solvePnP result",
+            ),
+            DeclareLaunchArgument(
+                "calib_pnp_method",
+                default_value="0",
+                description="OpenCV solvePnP method flag for pnp_calib_node_new",
+            ),
+            DeclareLaunchArgument(
+                "calib_min_points",
+                default_value="6",
+                description="minimum selected point count before pnp_calib_node_new solves",
             ),
             OpaqueFunction(function=_build_launch),
         ]

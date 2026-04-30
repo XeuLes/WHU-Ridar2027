@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <utility>
@@ -51,9 +52,11 @@ struct CameraContext {
     std::string prefix;
 
     std::string serial;
+    bool        match_by_serial = false;
     std::string model_name;
     std::string device_type;  // USB / GigE / Unknown
 
+    std::mutex                 sdk_mutex;
     void*                     handle = nullptr;
     MV_IMAGE_BASIC_INFO       img_info{};
     MV_CC_PIXEL_CONVERT_PARAM convert_param{};
@@ -73,6 +76,7 @@ struct CameraContext {
     std::thread       publish_thread;
     std::atomic<bool> running{false};
     bool              started = false;
+    bool              connected = false;
 
     std::array<FrameSlot, kRingSize> ring;
     std::atomic<uint64_t> write_seq{0};
@@ -111,11 +115,7 @@ public:
 
         declareGlobalParameters();
 
-        if (!initializeCameras()) {
-            RCLCPP_FATAL(this->get_logger(), "Failed to initialize cameras.");
-            rclcpp::shutdown();
-            return;
-        }
+        initializeCameras();
 
         for (auto& cam_ptr : cameras_) {
             declareCameraParameters(*cam_ptr);
@@ -128,9 +128,6 @@ public:
 
         for (auto& cam_ptr : cameras_) {
             auto& cam = *cam_ptr;
-            if (!cam.started) {
-                continue;
-            }
             cam.running = true;
             cam.capture_thread = std::thread(
                 &HikCameraRos2DriverNode::captureLoop, this, &cam);
@@ -167,12 +164,7 @@ public:
 
         for (auto& cam_ptr : cameras_) {
             auto& cam = *cam_ptr;
-            if (cam.handle) {
-                MV_CC_StopGrabbing(cam.handle);
-                MV_CC_CloseDevice(cam.handle);
-                MV_CC_DestroyHandle(&cam.handle);
-                cam.handle = nullptr;
-            }
+            disconnectCamera(cam, false);
         }
 
         RCLCPP_INFO(this->get_logger(), "HikCameraRos2DriverNode destroyed!");
@@ -267,30 +259,6 @@ private:
 
     bool initializeCameras()
     {
-        MV_CC_DEVICE_INFO_LIST device_list{};
-        int                    n_ret = MV_OK;
-
-        while (rclcpp::ok()) {
-            n_ret = MV_CC_EnumDevices(MV_USB_DEVICE | MV_GIGE_DEVICE,
-                                      &device_list);
-            if (n_ret != MV_OK) {
-                RCLCPP_ERROR(this->get_logger(),
-                             "Failed to enumerate devices, retrying...");
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                continue;
-            }
-            if (device_list.nDeviceNum == 0) {
-                RCLCPP_ERROR(this->get_logger(),
-                             "No camera found, retrying...");
-                std::this_thread::sleep_for(std::chrono::seconds(1));
-                continue;
-            }
-            break;
-        }
-
-        RCLCPP_INFO(this->get_logger(), "Found camera count = %u",
-                    device_list.nDeviceNum);
-
         cameras_.clear();
 
         if (!camera_serials_.empty()) {
@@ -307,188 +275,55 @@ private:
                 cam->index = static_cast<int>(si);
                 cam->prefix = "cam" + std::to_string(cam->index);
                 cam->serial = wanted_serial;
-
-                const MV_CC_DEVICE_INFO* matched_dev = nullptr;
-                uint32_t matched_dev_idx = 0;
-                bool found = false;
-
-                for (uint32_t di = 0; di < device_list.nDeviceNum; ++di) {
-                    const auto* dev = device_list.pDeviceInfo[di];
-                    const auto serial = getSerial(dev);
-                    if (!serial.empty() && serial == wanted_serial) {
-                        matched_dev = dev;
-                        matched_dev_idx = di;
-                        found = true;
-                        break;
-                    }
-                }
-
-                if (!found) {
-                    RCLCPP_ERROR(this->get_logger(),
-                                 "[%s] Requested serial '%s' not found. "
-                                 "This slot will remain empty.",
-                                 cam->prefix.c_str(),
-                                 wanted_serial.c_str());
-                    continue;
-                }
-
-                cam->model_name = getModelName(matched_dev);
-                cam->device_type = getDeviceTypeString(matched_dev);
-
-                RCLCPP_INFO(this->get_logger(),
-                            "[%s] selected device idx=%u type=%s serial=%s model=%s",
-                            cam->prefix.c_str(),
-                            matched_dev_idx,
-                            cam->device_type.c_str(),
-                            cam->serial.c_str(),
-                            cam->model_name.c_str());
-
-                n_ret = MV_CC_CreateHandle(
-                    &cam->handle,
-                    const_cast<MV_CC_DEVICE_INFO*>(matched_dev));
-                if (n_ret != MV_OK) {
-                    RCLCPP_ERROR(this->get_logger(),
-                                 "[%s] Failed to create camera handle! ret=%x",
-                                 cam->prefix.c_str(), n_ret);
-                    continue;
-                }
-
-                n_ret = MV_CC_OpenDevice(cam->handle);
-                if (n_ret != MV_OK) {
-                    RCLCPP_ERROR(this->get_logger(),
-                                 "[%s] Failed to open camera device! ret=%x",
-                                 cam->prefix.c_str(), n_ret);
-                    MV_CC_DestroyHandle(&cam->handle);
-                    cam->handle = nullptr;
-                    continue;
-                }
-
-                n_ret = MV_CC_GetImageInfo(cam->handle, &cam->img_info);
-                if (n_ret != MV_OK) {
-                    RCLCPP_ERROR(this->get_logger(),
-                                 "[%s] Failed to get camera image info! ret=%x",
-                                 cam->prefix.c_str(), n_ret);
-                    MV_CC_CloseDevice(cam->handle);
-                    MV_CC_DestroyHandle(&cam->handle);
-                    cam->handle = nullptr;
-                    continue;
-                }
-
-                cam->convert_param.nWidth = cam->img_info.nWidthValue;
-                cam->convert_param.nHeight = cam->img_info.nHeightValue;
-                cam->convert_param.enDstPixelType = PixelType_Gvsp_RGB8_Packed;
+                cam->match_by_serial = true;
 
                 cameras_.push_back(std::move(cam));
             }
 
-            return !cameras_.empty();
+            RCLCPP_INFO(this->get_logger(),
+                        "Configured %zu camera slot(s) by serial. Missing devices will be retried.",
+                        cameras_.size());
+            return true;
         }
 
-        const uint32_t available = device_list.nDeviceNum;
-        const uint32_t use_n =
-            std::min<uint32_t>(static_cast<uint32_t>(camera_count_), available);
+        const uint32_t use_n = static_cast<uint32_t>(camera_count_);
 
         cameras_.reserve(use_n);
 
         for (uint32_t i = 0; i < use_n; ++i) {
-            auto* dev_info = device_list.pDeviceInfo[i];
-
             auto cam = std::make_unique<CameraContext>();
             cam->index = static_cast<int>(i);
             cam->prefix = "cam" + std::to_string(cam->index);
-            cam->serial = getSerial(dev_info);
-            cam->model_name = getModelName(dev_info);
-            cam->device_type = getDeviceTypeString(dev_info);
-
-            RCLCPP_INFO(this->get_logger(),
-                        "[%s] selected device idx=%u type=%s serial=%s model=%s",
-                        cam->prefix.c_str(),
-                        i,
-                        cam->device_type.c_str(),
-                        cam->serial.c_str(),
-                        cam->model_name.c_str());
-
-            n_ret = MV_CC_CreateHandle(&cam->handle, dev_info);
-            if (n_ret != MV_OK) {
-                RCLCPP_ERROR(this->get_logger(),
-                             "[%s] Failed to create camera handle! ret=%x",
-                             cam->prefix.c_str(), n_ret);
-                continue;
-            }
-
-            n_ret = MV_CC_OpenDevice(cam->handle);
-            if (n_ret != MV_OK) {
-                RCLCPP_ERROR(this->get_logger(),
-                             "[%s] Failed to open camera device! ret=%x",
-                             cam->prefix.c_str(), n_ret);
-                MV_CC_DestroyHandle(&cam->handle);
-                cam->handle = nullptr;
-                continue;
-            }
-
-            n_ret = MV_CC_GetImageInfo(cam->handle, &cam->img_info);
-            if (n_ret != MV_OK) {
-                RCLCPP_ERROR(this->get_logger(),
-                             "[%s] Failed to get camera image info! ret=%x",
-                             cam->prefix.c_str(), n_ret);
-                MV_CC_CloseDevice(cam->handle);
-                MV_CC_DestroyHandle(&cam->handle);
-                cam->handle = nullptr;
-                continue;
-            }
-
-            cam->convert_param.nWidth = cam->img_info.nWidthValue;
-            cam->convert_param.nHeight = cam->img_info.nHeightValue;
-            cam->convert_param.enDstPixelType = PixelType_Gvsp_RGB8_Packed;
+            cam->match_by_serial = false;
 
             cameras_.push_back(std::move(cam));
         }
 
-        return !cameras_.empty();
+        RCLCPP_INFO(this->get_logger(),
+                    "Configured %zu camera slot(s) by device index. Missing devices will be retried.",
+                    cameras_.size());
+        return true;
     }
 
     void declareCameraParameters(CameraContext& cam)
     {
         rcl_interfaces::msg::ParameterDescriptor param_desc;
-        MVCC_FLOATVALUE                          f_value{};
-        param_desc.integer_range.resize(1);
-        param_desc.integer_range[0].step = 1;
 
         param_desc.description =
             "[" + cam.prefix + "] Acquisition frame rate in Hz";
-        if (MV_CC_GetFloatValue(cam.handle, "AcquisitionFrameRate", &f_value) ==
-            MV_OK) {
-            param_desc.integer_range[0].from_value = f_value.fMin;
-            param_desc.integer_range[0].to_value = f_value.fMax;
-        }
-
         const double acquisition_frame_rate =
             this->declare_parameter<double>(
                 cam.prefix + ".acquisition_frame_rate", 120.0, param_desc);
 
         param_desc.description =
             "[" + cam.prefix + "] Exposure time in microseconds";
-        if (MV_CC_GetFloatValue(cam.handle, "ExposureTime", &f_value) == MV_OK) {
-            param_desc.integer_range[0].from_value = f_value.fMin;
-            param_desc.integer_range[0].to_value = f_value.fMax;
-        }
-
         const int exposure_time =
             this->declare_parameter<int>(
                 cam.prefix + ".exposure_time", 5000, param_desc);
 
         param_desc.description = "[" + cam.prefix + "] Gain";
-        if (MV_CC_GetFloatValue(cam.handle, "Gain", &f_value) == MV_OK) {
-            param_desc.integer_range[0].from_value = f_value.fMin;
-            param_desc.integer_range[0].to_value = f_value.fMax;
-        }
-
         const double gain = this->declare_parameter<double>(
-            cam.prefix + ".gain",
-            (MV_CC_GetFloatValue(cam.handle, "Gain", &f_value) == MV_OK)
-                ? f_value.fCurValue
-                : 0.0,
-            param_desc);
+            cam.prefix + ".gain", 0.0, param_desc);
 
         param_desc.description = "[" + cam.prefix + "] Pixel Format";
         const std::string default_pixel_format =
@@ -581,14 +416,148 @@ private:
         return image_topic + "/camera_info";
     }
 
-    void startCamera(CameraContext& cam)
+    void releaseCameraHandleLocked(CameraContext& cam)
     {
-        auto image_qos = use_sensor_data_qos_ ? rclcpp::SensorDataQoS()
-                                             : rclcpp::QoS(rclcpp::KeepLast(10));
+        if (cam.handle) {
+            MV_CC_StopGrabbing(cam.handle);
+            MV_CC_CloseDevice(cam.handle);
+            MV_CC_DestroyHandle(&cam.handle);
+            cam.handle = nullptr;
+        }
 
-        cam.image_pub = this->create_publisher<sensor_msgs::msg::Image>(cam.topic, image_qos);
-        cam.camera_info_pub = this->create_publisher<sensor_msgs::msg::CameraInfo>(
-            deriveCameraInfoTopic(cam.topic), image_qos);
+        cam.connected = false;
+        cam.has_hw_ts_freq = false;
+        cam.hw_ts_freq_hz = 0;
+        cam.hw_ts_base_initialized = false;
+    }
+
+    void disconnectCamera(CameraContext& cam, bool warn = true)
+    {
+        std::lock_guard<std::mutex> lock(cam.sdk_mutex);
+        const bool had_handle = cam.handle != nullptr;
+        releaseCameraHandleLocked(cam);
+        cam.fail_count = 0;
+
+        if (warn && had_handle) {
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] Camera disconnected, entering reconnect loop.",
+                        cam.prefix.c_str());
+        }
+    }
+
+    const MV_CC_DEVICE_INFO* selectDeviceForCamera(
+        const CameraContext& cam,
+        const MV_CC_DEVICE_INFO_LIST& device_list,
+        uint32_t& selected_idx) const
+    {
+        if (cam.match_by_serial && !cam.serial.empty()) {
+            for (uint32_t i = 0; i < device_list.nDeviceNum; ++i) {
+                const auto* dev = device_list.pDeviceInfo[i];
+                const auto serial = getSerial(dev);
+                if (!serial.empty() && serial == cam.serial) {
+                    selected_idx = i;
+                    return dev;
+                }
+            }
+            return nullptr;
+        }
+
+        if (cam.index >= 0 &&
+            static_cast<uint32_t>(cam.index) < device_list.nDeviceNum) {
+            selected_idx = static_cast<uint32_t>(cam.index);
+            return device_list.pDeviceInfo[selected_idx];
+        }
+
+        return nullptr;
+    }
+
+    bool connectCamera(CameraContext& cam, bool log_success = true)
+    {
+        {
+            std::lock_guard<std::mutex> lock(cam.sdk_mutex);
+            if (cam.handle) {
+                return true;
+            }
+        }
+
+        std::lock_guard<std::mutex> open_lock(camera_open_mutex_);
+        std::lock_guard<std::mutex> lock(cam.sdk_mutex);
+
+        if (cam.handle) {
+            return true;
+        }
+
+        MV_CC_DEVICE_INFO_LIST device_list{};
+        int ret = MV_CC_EnumDevices(MV_USB_DEVICE | MV_GIGE_DEVICE,
+                                    &device_list);
+        if (ret != MV_OK) {
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] Failed to enumerate cameras, ret=%x. Will retry.",
+                        cam.prefix.c_str(), ret);
+            return false;
+        }
+
+        if (device_list.nDeviceNum == 0) {
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] No Hik camera found. Will retry.",
+                        cam.prefix.c_str());
+            return false;
+        }
+
+        uint32_t selected_idx = 0;
+        const MV_CC_DEVICE_INFO* dev =
+            selectDeviceForCamera(cam, device_list, selected_idx);
+        if (!dev) {
+            if (cam.match_by_serial) {
+                RCLCPP_WARN(this->get_logger(),
+                            "[%s] Requested serial '%s' not found among %u device(s). Will retry.",
+                            cam.prefix.c_str(), cam.serial.c_str(),
+                            device_list.nDeviceNum);
+            } else {
+                RCLCPP_WARN(this->get_logger(),
+                            "[%s] Device index %d not available among %u device(s). Will retry.",
+                            cam.prefix.c_str(), cam.index,
+                            device_list.nDeviceNum);
+            }
+            return false;
+        }
+
+        cam.serial = getSerial(dev);
+        cam.model_name = getModelName(dev);
+        cam.device_type = getDeviceTypeString(dev);
+
+        ret = MV_CC_CreateHandle(&cam.handle,
+                                 const_cast<MV_CC_DEVICE_INFO*>(dev));
+        if (ret != MV_OK || cam.handle == nullptr) {
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] Failed to create camera handle, ret=%x. Will retry.",
+                        cam.prefix.c_str(), ret);
+            cam.handle = nullptr;
+            return false;
+        }
+
+        auto cleanup_on_failure = [&]() {
+            releaseCameraHandleLocked(cam);
+            cam.fail_count = 0;
+        };
+
+        ret = MV_CC_OpenDevice(cam.handle);
+        if (ret != MV_OK) {
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] Failed to open camera serial=%s, ret=%x. Will retry.",
+                        cam.prefix.c_str(), cam.serial.c_str(), ret);
+            cleanup_on_failure();
+            return false;
+        }
+
+        ret = MV_CC_GetImageInfo(cam.handle, &cam.img_info);
+        if (ret != MV_OK) {
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] Failed to get camera image info, ret=%x. Will retry.",
+                        cam.prefix.c_str(), ret);
+            cleanup_on_failure();
+            return false;
+        }
 
         MV_CC_SetEnumValueByString(cam.handle, "AcquisitionMode", "Continuous");
         MV_CC_SetEnumValueByString(cam.handle, "TriggerMode", "Off");
@@ -616,15 +585,17 @@ private:
         MV_CC_SetFloatValue(cam.handle, "Gain",
                             static_cast<float>(gain));
 
-        int status = MV_CC_SetEnumValueByString(cam.handle, "PixelFormat",
-                                                pixel_format.c_str());
+        const int status =
+            MV_CC_SetEnumValueByString(cam.handle, "PixelFormat",
+                                       pixel_format.c_str());
         if (status != MV_OK) {
-            RCLCPP_ERROR(this->get_logger(),
-                         "[%s] Failed to set PixelFormat=%s, status=%d",
-                         cam.prefix.c_str(), pixel_format.c_str(), status);
-            cam.started = false;
-            return;
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] Failed to set PixelFormat=%s, status=%d. Will retry.",
+                        cam.prefix.c_str(), pixel_format.c_str(), status);
+            cleanup_on_failure();
+            return false;
         }
+
         cam.configured_pixel_format = pixel_format;
         cam.output_direct_rgb = (pixel_format == "RGB8Packed");
 
@@ -638,19 +609,79 @@ private:
             cam.payload_size = cam.img_info.nWidthValue * cam.img_info.nHeightValue * 3U;
         }
 
+        cam.convert_param.nWidth = cam.img_info.nWidthValue;
+        cam.convert_param.nHeight = cam.img_info.nHeightValue;
+        cam.convert_param.enDstPixelType = PixelType_Gvsp_RGB8_Packed;
+
         for (auto& slot : cam.ring) {
             slot.data.resize(static_cast<size_t>(cam.img_info.nWidthValue) *
                              static_cast<size_t>(cam.img_info.nHeightValue) * 3U);
+            slot.valid = false;
         }
+        cam.read_seq.store(cam.write_seq.load(std::memory_order_relaxed),
+                           std::memory_order_release);
 
         if (use_hardware_timestamp_) {
             tryConfigureTimestampFrequency(cam);
         }
 
         if (!startGrabbingWithRetry(cam)) {
-            cam.started = false;
-            return;
+            cleanup_on_failure();
+            return false;
         }
+
+        cam.connected = true;
+        cam.fail_count = 0;
+        cam.last_restart_time = std::chrono::steady_clock::now();
+
+        if (log_success) {
+            RCLCPP_INFO(this->get_logger(),
+                        "[%s] Camera connected. idx=%u type=%s serial=%s model=%s pixel_format=%s gpu_debayer=%s",
+                        cam.prefix.c_str(),
+                        selected_idx,
+                        cam.device_type.c_str(),
+                        cam.serial.c_str(),
+                        cam.model_name.c_str(),
+                        cam.configured_pixel_format.c_str(),
+#if HIK_HAS_OPENCV_CUDA
+                        (enable_gpu_debayer_ ? "enabled_if_raw" : "disabled"));
+#else
+                        "not_available");
+#endif
+        }
+
+        return true;
+    }
+
+    bool ensureCameraConnected(CameraContext& cam)
+    {
+        {
+            std::lock_guard<std::mutex> lock(cam.sdk_mutex);
+            if (cam.handle) {
+                return true;
+            }
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - cam.last_restart_time).count();
+        if (elapsed_ms < restart_cooldown_ms_) {
+            return false;
+        }
+
+        cam.last_restart_time = now;
+        return connectCamera(cam);
+    }
+
+    void startCamera(CameraContext& cam)
+    {
+        auto image_qos = use_sensor_data_qos_ ? rclcpp::SensorDataQoS()
+                                             : rclcpp::QoS(rclcpp::KeepLast(10));
+
+        cam.image_pub = this->create_publisher<sensor_msgs::msg::Image>(cam.topic, image_qos);
+        cam.camera_info_pub = this->create_publisher<sensor_msgs::msg::CameraInfo>(
+            deriveCameraInfoTopic(cam.topic), image_qos);
 
         cam.info_mgr =
             std::make_unique<camera_info_manager::CameraInfoManager>(
@@ -666,20 +697,14 @@ private:
                         "[%s] Invalid camera info URL: %s",
                         cam.prefix.c_str(), cam.camera_info_url.c_str());
         }
+        cam.camera_info_msg.header.frame_id = cam.frame_id;
 
         cam.started = true;
-
-        RCLCPP_INFO(this->get_logger(),
-                    "[%s] Camera ready. type=%s serial=%s pixel_format=%s gpu_debayer=%s",
-                    cam.prefix.c_str(),
-                    cam.device_type.c_str(),
-                    cam.serial.c_str(),
-                    cam.configured_pixel_format.c_str(),
-#if HIK_HAS_OPENCV_CUDA
-                    (enable_gpu_debayer_ ? "enabled_if_raw" : "disabled"));
-#else
-                    "not_available");
-#endif
+        if (!connectCamera(cam)) {
+            RCLCPP_WARN(this->get_logger(),
+                        "[%s] Camera is not connected yet. Capture thread will keep retrying.",
+                        cam.prefix.c_str());
+        }
     }
 
     rclcpp::Time makeFrameStamp(CameraContext& cam,
@@ -821,37 +846,76 @@ private:
 
     void maybeRestartGrab(CameraContext& cam)
     {
-        (void)cam;
-        return;
+        if (restart_fail_threshold_ <= 0 ||
+            cam.fail_count < restart_fail_threshold_) {
+            return;
+        }
+
+        const auto now = std::chrono::steady_clock::now();
+        const auto elapsed_ms =
+            std::chrono::duration_cast<std::chrono::milliseconds>(
+                now - cam.last_restart_time).count();
+        if (elapsed_ms < restart_cooldown_ms_) {
+            return;
+        }
+
+        RCLCPP_WARN(this->get_logger(),
+                    "[%s] Camera has %d consecutive grab/convert failures, reconnecting.",
+                    cam.prefix.c_str(), cam.fail_count);
+        cam.last_restart_time = now;
+        disconnectCamera(cam);
     }
 
     void captureLoop(CameraContext* cam)
     {
-        if (cam == nullptr || !cam->started) {
+        if (cam == nullptr) {
             return;
         }
 
-        MV_FRAME_OUT out_frame{};
         RCLCPP_INFO(this->get_logger(), "[%s] Capture thread started.",
                     cam->prefix.c_str());
 
         while (rclcpp::ok() && cam->running) {
-            const int n_ret =
-                MV_CC_GetImageBuffer(cam->handle, &out_frame, frame_timeout_ms_);
+            if (!cam->started) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
 
-            if (n_ret == MV_OK) {
-                const uint64_t seq = cam->write_seq.load(std::memory_order_relaxed);
-                FrameSlot& slot = cam->ring[seq % kRingSize];
+            if (!ensureCameraConnected(*cam)) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                continue;
+            }
 
-                const bool ok = fillSlotFromFrame(*cam, out_frame, slot);
-                MV_CC_FreeImageBuffer(cam->handle, &out_frame);
+            MV_FRAME_OUT out_frame{};
+            int n_ret = MV_E_HANDLE;
+            bool ok = false;
 
-                if (ok) {
-                    cam->write_seq.store(seq + 1, std::memory_order_release);
-                    cam->fail_count = 0;
-                } else {
-                    cam->fail_count++;
+            {
+                std::lock_guard<std::mutex> lock(cam->sdk_mutex);
+                if (!cam->handle) {
+                    continue;
                 }
+
+                n_ret = MV_CC_GetImageBuffer(cam->handle, &out_frame,
+                                             frame_timeout_ms_);
+
+                if (n_ret == MV_OK) {
+                    const uint64_t seq =
+                        cam->write_seq.load(std::memory_order_relaxed);
+                    FrameSlot& slot = cam->ring[seq % kRingSize];
+
+                    ok = fillSlotFromFrame(*cam, out_frame, slot);
+                    MV_CC_FreeImageBuffer(cam->handle, &out_frame);
+
+                    if (ok) {
+                        cam->write_seq.store(seq + 1,
+                                             std::memory_order_release);
+                    }
+                }
+            }
+
+            if (n_ret == MV_OK && ok) {
+                cam->fail_count = 0;
 
                 auto now = std::chrono::steady_clock::now();
                 if (std::chrono::duration_cast<std::chrono::seconds>(
@@ -946,7 +1010,12 @@ private:
             const std::string key = name.substr(dot + 1);
 
             CameraContext* cam = find_cam_by_prefix(prefix);
-            if (!cam || !cam->handle) {
+            if (!cam) {
+                continue;
+            }
+
+            std::lock_guard<std::mutex> lock(cam->sdk_mutex);
+            if (!cam->handle) {
                 continue;
             }
 
@@ -1015,6 +1084,8 @@ private:
     int restart_cooldown_ms_ = 500;
     int start_retry_count_ = 5;
     int start_retry_interval_ms_ = 200;
+
+    std::mutex camera_open_mutex_;
 
     rclcpp::node_interfaces::OnSetParametersCallbackHandle::SharedPtr
         params_callback_handle_;

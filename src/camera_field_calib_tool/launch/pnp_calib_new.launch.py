@@ -8,6 +8,7 @@ import os
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.conditions import IfCondition
 from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
@@ -22,6 +23,8 @@ def generate_launch_description():
 
     params_file = LaunchConfiguration("params_file")
     log_level = LaunchConfiguration("log_level")
+    start_hik_camera = LaunchConfiguration("start_hik_camera")
+    start_static_image_publisher = LaunchConfiguration("start_static_image_publisher")
 
     # -----------------------------
     # Calib tool defaults
@@ -50,6 +53,36 @@ def generate_launch_description():
         "log_level",
         default_value="info",
         description="Log level for hik_camera_ros2_driver (debug/info/warn/error/fatal)",
+    )
+
+    declare_start_hik_camera_cmd = DeclareLaunchArgument(
+        "start_hik_camera",
+        default_value="true",
+        description="Whether to start hik_camera_ros2_driver for live calibration input.",
+    )
+
+    declare_start_static_image_publisher_cmd = DeclareLaunchArgument(
+        "start_static_image_publisher",
+        default_value="false",
+        description="Whether to publish static_image_file to image_topic for calibration.",
+    )
+
+    declare_static_image_file_cmd = DeclareLaunchArgument(
+        "static_image_file",
+        default_value="",
+        description="Image file to publish when start_static_image_publisher is true.",
+    )
+
+    declare_static_image_rate_cmd = DeclareLaunchArgument(
+        "static_image_rate",
+        default_value="5.0",
+        description="Publish rate for the static calibration image.",
+    )
+
+    declare_static_image_frame_cmd = DeclareLaunchArgument(
+        "static_image_frame",
+        default_value="calib_camera",
+        description="Frame id used by image_publisher for the static calibration image.",
     )
 
     # -----------------------------
@@ -99,6 +132,18 @@ def generate_launch_description():
         description="Minimum required point pairs before solving.",
     )
 
+    declare_freeze_first_frame_cmd = DeclareLaunchArgument(
+        "freeze_first_frame",
+        default_value="false",
+        description="If true, pnp_calib_node_new keeps the first received image as a static frame.",
+    )
+
+    declare_shutdown_on_save_cmd = DeclareLaunchArgument(
+        "shutdown_on_save",
+        default_value="false",
+        description="If true, pnp_calib_node_new exits after a successful save.",
+    )
+
     # -----------------------------
     # Nodes
     # -----------------------------
@@ -109,6 +154,24 @@ def generate_launch_description():
         parameters=[params_file],
         arguments=["--ros-args", "--log-level", log_level],
         output="screen",
+        condition=IfCondition(start_hik_camera),
+    )
+
+    start_static_image_publisher_cmd = Node(
+        name="calib_static_image_publisher",
+        package="image_publisher",
+        executable="image_publisher_node",
+        output="screen",
+        arguments=[LaunchConfiguration("static_image_file")],
+        parameters=[{
+            "publish_rate": LaunchConfiguration("static_image_rate"),
+            "frame_id": LaunchConfiguration("static_image_frame"),
+        }],
+        remappings=[
+            ("image_raw", LaunchConfiguration("image_topic")),
+            ("camera_info", "/calib_camera_info"),
+        ],
+        condition=IfCondition(start_static_image_publisher),
     )
 
     start_pnp_calib_new_cmd = Node(
@@ -124,6 +187,8 @@ def generate_launch_description():
             "use_refine": LaunchConfiguration("use_refine"),
             "pnp_method": LaunchConfiguration("pnp_method"),
             "min_points": LaunchConfiguration("min_points"),
+            "freeze_first_frame": LaunchConfiguration("freeze_first_frame"),
+            "shutdown_on_save": LaunchConfiguration("shutdown_on_save"),
         }],
     )
 
@@ -137,6 +202,11 @@ def generate_launch_description():
 
     ld.add_action(declare_params_file_cmd)
     ld.add_action(declare_log_level_cmd)
+    ld.add_action(declare_start_hik_camera_cmd)
+    ld.add_action(declare_start_static_image_publisher_cmd)
+    ld.add_action(declare_static_image_file_cmd)
+    ld.add_action(declare_static_image_rate_cmd)
+    ld.add_action(declare_static_image_frame_cmd)
 
     ld.add_action(declare_image_topic_cmd)
     ld.add_action(declare_intrinsics_yaml_cmd)
@@ -145,8 +215,11 @@ def generate_launch_description():
     ld.add_action(declare_use_refine_cmd)
     ld.add_action(declare_pnp_method_cmd)
     ld.add_action(declare_min_points_cmd)
+    ld.add_action(declare_freeze_first_frame_cmd)
+    ld.add_action(declare_shutdown_on_save_cmd)
 
     ld.add_action(start_hik_camera_cmd)
+    ld.add_action(start_static_image_publisher_cmd)
     ld.add_action(start_pnp_calib_new_cmd)
 
     return ld

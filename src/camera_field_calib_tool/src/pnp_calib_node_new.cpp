@@ -34,6 +34,8 @@ public:
     use_refine_ = this->declare_parameter<bool>("use_refine", true);
     pnp_method_ = this->declare_parameter<int>("pnp_method", 0);   // 0 -> default EPnP
     min_points_ = this->declare_parameter<int>("min_points", 6);
+    freeze_first_frame_ = this->declare_parameter<bool>("freeze_first_frame", false);
+    shutdown_on_save_ = this->declare_parameter<bool>("shutdown_on_save", false);
 
     CameraIntrinsics intr;
     std::string err;
@@ -79,6 +81,16 @@ public:
     cv::destroyAllWindows();
   }
 
+  bool SavedResult() const
+  {
+    return saved_result_;
+  }
+
+  bool RequiresSavedExit() const
+  {
+    return shutdown_on_save_;
+  }
+
 private:
   struct ReferencePoint
   {
@@ -94,7 +106,8 @@ private:
               << "Enter: confirm 2D at crosshair -> auto bind next reference 3D point\n"
               << "Backspace/Delete: undo last point\n"
               << "P: solvePnP\n"
-              << "S: save out_matrix.yaml (must solve first)\n"
+              << "S: save out_matrix.yaml (must solve first)"
+              << (shutdown_on_save_ ? " and exit\n" : "\n")
               << "C: clear all points\n"
               << "Q/Esc: quit node\n"
               << "Tip: resize the window; the image will auto-fit.\n"
@@ -357,7 +370,13 @@ private:
       return;
     }
 
-    const cv::Mat & img = cv_ptr->image;
+    if (freeze_first_frame_ && !has_frozen_frame_) {
+      frozen_frame_ = cv_ptr->image.clone();
+      has_frozen_frame_ = true;
+      RCLCPP_INFO(this->get_logger(), "Captured first image; using it as a static calibration frame.");
+    }
+
+    const cv::Mat & img = freeze_first_frame_ ? frozen_frame_ : cv_ptr->image;
     if (img.empty()) return;
 
     const int W = img.cols;
@@ -469,7 +488,12 @@ private:
       if (!SaveExtrinsicsYaml(out_matrix_yaml_, ext, &err)) {
         std::cout << "[PnP-New] Save failed: " << err << "\n";
       } else {
+        saved_result_ = true;
         std::cout << "[PnP-New] Saved: " << out_matrix_yaml_ << "\n";
+        if (shutdown_on_save_) {
+          RCLCPP_INFO(this->get_logger(), "Saved calibration; shutting down pnp_calib_node_new.");
+          rclcpp::shutdown();
+        }
       }
       return;
     }
@@ -484,6 +508,8 @@ private:
   bool use_refine_{true};
   int pnp_method_{0};
   int min_points_{6};
+  bool freeze_first_frame_{false};
+  bool shutdown_on_save_{false};
 
   rclcpp::Subscription<sensor_msgs::msg::Image>::SharedPtr sub_;
 
@@ -498,6 +524,10 @@ private:
 
   bool has_last_result_{false};
   PnPResult last_result_;
+  bool saved_result_{false};
+
+  bool has_frozen_frame_{false};
+  cv::Mat frozen_frame_;
 
   std::vector<ReferencePoint> reference_points_;
   std::vector<cv::Point3d> ref_world_points_;
@@ -511,6 +541,8 @@ int main(int argc, char ** argv)
   rclcpp::init(argc, argv);
   auto node = std::make_shared<camera_field_calib_tool::PnPCalibNodeNew>();
   rclcpp::spin(node);
+  const bool saved_result = node->SavedResult();
+  const bool requires_saved_exit = node->RequiresSavedExit();
   rclcpp::shutdown();
-  return 0;
+  return (!requires_saved_exit || saved_result) ? 0 : 2;
 }

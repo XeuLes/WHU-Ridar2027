@@ -54,6 +54,8 @@ private:
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr    pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr other_pub_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr roi_pub_;
+    rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr actual_map_pub_;
+    rclcpp::TimerBase::SharedPtr actual_map_publish_timer_;
     rclcpp::Publisher<vision_interface::msg::RadarWarn>::SharedPtr  detect_pub_;
     void callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg);
     void GetDynamicCloud(pcl::PointCloud<pcl::PointXYZ>& input_cloud,
@@ -69,6 +71,7 @@ private:
     void resetActualMapBuildState();
     void updateActualMapAccumulator(const pcl::PointCloud<pcl::PointXYZ>& roi_cloud);
     bool finalizeActualMap();
+    void publishActualMap();
     std::string makeVoxelKey(const pcl::PointXYZ& pt) const;
 
     const char* mapModeToString(RuntimeMapMode mode) const;

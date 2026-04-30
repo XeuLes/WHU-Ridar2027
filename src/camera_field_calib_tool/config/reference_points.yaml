@@ -2,7 +2,7 @@
 reference_points:
   - {name: "left_biaoshiban1_youxiaojiao", pos: [12.74, 10.63, 1.60]}
   - {name: "left_biaoshiban2_youxiaojiao", pos: [16.78, 10.63, 1.60]}
-  - {name: "center_highest_right", pos: [19.43, 3.73, 2.40]}
+  - {name: "yellow_left_zhuozihoumian_corner", pos: [14.42, 7.03, 0.00]}
   - {name: "yuanchu_muban", pos: [20.47, 1.25, 1.54]}
   - {name: "yellow_right_zhuozihoumian_corner", pos: [13.30, 3.68, 0.00]}
-  - {name: "center_highest_left", pos: [19.43, 4.33, 2.40]}
+  - {name: "first_left_yellow_corner", pos: [7.90, 6.88, 0.00]}

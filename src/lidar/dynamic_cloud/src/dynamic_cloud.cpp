@@ -80,6 +80,10 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
 
     // [新增] 专门用于发布 ROI 过滤后点云的话题
     roi_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>("/livox/roi_cloud", 10);
+    actual_map_pub_ = this->create_publisher<sensor_msgs::msg::PointCloud2>(
+        "/livox/actual_map", rclcpp::QoS(rclcpp::KeepLast(1)).reliable());
+    actual_map_publish_timer_ = this->create_wall_timer(
+        std::chrono::seconds(1), std::bind(&DynamicCloud::publishActualMap, this));
 
     RCLCPP_INFO(rclcpp::get_logger("rclcpp"), "Dynamic Cloud Launch!");
 }
@@ -233,7 +237,7 @@ void DynamicCloud::updateActualMapAccumulator(const pcl::PointCloud<pcl::PointXY
 
 bool DynamicCloud::finalizeActualMap()
 {
-    std::lock_guard<std::mutex> lock(actual_map_mutex_);
+    std::unique_lock<std::mutex> lock(actual_map_mutex_);
 
     if (actual_map_finalized_once_) {
         return actual_map_ready_;
@@ -292,7 +296,36 @@ bool DynamicCloud::finalizeActualMap()
                 "actual map 构建成功：frames=%d, min_hit=%d, stable_voxels=%zu",
                 actual_map_accumulated_frames_, min_hit_count, actual_map_cloud_->size());
 
+    lock.unlock();
+    publishActualMap();
+
     return true;
+}
+
+void DynamicCloud::publishActualMap()
+{
+    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_snapshot;
+    {
+        std::lock_guard<std::mutex> lock(actual_map_mutex_);
+        if (!actual_map_ready_ || !actual_map_cloud_ || actual_map_cloud_->empty()) {
+            return;
+        }
+        cloud_snapshot = actual_map_cloud_;
+    }
+
+    if (!actual_map_pub_ || !cloud_snapshot || cloud_snapshot->empty()) {
+        return;
+    }
+
+    sensor_msgs::msg::PointCloud2 msg;
+    pcl::toROSMsg(*cloud_snapshot, msg);
+    msg.header.frame_id = "rm_frame";
+    msg.header.stamp = this->now();
+    actual_map_pub_->publish(msg);
+
+    RCLCPP_INFO_ONCE(this->get_logger(),
+                "已发布 actual map 到 /livox/actual_map, points=%zu",
+                cloud_snapshot->size());
 }
 
 void DynamicCloud::refreshRuntimeMapMode()

@@ -43,6 +43,11 @@ const char* layoutName(OutputLayout layout)
     }
 }
 
+const char* semanticsName(bool post_nms_xyxy)
+{
+    return post_nms_xyxy ? "post-nms-xyxy-conf-cls" : "raw-cxcywh-conf";
+}
+
 const char* dtypeName(trt::DType dtype)
 {
     switch (dtype) {
@@ -130,6 +135,7 @@ __global__ void decode_kernel_uav(
     const T* predict,
     int num_bboxes,
     int output_cdim,
+    bool post_nms_xyxy,
     float confidence_threshold,
     const float* invert_affine_matrix,
     float* parray,
@@ -145,6 +151,7 @@ __global__ void decode_kernel_uav(
     float w = 0.0f;
     float h = 0.0f;
     float confidence = 0.0f;
+    float label = 0.0f;
 
     if constexpr (kLayout == OutputLayout::kCXN) {
         cx = readTensorValue(predict[0 * num_bboxes + position]);
@@ -152,6 +159,9 @@ __global__ void decode_kernel_uav(
         w = readTensorValue(predict[2 * num_bboxes + position]);
         h = readTensorValue(predict[3 * num_bboxes + position]);
         confidence = readTensorValue(predict[4 * num_bboxes + position]);
+        if (output_cdim > 5) {
+            label = readTensorValue(predict[5 * num_bboxes + position]);
+        }
     } else {
         const T* item = predict + position * output_cdim;
         cx = readTensorValue(item[0]);
@@ -159,9 +169,43 @@ __global__ void decode_kernel_uav(
         w = readTensorValue(item[2]);
         h = readTensorValue(item[3]);
         confidence = readTensorValue(item[4]);
+        if (output_cdim > 5) {
+            label = readTensorValue(item[5]);
+        }
     }
 
     if (!isfinite(confidence) || confidence < confidence_threshold) {
+        return;
+    }
+
+    float left = 0.0f;
+    float top = 0.0f;
+    float right = 0.0f;
+    float bottom = 0.0f;
+    if (post_nms_xyxy) {
+        left = cx;
+        top = cy;
+        right = w;
+        bottom = h;
+    } else {
+        left = cx - w * 0.5f;
+        top = cy - h * 0.5f;
+        right = cx + w * 0.5f;
+        bottom = cy + h * 0.5f;
+    }
+
+    if (!isfinite(left) || !isfinite(top) ||
+        !isfinite(right) || !isfinite(bottom) ||
+        right <= left || bottom <= top) {
+        return;
+    }
+
+    affine_project(invert_affine_matrix, left, top, &left, &top);
+    affine_project(invert_affine_matrix, right, bottom, &right, &bottom);
+
+    if (!isfinite(left) || !isfinite(top) ||
+        !isfinite(right) || !isfinite(bottom) ||
+        right <= left || bottom <= top) {
         return;
     }
 
@@ -170,21 +214,13 @@ __global__ void decode_kernel_uav(
         return;
     }
 
-    float left = cx - w * 0.5f;
-    float top = cy - h * 0.5f;
-    float right = cx + w * 0.5f;
-    float bottom = cy + h * 0.5f;
-
-    affine_project(invert_affine_matrix, left, top, &left, &top);
-    affine_project(invert_affine_matrix, right, bottom, &right, &bottom);
-
     float* pbox = parray + 1 + index * NUM_BOX_ELEMENT;
     pbox[0] = left;
     pbox[1] = top;
     pbox[2] = right;
     pbox[3] = bottom;
     pbox[4] = confidence;
-    pbox[5] = 0.0f;
+    pbox[5] = label;
     pbox[6] = 1.0f;
 }
 
@@ -194,6 +230,7 @@ void launchDecodeKernel(
     OutputLayout layout,
     int num_bboxes,
     int output_cdim,
+    bool post_nms_xyxy,
     float confidence_threshold,
     const float* invert_affine_matrix,
     float* parray,
@@ -206,12 +243,12 @@ void launchDecodeKernel(
     switch (layout) {
         case OutputLayout::kCXN:
             checkKernel((decode_kernel_uav<T, OutputLayout::kCXN><<<grid, block, 0, stream>>>(
-                predict, num_bboxes, output_cdim, confidence_threshold,
+                predict, num_bboxes, output_cdim, post_nms_xyxy, confidence_threshold,
                 invert_affine_matrix, parray, max_boxes)));
             return;
         case OutputLayout::kNXC:
             checkKernel((decode_kernel_uav<T, OutputLayout::kNXC><<<grid, block, 0, stream>>>(
-                predict, num_bboxes, output_cdim, confidence_threshold,
+                predict, num_bboxes, output_cdim, post_nms_xyxy, confidence_threshold,
                 invert_affine_matrix, parray, max_boxes)));
             return;
         default:
@@ -369,6 +406,7 @@ public:
             network_input_width_,
             output_cdim_,
             output_n_bboxes_);
+        printf("[UAV] output semantics: %s\n", semanticsName(output_is_post_nms_xyxy_));
         return true;
     }
 
@@ -543,6 +581,7 @@ public:
                     output_layout_,
                     output_n_bboxes_,
                     output_cdim_,
+                    output_is_post_nms_xyxy_,
                     conf_thr_,
                     affine_matrix_d2i_.gpu() + (size_t)ib * 6,
                     gpu_out_ptr,
@@ -556,6 +595,7 @@ public:
                     output_layout_,
                     output_n_bboxes_,
                     output_cdim_,
+                    output_is_post_nms_xyxy_,
                     conf_thr_,
                     affine_matrix_d2i_.gpu() + (size_t)ib * 6,
                     gpu_out_ptr,
@@ -664,6 +704,8 @@ private:
         output_layout_ = layout;
         output_cdim_ = output_cdim;
         output_n_bboxes_ = output_n_bboxes;
+        output_is_post_nms_xyxy_ =
+            output_cdim == 6 && output_n_bboxes <= MAX_IMAGE_BOXES;
         return true;
     }
 
@@ -681,6 +723,7 @@ private:
     bool is_dynamic_model_ = false;
     bool input_is_fp16_ = false;
     bool output_is_fp16_ = false;
+    bool output_is_post_nms_xyxy_ = false;
     OutputLayout output_layout_ = OutputLayout::kUnknown;
     trt::DType input_dtype_ = trt::DType::FLOAT;
     trt::DType output_dtype_ = trt::DType::FLOAT;

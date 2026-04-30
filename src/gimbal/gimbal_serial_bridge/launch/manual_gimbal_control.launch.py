@@ -31,6 +31,7 @@ def generate_launch_description():
     start_auto_aim = LaunchConfiguration("start_auto_aim")
     start_laser_aim = LaunchConfiguration("start_laser_aim")
     start_gimbal_solver = LaunchConfiguration("start_gimbal_solver")
+    control_mode = LaunchConfiguration("control_mode")
     aim_mode = LaunchConfiguration("aim_mode")
     bridge_params_file = LaunchConfiguration("bridge_params_file")
     hik_params_file = LaunchConfiguration("hik_params_file")
@@ -40,6 +41,8 @@ def generate_launch_description():
     enable_topic = LaunchConfiguration("enable_topic")
     manual_command_topic = LaunchConfiguration("manual_command_topic")
     final_cmd_topic = LaunchConfiguration("final_cmd_topic")
+    laser_target_topic = LaunchConfiguration("laser_target_topic")
+    disabled_target_topic = LaunchConfiguration("disabled_target_topic")
     gimbal_feedback_topic = LaunchConfiguration("gimbal_feedback_topic")
     gimbal_quaternion_topic = LaunchConfiguration("gimbal_quaternion_topic")
     yaw_deg = LaunchConfiguration("yaw_deg")
@@ -70,6 +73,35 @@ def generate_launch_description():
     yolo_swap_rb_input = LaunchConfiguration("yolo_swap_rb_input")
 
     intra = [{"use_intra_process_comms": True}]
+    fine_modes = "['fine', 'full', 'auto']"
+    all_vision_modes = (
+        "['fine', 'full', 'auto', 'vision_only', 'recognition_only', "
+        "'detect_only', 'direct_vision', 'direct_detect', 'direct_recognition']"
+    )
+    all_direct_modes = (
+        "['direct', 'direct_manual', 'direct_vision', 'direct_detect', "
+        "'direct_recognition']"
+    )
+
+    start_camera_effective = PythonExpression([
+        "'", start_camera, "'.lower() == 'true'",
+    ])
+    start_auto_aim_effective = PythonExpression([
+        "'", start_auto_aim, "'.lower() == 'true' and '",
+        control_mode, "'.lower() in ", all_vision_modes,
+    ])
+    start_laser_aim_effective = PythonExpression([
+        "'", start_laser_aim, "'.lower() == 'true' and '",
+        control_mode, "'.lower() not in ", all_direct_modes,
+    ])
+    rough_output_topic = PythonExpression([
+        "('", control_mode, "'.lower() in ", all_direct_modes, ") and '",
+        final_cmd_topic, "' or '", cmd_topic, "'",
+    ])
+    laser_target_topic_effective = PythonExpression([
+        "('", control_mode, "'.lower() in ", fine_modes, ") and '",
+        laser_target_topic, "' or '", disabled_target_topic, "'",
+    ])
     manual_mode = IfCondition(
         PythonExpression(["'", aim_mode, "'.lower() == 'manual'"])
     )
@@ -95,12 +127,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "start_auto_aim",
             default_value="true",
-            description="Whether to start auto_aim_fast together with manual control",
+            description="Whether to allow auto_aim_fast when control_mode uses recognition",
         ),
         DeclareLaunchArgument(
             "start_laser_aim",
             default_value="true",
-            description="Whether to start laser_aim_controller as the only final gimbal command publisher",
+            description="Whether to allow laser_aim_controller when control_mode is not direct",
         ),
         DeclareLaunchArgument(
             "start_gimbal_solver",
@@ -111,6 +143,17 @@ def generate_launch_description():
             "aim_mode",
             default_value="manual",
             description="manual: keyboard artificial rough aim; scan: radar rough aim plus scan recovery",
+        ),
+        DeclareLaunchArgument(
+            "control_mode",
+            default_value="fine",
+            description=(
+                "fine/full/auto: recognition + fine aim; "
+                "vision_only/recognition_only/detect_only: keep recognition but disable fine aim; "
+                "rough_only/rough/manual_only: rough manual/scan only, no recognition; camera still follows start_camera; "
+                "direct/direct_manual: rough source directly publishes final command, no recognition or laser; camera still follows start_camera; "
+                "direct_vision/direct_detect/direct_recognition: keep recognition and publish rough source directly"
+            ),
         ),
         DeclareLaunchArgument(
             "bridge_params_file",
@@ -151,6 +194,16 @@ def generate_launch_description():
             "final_cmd_topic",
             default_value="/gimbal/command_angles",
             description="Final command topic consumed by gimbal_serial_bridge",
+        ),
+        DeclareLaunchArgument(
+            "laser_target_topic",
+            default_value="/auto_aim/target",
+            description="auto_aim target topic consumed by laser_aim_controller in fine modes",
+        ),
+        DeclareLaunchArgument(
+            "disabled_target_topic",
+            default_value="/auto_aim/target_disabled",
+            description="Unused target topic used to keep recognition running while laser fine aim is disabled",
         ),
         DeclareLaunchArgument(
             "gimbal_feedback_topic",
@@ -293,8 +346,9 @@ def generate_launch_description():
             description="Swap R/B channels before YOLO inference",
         ),
         LogInfo(msg=[
-            "Gimbal aim bringup: aim_mode=", aim_mode,
-            ", manual rough topic=", cmd_topic,
+            "Gimbal aim bringup: control_mode=", control_mode,
+            ", aim_mode=", aim_mode,
+            ", rough output topic=", rough_output_topic,
             ", final command topic=", final_cmd_topic,
         ]),
         LogInfo(msg="Manual mode keyboard: W/S pitch, A/D yaw, Q quit keyboard thread"),
@@ -311,10 +365,11 @@ def generate_launch_description():
             executable="laser_aim_controller_node",
             name="laser_aim_controller_node",
             output="screen",
-            condition=IfCondition(start_laser_aim),
+            condition=IfCondition(start_laser_aim_effective),
             parameters=[
                 laser_params_file,
                 {
+                    "target_topic": laser_target_topic_effective,
                     "search_stage_mode": aim_mode,
                     "increment_mode": laser_increment_mode,
                     "rough_command_topic": cmd_topic,
@@ -335,7 +390,7 @@ def generate_launch_description():
             parameters=[
                 gimbal_solver_params_file,
                 {
-                    "target_angles_topic": cmd_topic,
+                    "target_angles_topic": rough_output_topic,
                     "gimbal_angles_topic": gimbal_feedback_topic,
                     "use_increment_output": False,
                 },
@@ -349,7 +404,7 @@ def generate_launch_description():
             emulate_tty=True,
             condition=manual_mode,
             parameters=[{
-                "cmd_topic": cmd_topic,
+                "cmd_topic": rough_output_topic,
                 "enable_topic": enable_topic,
                 "feedback_topic": gimbal_feedback_topic,
                 "initialize_from_feedback": True,
@@ -373,7 +428,7 @@ def generate_launch_description():
             package="rclcpp_components",
             executable="component_container_mt",
             output="screen",
-            condition=IfCondition(start_camera),
+            condition=IfCondition(start_camera_effective),
             composable_node_descriptions=[
                 ComposableNode(
                     package="hik_camera_ros2_driver",
@@ -401,7 +456,7 @@ def generate_launch_description():
                     package="auto_aim_fast",
                     plugin="auto_aim_fast::AutoAimNode",
                     name="auto_aim_node",
-                    condition=IfCondition(start_auto_aim),
+                    condition=IfCondition(start_auto_aim_effective),
                     parameters=[
                         tracker_params,
                         camera_params,
