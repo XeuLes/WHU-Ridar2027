@@ -441,6 +441,16 @@ LaserAimControllerNode::LaserAimControllerNode(const rclcpp::NodeOptions & optio
   RCLCPP_INFO(this->get_logger(), "pixel-primary auto mode with pnp assist: %s",
     enable_pnp_assist_ ? "true" : "false");
   RCLCPP_INFO(this->get_logger(), "search_stage_mode: %s", search_stage_mode_.c_str());
+  RCLCPP_INFO(this->get_logger(), "lost_auto_hold_timeout_s: %.3f", lost_auto_hold_timeout_s_);
+  RCLCPP_INFO(
+    this->get_logger(),
+    "laser pixel v depth compensation: %s ref=(%.3f m, %.2f px) slope=%.3f px/m clamp=[%.1f, %.1f]",
+    laser_pixel_v_depth_comp_enable_ ? "true" : "false",
+    laser_pixel_v_ref_distance_m_,
+    laser_pixel_v_ref_px_,
+    laser_pixel_v_slope_px_per_m_,
+    laser_pixel_v_min_px_,
+    laser_pixel_v_max_px_);
   RCLCPP_INFO(this->get_logger(), "scan_window_half_yaw_deg: %.3f", scan_window_half_yaw_deg_);
   RCLCPP_INFO(this->get_logger(), "scan_window_half_pitch_deg: %.3f", scan_window_half_pitch_deg_);
   RCLCPP_INFO(this->get_logger(), "scan_period_s: %.3f", scan_period_s_);
@@ -521,6 +531,7 @@ void LaserAimControllerNode::declareAndLoadParameters()
   this->declare_parameter<double>("control_rate_hz", 100.0);
   this->declare_parameter<double>("target_timeout_s", 0.12);
   this->declare_parameter<double>("feedback_snap_deg", 0.5);
+  this->declare_parameter<double>("lost_auto_hold_timeout_s", 2.0);
 
   this->declare_parameter<double>("fine_track_max_vel_deg_s", 20.0);
   this->declare_parameter<double>("fine_track_max_acc_deg_s2", 520.0);
@@ -584,12 +595,18 @@ void LaserAimControllerNode::declareAndLoadParameters()
   this->declare_parameter<double>("pitch_inc_max_deg", 5.0);
   this->declare_parameter<double>("fine_single_step_max_abs_deg", 2.0);
 
-  this->declare_parameter<double>("camera_fx", 15389.868272);
-  this->declare_parameter<double>("camera_fy", 15116.554824);
-  this->declare_parameter<double>("camera_cx", 841.988257);
-  this->declare_parameter<double>("camera_cy", 675.935439);
+  this->declare_parameter<double>("camera_fx", 33000.0);
+  this->declare_parameter<double>("camera_fy", 33000.0);
+  this->declare_parameter<double>("camera_cx", 426.297277);
+  this->declare_parameter<double>("camera_cy", 567.094694);
   this->declare_parameter<std::vector<double>>(
-    "laser_pixel_uv", std::vector<double>{803.0, 137.0});
+    "laser_pixel_uv", std::vector<double>{923.0, 368.0});
+  this->declare_parameter<bool>("laser_pixel_v_depth_comp_enable", true);
+  this->declare_parameter<double>("laser_pixel_v_ref_distance_m", 13.5);
+  this->declare_parameter<double>("laser_pixel_v_ref_px", 368.0);
+  this->declare_parameter<double>("laser_pixel_v_slope_px_per_m", 5.0);
+  this->declare_parameter<double>("laser_pixel_v_min_px", 330.0);
+  this->declare_parameter<double>("laser_pixel_v_max_px", 430.0);
 
   this->declare_parameter<double>("pixel_far_error_px", 300.0);
   this->declare_parameter<double>("pixel_near_error_px", 100.0);
@@ -673,6 +690,8 @@ void LaserAimControllerNode::declareAndLoadParameters()
   control_rate_hz_ = this->get_parameter("control_rate_hz").as_double();
   target_timeout_s_ = this->get_parameter("target_timeout_s").as_double();
   feedback_snap_deg_ = this->get_parameter("feedback_snap_deg").as_double();
+  lost_auto_hold_timeout_s_ =
+    std::max(0.0, this->get_parameter("lost_auto_hold_timeout_s").as_double());
 
   fine_track_max_vel_deg_s_ = this->get_parameter("fine_track_max_vel_deg_s").as_double();
   fine_track_max_acc_deg_s2_ = this->get_parameter("fine_track_max_acc_deg_s2").as_double();
@@ -698,6 +717,18 @@ void LaserAimControllerNode::declareAndLoadParameters()
   if (laser_uv.size() >= 2) {
     laser_pixel_u_ = laser_uv[0];
     laser_pixel_v_ = laser_uv[1];
+  }
+  laser_pixel_v_depth_comp_enable_ =
+    this->get_parameter("laser_pixel_v_depth_comp_enable").as_bool();
+  laser_pixel_v_ref_distance_m_ =
+    this->get_parameter("laser_pixel_v_ref_distance_m").as_double();
+  laser_pixel_v_ref_px_ = this->get_parameter("laser_pixel_v_ref_px").as_double();
+  laser_pixel_v_slope_px_per_m_ =
+    this->get_parameter("laser_pixel_v_slope_px_per_m").as_double();
+  laser_pixel_v_min_px_ = this->get_parameter("laser_pixel_v_min_px").as_double();
+  laser_pixel_v_max_px_ = this->get_parameter("laser_pixel_v_max_px").as_double();
+  if (laser_pixel_v_min_px_ > laser_pixel_v_max_px_) {
+    std::swap(laser_pixel_v_min_px_, laser_pixel_v_max_px_);
   }
 
   pixel_far_error_px_ = this->get_parameter("pixel_far_error_px").as_double();
@@ -981,6 +1012,8 @@ bool LaserAimControllerNode::computePnpIncrement(
 }
 
 bool LaserAimControllerNode::computePixelCorrection(
+  double laser_pixel_u,
+  double laser_pixel_v,
   double & out_yaw_deg,
   double & out_pitch_deg,
   double & pixel_err_px,
@@ -1005,8 +1038,8 @@ bool LaserAimControllerNode::computePixelCorrection(
     return false;
   }
 
-  const double du = filtered_target_u_ - laser_pixel_u_;
-  const double dv = filtered_target_v_ - laser_pixel_v_;
+  const double du = filtered_target_u_ - laser_pixel_u;
+  const double dv = filtered_target_v_ - laser_pixel_v;
   pixel_err_px = std::abs(du) + std::abs(dv);
 
   zone_scale = interpolateByErrorPx(
@@ -1042,11 +1075,11 @@ bool LaserAimControllerNode::computePixelCorrection(
   }
 
   const double target_yaw_ray_deg = rad2deg(std::atan2(filtered_target_u_ - camera_cx_, camera_fx_));
-  const double laser_yaw_ray_deg = rad2deg(std::atan2(laser_pixel_u_ - camera_cx_, camera_fx_));
+  const double laser_yaw_ray_deg = rad2deg(std::atan2(laser_pixel_u - camera_cx_, camera_fx_));
   pixel_err_yaw_deg = target_yaw_ray_deg - laser_yaw_ray_deg;
 
   const double target_pitch_ray_deg = rad2deg(std::atan2(filtered_target_v_ - camera_cy_, camera_fy_));
-  const double laser_pitch_ray_deg = rad2deg(std::atan2(laser_pixel_v_ - camera_cy_, camera_fy_));
+  const double laser_pitch_ray_deg = rad2deg(std::atan2(laser_pixel_v - camera_cy_, camera_fy_));
   pixel_err_pitch_deg = target_pitch_ray_deg - laser_pitch_ray_deg;
 
   double corr_yaw_deg = -pixel_err_yaw_deg * zone_scale;
@@ -1067,6 +1100,28 @@ bool LaserAimControllerNode::computePixelCorrection(
   out_yaw_deg = clampValue(corr_yaw_deg, -zone_step_max_deg, zone_step_max_deg);
   out_pitch_deg = clampValue(corr_pitch_deg, -zone_step_max_deg, zone_step_max_deg);
   return true;
+}
+
+double LaserAimControllerNode::depthCompensatedLaserPixelV(
+  const TargetObservation & obs,
+  bool pnp_valid) const
+{
+  if (!laser_pixel_v_depth_comp_enable_ || !pnp_valid) {
+    return laser_pixel_v_;
+  }
+
+  double distance_m = obs.distance;
+  if (!std::isfinite(distance_m) || distance_m <= min_valid_z_m_) {
+    distance_m = obs.tz;
+  }
+  if (!std::isfinite(distance_m) || distance_m <= min_valid_z_m_) {
+    return laser_pixel_v_;
+  }
+
+  const double raw_v =
+    laser_pixel_v_ref_px_ +
+    laser_pixel_v_slope_px_per_m_ * (distance_m - laser_pixel_v_ref_distance_m_);
+  return clampValue(raw_v, laser_pixel_v_min_px_, laser_pixel_v_max_px_);
 }
 
 void LaserAimControllerNode::applyManualOffset(double & yaw_deg, double & pitch_deg) const
@@ -1135,6 +1190,7 @@ void LaserAimControllerNode::targetCallback(const auto_aim_fast::msg::AimTarget:
   latest_target_.tx = msg->tx;
   latest_target_.ty = msg->ty;
   latest_target_.tz = msg->tz;
+  latest_target_.distance = msg->distance;
   latest_target_.rx_time = this->get_clock()->now();
   latest_target_.seq = ++target_seq_counter_;
 }
@@ -1250,9 +1306,12 @@ void LaserAimControllerNode::controlLoop()
     target_fresh && obs.has_target && obs.has_pose &&
     isFinite3(obs.tx, obs.ty, obs.tz) && obs.tz > min_valid_z_m_;
 
+  const double active_laser_pixel_u = laser_pixel_u_;
+  const double active_laser_pixel_v = depthCompensatedLaserPixelV(obs, pnp_valid);
+
   if (pixel_valid && obs.seq != last_filtered_target_seq_) {
     const double err_px_raw =
-      std::abs(obs.u - laser_pixel_u_) + std::abs(obs.v - laser_pixel_v_);
+      std::abs(obs.u - active_laser_pixel_u) + std::abs(obs.v - active_laser_pixel_v);
     const double avg_frames = interpolateByErrorPx(
       err_px_raw,
       static_cast<double>(pixel_far_avg_frames_),
@@ -1345,7 +1404,46 @@ void LaserAimControllerNode::controlLoop()
     pnp_bias_pitch_deg_ = 0.0;
   }
 
-  if (mode_changed && mode_ == ControlMode::LOST_RECOVER && search_stage_mode_ == "scan") {
+  if (tracking_mode || !visual_missing) {
+    lost_auto_hold_active_ = false;
+    lost_auto_hold_expired_logged_ = false;
+    lost_auto_hold_start_ = rclcpp::Time(0, 0, RCL_ROS_TIME);
+  } else if (has_tracked_target_auto_cmd_ &&
+             (mode_ == ControlMode::LOST_RECOVER || mode_ == ControlMode::HOLD))
+  {
+    if (!lost_auto_hold_active_) {
+      lost_auto_hold_active_ = true;
+      lost_auto_hold_expired_logged_ = false;
+      lost_auto_hold_start_ = now;
+    }
+  }
+
+  double lost_auto_hold_age_s = 0.0;
+  if (lost_auto_hold_active_ && lost_auto_hold_start_.nanoseconds() > 0) {
+    lost_auto_hold_age_s = std::max(0.0, (now - lost_auto_hold_start_).seconds());
+  }
+  const bool lost_auto_hold_valid =
+    lost_auto_hold_active_ &&
+    lost_auto_hold_timeout_s_ > 0.0 &&
+    lost_auto_hold_age_s <= lost_auto_hold_timeout_s_;
+  const bool hold_last_auto_after_loss =
+    lost_auto_hold_valid && has_hold_auto_cmd_;
+
+  if (lost_auto_hold_active_ && !lost_auto_hold_valid && !lost_auto_hold_expired_logged_) {
+    RCLCPP_INFO(
+      this->get_logger(),
+      "lost target auto hold expired after %.3f s, switching to %s recovery",
+      lost_auto_hold_age_s,
+      search_stage_mode_.c_str());
+    lost_auto_hold_expired_logged_ = true;
+  }
+
+  if (hold_last_auto_after_loss &&
+      mode_ == ControlMode::LOST_RECOVER &&
+      search_stage_mode_ == "scan")
+  {
+    recover_scan_state.initialized = false;
+  } else if (mode_changed && mode_ == ControlMode::LOST_RECOVER && search_stage_mode_ == "scan") {
     resetRecoverScanState(recover_scan_state, open_loop_yaw, open_loop_pitch, now);
   }
 
@@ -1422,6 +1520,7 @@ void LaserAimControllerNode::controlLoop()
   const bool inc_pnp_ok = computePnpIncrement(obs, inc_pnp, &target_from_laser);
 
   const bool pixel_ok = computePixelCorrection(
+    active_laser_pixel_u, active_laser_pixel_v,
     pixel_corr_yaw, pixel_corr_pitch,
     pixel_err_px,
     pixel_err_yaw_deg, pixel_err_pitch_deg,
@@ -1429,18 +1528,18 @@ void LaserAimControllerNode::controlLoop()
     filter_alpha, zone_name);
 
   if (pixel_ok && has_filtered_pixel_) {
-    pixel_du = filtered_target_u_ - laser_pixel_u_;
-    pixel_dv = filtered_target_v_ - laser_pixel_v_;
+    pixel_du = filtered_target_u_ - active_laser_pixel_u;
+    pixel_dv = filtered_target_v_ - active_laser_pixel_v;
 
     target_yaw_ray_deg =
       rad2deg(std::atan2(filtered_target_u_ - camera_cx_, camera_fx_));
     laser_yaw_ray_deg =
-      rad2deg(std::atan2(laser_pixel_u_ - camera_cx_, camera_fx_));
+      rad2deg(std::atan2(active_laser_pixel_u - camera_cx_, camera_fx_));
 
     target_pitch_ray_deg =
       rad2deg(std::atan2(filtered_target_v_ - camera_cy_, camera_fy_));
     laser_pitch_ray_deg =
-      rad2deg(std::atan2(laser_pixel_v_ - camera_cy_, camera_fy_));
+      rad2deg(std::atan2(active_laser_pixel_v - camera_cy_, camera_fy_));
 
     pixel_corr_yaw_before_deadzone = -pixel_err_yaw_deg * zone_scale;
     pixel_corr_pitch_before_deadzone = -pixel_err_pitch_deg * zone_scale;
@@ -1615,7 +1714,10 @@ void LaserAimControllerNode::controlLoop()
       planner_state.last_pred_target_pitch_deg = desired_pitch;
     }
   } else if (mode_ == ControlMode::LOST_RECOVER) {
-    if (search_stage_mode_ == "scan") {
+    if (hold_last_auto_after_loss) {
+      desired_yaw = hold_auto_yaw_deg_;
+      desired_pitch = hold_auto_pitch_deg_;
+    } else if (search_stage_mode_ == "scan") {
       if (!recover_scan_state.initialized) {
         resetRecoverScanState(recover_scan_state, open_loop_yaw, open_loop_pitch, now);
       }
@@ -1752,10 +1854,7 @@ void LaserAimControllerNode::controlLoop()
       recover_scan_state.last_scan_yaw_deg = scan_yaw;
       recover_scan_state.last_scan_pitch_deg = scan_pitch;
     } else {
-      if (has_tracked_target_auto_cmd_) {
-        desired_yaw = hold_auto_yaw_deg_;
-        desired_pitch = hold_auto_pitch_deg_;
-      } else if (has_rough) {
+      if (has_rough) {
         desired_yaw = rough_yaw;
         desired_pitch = rough_pitch;
       } else if (has_hold_auto_cmd_) {
@@ -1870,7 +1969,7 @@ void LaserAimControllerNode::controlLoop()
       obs.u, obs.v,
       has_filtered_pixel_ ? filtered_target_u_ : 0.0,
       has_filtered_pixel_ ? filtered_target_v_ : 0.0,
-      laser_pixel_u_, laser_pixel_v_,
+      active_laser_pixel_u, active_laser_pixel_v,
       pixel_du, pixel_dv,
       pixel_err_px, filter_alpha,
       zone_name.c_str());
@@ -1957,7 +2056,9 @@ void LaserAimControllerNode::controlLoop()
     RCLCPP_INFO_THROTTLE(
       this->get_logger(), *this->get_clock(), 200,
       "mode=%s search_mode=%s target_fresh=%s has_target=%s pixel_valid=%s pnp_valid=%s has_rough=%s "
+      "lost_hold=(%s %.2f/%.2f) "
       "gimbal=(%.3f, %.3f) hold_auto=(%.3f, %.3f) rough=(%.3f, %.3f) "
+      "laser_ref=(%.1f, %.1f) dist=%.2f "
       "pixel_err=(px=%.1f yaw=%.3f pitch=%.3f) zone=%s scale=%.3f step_max=%.3f "
       "pnp=(valid=%s yaw=%.3f pitch=%.3f bias=(%.3f, %.3f)) "
       "desired=(%.3f, %.3f) auto=(%.3f, %.3f) manual=(%.3f, %.3f) final=(%.3f, %.3f)",
@@ -1968,12 +2069,19 @@ void LaserAimControllerNode::controlLoop()
       pixel_valid ? "true" : "false",
       pnp_valid ? "true" : "false",
       has_rough ? "true" : "false",
+      hold_last_auto_after_loss ? "active" :
+        (lost_auto_hold_active_ ? "expired" : "idle"),
+      lost_auto_hold_age_s,
+      lost_auto_hold_timeout_s_,
       gimbal.yaw_deg,
       gimbal.pitch_deg,
       has_hold_auto_cmd_ ? hold_auto_yaw_deg_ : 0.0,
       has_hold_auto_cmd_ ? hold_auto_pitch_deg_ : 0.0,
       has_rough ? rough_yaw : 0.0,
       has_rough ? rough_pitch : 0.0,
+      active_laser_pixel_u,
+      active_laser_pixel_v,
+      obs.distance,
       pixel_err_px,
       pixel_err_yaw_deg,
       pixel_err_pitch_deg,

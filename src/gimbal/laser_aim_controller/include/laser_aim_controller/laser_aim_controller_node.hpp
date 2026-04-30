@@ -43,6 +43,7 @@ private:
     double tx{0.0};
     double ty{0.0};
     double tz{0.0};
+    double distance{0.0};
 
     rclcpp::Time rx_time{0, 0, RCL_ROS_TIME};
     uint64_t seq{0};
@@ -87,6 +88,8 @@ private:
     Eigen::Vector3d * target_from_laser) const;
 
   bool computePixelCorrection(
+    double laser_pixel_u,
+    double laser_pixel_v,
     double & out_yaw_deg,
     double & out_pitch_deg,
     double & pixel_err_px,
@@ -96,6 +99,8 @@ private:
     double & zone_step_max_deg,
     double & filter_alpha,
     std::string & zone_name) const;
+
+  double depthCompensatedLaserPixelV(const TargetObservation & obs, bool pnp_valid) const;
 
   void applyManualOffset(double & yaw_deg, double & pitch_deg) const;
   void publishCommand(double yaw_deg, double pitch_deg);
@@ -131,6 +136,7 @@ private:
   double control_rate_hz_{100.0};
   double target_timeout_s_{0.12};
   double feedback_snap_deg_{1.2};
+  double lost_auto_hold_timeout_s_{2.0};
 
   double fine_track_max_vel_deg_s_{5.0};
   double fine_track_max_acc_deg_s2_{60.0};
@@ -151,8 +157,14 @@ private:
   double camera_cx_{0.0};
   double camera_cy_{0.0};
 
-  double laser_pixel_u_{803.0};
-  double laser_pixel_v_{137.0};
+  double laser_pixel_u_{923.0};
+  double laser_pixel_v_{368.0};
+  bool laser_pixel_v_depth_comp_enable_{true};
+  double laser_pixel_v_ref_distance_m_{13.5};
+  double laser_pixel_v_ref_px_{368.0};
+  double laser_pixel_v_slope_px_per_m_{5.0};
+  double laser_pixel_v_min_px_{330.0};
+  double laser_pixel_v_max_px_{430.0};
 
   double pixel_far_error_px_{300.0};
   double pixel_near_error_px_{100.0};
@@ -226,6 +238,9 @@ private:
   double hold_auto_yaw_deg_{0.0};
   double hold_auto_pitch_deg_{0.0};
   bool has_tracked_target_auto_cmd_{false};
+  bool lost_auto_hold_active_{false};
+  bool lost_auto_hold_expired_logged_{false};
+  rclcpp::Time lost_auto_hold_start_{0, 0, RCL_ROS_TIME};
 
   double pnp_bias_yaw_deg_{0.0};
   double pnp_bias_pitch_deg_{0.0};

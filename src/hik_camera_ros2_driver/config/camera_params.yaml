@@ -30,7 +30,7 @@
     cam1.camera_topic: "camera1/image"
 
     cam1.acquisition_frame_rate: 100.0
-    cam1.exposure_time: 20000
+    cam1.exposure_time: 10000
     cam1.gain: 20.0
 
     # ---------------- cam2（第三台相机） ----------------
