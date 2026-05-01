@@ -23,13 +23,13 @@ def generate_launch_description():
     livox_share_dir = get_package_share_directory('livox_ros2_driver')
 
     default_map_path = os.path.join(
-        localization_share_dir, 'config', '基础制造_rm_frame.pcd'
+        localization_share_dir, 'config', 'RM2025.pcd'
     )
     default_manual_yaml = os.path.join(
         localization_share_dir, 'config', 'livox_rm_manual.yaml'
     )
 
-    default_camera_extrinsic_yaml = '/home/user/code/T-DT_Radar-main/config/out_matrix_gc.yaml'
+    default_camera_extrinsic_yaml = '/home/user/code/T-DT_Radar-main/config/out_matrix_guanggu.yaml'
 
     default_camera_to_lidar_yaml = os.path.join(
         localization_share_dir, 'config', 'camera_to_lidar.yaml'

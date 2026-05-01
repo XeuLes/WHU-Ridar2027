@@ -475,6 +475,8 @@ def generate_launch_description():
                             "detector.yolo.use_fp16_input": yolo_use_fp16,
                             "detector.yolo.target_class_id": yolo_class_id,
                             "detector.yolo.swap_rb_input": yolo_swap_rb_input,
+                            "debug.publish_debug_image": True,
+                            "debug.decimation": 1,
                         },
                     ],
                     extra_arguments=intra,

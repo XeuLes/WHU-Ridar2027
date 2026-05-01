@@ -24,10 +24,10 @@ public:
     frame_index_(0),
     saved_count_(0)
   {
-    topic_ = this->declare_parameter<std::string>("topic", "/camera0/image");
+    topic_ = this->declare_parameter<std::string>("topic", "/camera1/image");
     save_dir_ = this->declare_parameter<std::string>("save_dir", "/tmp/camera1_frames");
     image_format_ = this->declare_parameter<std::string>("image_format", "jpg");   // jpg/png
-    save_every_n_ = this->declare_parameter<int>("save_every_n", 30);                // 每N帧存1张
+    save_every_n_ = this->declare_parameter<int>("save_every_n", 10);                // 每N帧存1张
     jpeg_quality_ = this->declare_parameter<int>("jpeg_quality", 95);               // jpg质量
     png_compression_ = this->declare_parameter<int>("png_compression", 3);          // png压缩级别 0~9
     use_timestamp_name_ = this->declare_parameter<bool>("use_timestamp_name", false);

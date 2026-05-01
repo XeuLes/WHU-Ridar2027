@@ -212,9 +212,9 @@ public:
         auto update_one = [&](int idx) {
             const auto& p = msg->poses[idx].position;
 
-            // NaN 检查：只要任一分量非有限，就视作无效
+            // NaN 或默认零坐标都视作无效，避免自方默认 UAV 点翻转后画到地图角落。
             if (!std::isfinite(p.x) || !std::isfinite(p.y) ||
-                !std::isfinite(p.z)) {
+                !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0)) {
                 // 不更新，保持上次值；为了避免残留旧点一直画，可将更新时间置0
                 // 这里选择“置0”，保证无效时不绘制
                 uav_update[idx] = 0.0;

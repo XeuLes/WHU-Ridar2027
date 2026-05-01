@@ -517,9 +517,13 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         auto& point = transformed_cloud.points[i];
         const bool is_uav_other = uav_other_filter(point);
         
+        // // ROI 边界判断 (去除场外点、地面点、高空点)
+        // bool is_out_of_bounds = (point.x < 10.0 || point.x > 40.0 || 
+        //                          point.y < 2.0 || point.y > 10.0 || 
+        //                          point.z < -1 || point.z > 5.0);
         // ROI 边界判断 (去除场外点、地面点、高空点)
-        bool is_out_of_bounds = (point.x < 10.0 || point.x > 40.0 || 
-                                 point.y < 2.0 || point.y > 10.0 || 
+        bool is_out_of_bounds = (point.x < 0.0 || point.x > 28.0 || 
+                                 point.y < 0.0 || point.y > 15.0 || 
                                  point.z < -1 || point.z > 5.0);
 
         if (is_uav_other) {
