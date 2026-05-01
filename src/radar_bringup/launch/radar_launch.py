@@ -11,12 +11,14 @@ from launch.actions import (
     RegisterEventHandler,
     Shutdown,
 )
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events.process import ShutdownProcess, matches_executable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _team_config(our_color: str):
@@ -594,6 +596,26 @@ def _build_launch(context):
         ],
     )
 
+    referee_rosbag_recorder_node = Node(
+        package="radar_bringup",
+        executable="referee_rosbag_recorder.py",
+        name="referee_rosbag_recorder",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("record_rosbag")),
+        parameters=[
+            {
+                "enabled": ParameterValue(LaunchConfiguration("record_rosbag"), value_type=bool),
+                "output_dir": LaunchConfiguration("rosbag_output_dir"),
+                "record_duration_sec": ParameterValue(
+                    LaunchConfiguration("rosbag_record_duration_sec"),
+                    value_type=float,
+                ),
+                "game_status_topic": "/radar/referee/game_status",
+                "start_game_progress": 4,
+            }
+        ],
+    )
+
     detect_debug_image_view_node = Node(
         package="image_view",
         executable="image_view",
@@ -615,6 +637,10 @@ def _build_launch(context):
         LogInfo(msg=f"decision params file: {decision_params_file}"),
         LogInfo(msg=f"referee rx_mode={referee_rx_mode} tx_mode={referee_tx_mode}"),
         LogInfo(msg=f"referee serial device={referee_serial_device} baudrate={referee_serial_baudrate}"),
+        LogInfo(
+            msg=["match rosbag recorder enabled, output_dir=", LaunchConfiguration("rosbag_output_dir")],
+            condition=IfCondition(LaunchConfiguration("record_rosbag")),
+        ),
         gimbal_solver_node,
         laser_aim_node,
         gimbal_bridge_node,
@@ -627,6 +653,7 @@ def _build_launch(context):
         radar_debug_container,
         radar_decision_comm_container,
         map_pcd_publisher,
+        referee_rosbag_recorder_node,
         track_status_window_node,
         detect_debug_image_view_node,
         rviz_node,
@@ -771,6 +798,21 @@ def generate_launch_description():
                 "pdu_poll_period_ms",
                 default_value="2",
                 description="shared-memory PDU poll period in milliseconds",
+            ),
+            DeclareLaunchArgument(
+                "record_rosbag",
+                default_value="false",
+                description="record all ROS topics for a match when referee game_progress enters 4",
+            ),
+            DeclareLaunchArgument(
+                "rosbag_output_dir",
+                default_value="/home/user/DATA/RADAR_ROSBAG",
+                description="base directory for match-triggered rosbag recordings",
+            ),
+            DeclareLaunchArgument(
+                "rosbag_record_duration_sec",
+                default_value="420.0",
+                description="match-triggered rosbag recording duration in seconds",
             ),
             DeclareLaunchArgument(
                 "enable_calibration",

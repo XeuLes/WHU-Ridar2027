@@ -18,6 +18,11 @@ install(DIRECTORY
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  src/referee_rosbag_recorder.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 # 安装 radar_bringup 自身的 config 目录（如果后续补充文件会一并安装）
 if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/config")
   install(DIRECTORY

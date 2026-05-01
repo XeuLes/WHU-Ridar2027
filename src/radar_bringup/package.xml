@@ -15,6 +15,9 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>rclcpp_components</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>ros2bag</exec_depend>
+  <exec_depend>rosbag2_transport</exec_depend>
 
   <!-- 运行依赖：激光雷达驱动 -->
   <exec_depend>livox_ros2_driver</exec_depend>
