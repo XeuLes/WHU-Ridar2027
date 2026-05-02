@@ -77,7 +77,7 @@ def generate_launch_description():
         'enable_gicp_total_timeout', default_value='true'
     )
     declare_gicp_total_timeout_sec = DeclareLaunchArgument(
-        'gicp_total_timeout_sec', default_value='10.0'
+        'gicp_total_timeout_sec', default_value='20.0'
     )
     declare_fallback_to_initial_after_timeout = DeclareLaunchArgument(
         'fallback_to_initial_after_timeout', default_value='true'
@@ -106,11 +106,11 @@ def generate_launch_description():
         'downsample_leaf_size', default_value='0.1'
     )
 
-    declare_roi_min_x = DeclareLaunchArgument('roi_min_x', default_value='0.0')
-    declare_roi_max_x = DeclareLaunchArgument('roi_max_x', default_value='12.0')
+    declare_roi_min_x = DeclareLaunchArgument('roi_min_x', default_value='5.0')
+    declare_roi_max_x = DeclareLaunchArgument('roi_max_x', default_value='40.0')
     declare_roi_min_y = DeclareLaunchArgument('roi_min_y', default_value='-10.0')
-    declare_roi_max_y = DeclareLaunchArgument('roi_max_y', default_value='10.0')
-    declare_roi_max_z = DeclareLaunchArgument('roi_max_z', default_value='5.0')
+    declare_roi_max_y = DeclareLaunchArgument('roi_max_y', default_value='8.0')
+    declare_roi_max_z = DeclareLaunchArgument('roi_max_z', default_value='1.5')
 
     declare_tf_publish_rate_hz = DeclareLaunchArgument(
         'tf_publish_rate_hz', default_value='20.0'

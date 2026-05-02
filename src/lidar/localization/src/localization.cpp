@@ -77,7 +77,7 @@ public:
 
         // GICP 总尝试时间超时
         this->declare_parameter<bool>("enable_gicp_total_timeout", true);
-        this->declare_parameter<double>("gicp_total_timeout_sec", 10.0);
+        this->declare_parameter<double>("gicp_total_timeout_sec", 20.0);
         this->declare_parameter<bool>("fallback_to_initial_after_timeout", true);
 
         // GICP 参数
@@ -92,11 +92,11 @@ public:
         this->declare_parameter<double>("downsample_leaf_size", 0.1);
 
         // ROI
-        this->declare_parameter<double>("roi_min_x", 0.0);
-        this->declare_parameter<double>("roi_max_x", 12.0);
-        this->declare_parameter<double>("roi_min_y", -10.0);
-        this->declare_parameter<double>("roi_max_y", 10.0);
-        this->declare_parameter<double>("roi_max_z", 5.0);
+        this->declare_parameter<double>("roi_min_x", 5.0);
+        this->declare_parameter<double>("roi_max_x", 30.0);
+        this->declare_parameter<double>("roi_min_y", -6.0);
+        this->declare_parameter<double>("roi_max_y", 12.0);
+        this->declare_parameter<double>("roi_max_z", 1.5);
 
         // TF 稳定播发频率
         this->declare_parameter<double>("tf_publish_rate_hz", 20.0);
@@ -589,6 +589,32 @@ private:
         return true;
     }
 
+    void publishFilteredDebugClouds(const pcl::PointCloud<pcl::PointXYZ>::Ptr& source,
+                                    const Eigen::Matrix4f& transform,
+                                    const rclcpp::Time& stamp)
+    {
+        if (!source || source->empty()) {
+            return;
+        }
+
+        sensor_msgs::msg::PointCloud2 filter_msg;
+        pcl::toROSMsg(*source, filter_msg);
+        filter_msg.header.frame_id = "livox_frame";
+        filter_msg.header.stamp = stamp;
+        filter_publisher_->publish(filter_msg);
+
+        pcl::PointCloud<pcl::PointXYZ>::Ptr rm_cloud(new pcl::PointCloud<pcl::PointXYZ>());
+        pcl::transformPointCloud(*source, *rm_cloud, transform);
+
+        sensor_msgs::msg::PointCloud2 rm_msg;
+        pcl::toROSMsg(*rm_cloud, rm_msg);
+        rm_msg.header.frame_id = "rm_frame";
+        rm_msg.header.stamp = stamp;
+        filter_rm_publisher_->publish(rm_msg);
+
+        updateLatestScanMapCloud(rm_cloud);
+    }
+
     void callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     {
         const rclcpp::Time msg_stamp = safeMsgStamp(msg);
@@ -608,10 +634,6 @@ private:
         pcl::PointCloud<pcl::PointXYZ>::Ptr source_cloud(new pcl::PointCloud<pcl::PointXYZ>());
         pcl::fromROSMsg(*msg, *source_cloud);
 
-        if (has_aligned_) {
-            return;
-        }
-
         if (accumulated_clouds_.size() < static_cast<size_t>(accumulate_time_)) {
             accumulated_clouds_.push_back(source_cloud);
             return;
@@ -626,7 +648,6 @@ private:
             RCLCPP_INFO(this->get_logger(), "开始 GICP 自动配准计时");
         }
 
-        grid_map_.clear();
         for (auto& cloud : accumulated_clouds_) {
             for (const auto& point : *cloud) {
                 if (point.x <= 0) continue;
@@ -672,41 +693,13 @@ private:
             return;
         }
 
-        pcl::PointCloud<pcl::PointXYZ>::Ptr live_scan_map_source(new pcl::PointCloud<pcl::PointXYZ>());
-        for (const auto& cloud : accumulated_clouds_) {
-            for (const auto& point : cloud->points) {
-                if (point.x > roi_min_x_ && point.x < roi_max_x_ &&
-                    point.y > roi_min_y_ && point.y < roi_max_y_ &&
-                    point.z < roi_max_z_) {
-                    live_scan_map_source->push_back(point);
-                }
-            }
-        }
-
         pcl::PointCloud<pcl::PointXYZ>::Ptr downsampled_source(new pcl::PointCloud<pcl::PointXYZ>());
         downsample_cloud(roi_cloud, downsampled_source, static_cast<float>(downsample_leaf_size_));
 
-        sensor_msgs::msg::PointCloud2 filter_msg;
-        pcl::toROSMsg(*downsampled_source, filter_msg);
-        filter_msg.header.frame_id = "livox_frame";
-        filter_msg.header.stamp = msg_stamp;
-        filter_publisher_->publish(filter_msg);
+        publishFilteredDebugClouds(downsampled_source, getCurrentTfTransform(), msg_stamp);
 
-        // 直接发布到 rm_frame 的调试点云
-        {
-            const Eigen::Matrix4f T = getCurrentTfTransform();
-            pcl::PointCloud<pcl::PointXYZ>::Ptr rm_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-            pcl::PointCloud<pcl::PointXYZ>::Ptr live_map_rm_cloud(new pcl::PointCloud<pcl::PointXYZ>());
-            pcl::transformPointCloud(*downsampled_source, *rm_cloud, T);
-            pcl::transformPointCloud(*live_scan_map_source, *live_map_rm_cloud, T);
-
-            sensor_msgs::msg::PointCloud2 rm_msg;
-            pcl::toROSMsg(*rm_cloud, rm_msg);
-            rm_msg.header.frame_id = "rm_frame";
-            rm_msg.header.stamp = msg_stamp;
-            filter_rm_publisher_->publish(rm_msg);
-
-            updateLatestScanMapCloud(live_map_rm_cloud);
+        if (has_aligned_) {
+            return;
         }
 
         {
@@ -792,13 +785,19 @@ private:
         RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                              "GICP worker 配准中... Score: %.4f", fit_score);
 
-        if (gicp->hasConverged() && fit_score < gicp_success_fitness_threshold_) {
+        if (fit_score < gicp_success_fitness_threshold_) {
+            Eigen::Matrix4f success_transform = Eigen::Matrix4f::Identity();
             {
                 std::lock_guard<std::mutex> lock(tf_mutex_);
                 final_transform_ = gicp->getFinalTransformation();
+                success_transform = final_transform_;
                 has_aligned_ = true;
             }
 
+            rclcpp::Time success_stamp = this->now();
+            getTfStamp(success_stamp);
+            publishTF(success_transform, success_stamp);
+            publishFilteredDebugClouds(source, success_transform, success_stamp);
             publishLocalizationStatus(LocalizationStatus::PRIOR_SUCCESS);
 
             RCLCPP_INFO(this->get_logger(), "✅ 配准成功! 位姿已锁定。");
@@ -846,7 +845,7 @@ private:
     std::string initial_pose_mode_{"offline"};
 
     bool enable_gicp_total_timeout_{true};
-    double gicp_total_timeout_sec_{10.0};
+    double gicp_total_timeout_sec_{20.0};
     bool fallback_to_initial_after_timeout_{true};
     bool publish_full_pcd_map_{false};
     bool publish_live_scan_map_on_gicp_timeout_{false};
@@ -871,11 +870,11 @@ private:
     double grid_size_degrees_ = 0.1;
     double downsample_leaf_size_ = 0.2;
 
-    double roi_min_x_{0.0};
-    double roi_max_x_{12.0};
+    double roi_min_x_{5.0};
+    double roi_max_x_{30.0};
     double roi_min_y_{-10.0};
-    double roi_max_y_{10.0};
-    double roi_max_z_{5.0};
+    double roi_max_y_{8.0};
+    double roi_max_z_{1.5};
 
     std::map<std::pair<int, int>, Grid> grid_map_;
 

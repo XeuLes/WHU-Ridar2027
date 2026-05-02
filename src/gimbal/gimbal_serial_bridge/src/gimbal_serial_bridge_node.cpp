@@ -241,9 +241,12 @@ public:
 
         RCLCPP_INFO(
             this->get_logger(),
-            "Started. baud=%d cmd_topic=%s enable_topic=%s yaw_drift_rate=%.9f pitch_protocol_bias_deg=%.6f manual_bias=(yaw=%.6f pitch=%.6f) zero_init_sample_count=%d zero_stable_window_s=%.3f zero_stable_required_count=%d zero_stable_max_delta_deg=%.3f zero_init_timeout_s=%.3f gimbal_disconnect_timeout_s=%.3f",
+            "Started. baud=%d cmd_topic=%s enable_topic=%s yaw_drift_rate=%.9f yaw_left_limit=(%s %.6f deg) pitch_protocol_bias_deg=%.6f manual_bias=(yaw=%.6f pitch=%.6f) zero_init_sample_count=%d zero_stable_window_s=%.3f zero_stable_required_count=%d zero_stable_max_delta_deg=%.3f zero_init_timeout_s=%.3f gimbal_disconnect_timeout_s=%.3f",
             baud_, cmd_topic_.c_str(), enable_topic_.c_str(),
-            yaw_drift_rate_, pitch_protocol_bias_deg_,
+            yaw_drift_rate_,
+            yaw_left_limit_enable_ ? "enabled" : "disabled",
+            yaw_left_limit_deg_,
+            pitch_protocol_bias_deg_,
             manual_yaw_bias_deg_, manual_pitch_bias_deg_,
             zero_init_sample_count_,
             zero_stable_window_s_, zero_stable_required_count_,
@@ -306,6 +309,8 @@ private:
 
         // same unit as yaw per second
         this->declare_parameter<double>("yaw_drift_rate", 0.05);
+        this->declare_parameter<bool>("yaw_left_limit_enable", true);
+        this->declare_parameter<double>("yaw_left_limit_deg", 3.0);
         // pitch protocol/frame bias:
         // tx to MCU   : pitch_hw   = pitch_ctrl + bias
         // rx to ctrl  : pitch_ctrl = pitch_hw   - bias
@@ -358,6 +363,10 @@ private:
             resetZeroInitializationStateLocked();
         }
         yaw_drift_rate_ = this->get_parameter("yaw_drift_rate").as_double();
+        yaw_left_limit_enable_ =
+            this->get_parameter("yaw_left_limit_enable").as_bool();
+        yaw_left_limit_deg_ =
+            this->get_parameter("yaw_left_limit_deg").as_double();
         pitch_protocol_bias_deg_ = this->get_parameter("pitch_protocol_bias_deg").as_double();
         manual_yaw_bias_deg_ = this->get_parameter("manual_yaw_bias_deg").as_double();
         manual_pitch_bias_deg_ = this->get_parameter("manual_pitch_bias_deg").as_double();
@@ -861,8 +870,19 @@ private:
                 cmd_pitch = last_cmd_pitch_;
             }
 
+            float limited_cmd_yaw_true = has_cmd ? cmd_yaw_true : 0.0f;
+            if (yaw_left_limit_enable_ &&
+                std::isfinite(limited_cmd_yaw_true) &&
+                limited_cmd_yaw_true > static_cast<float>(yaw_left_limit_deg_)) {
+                RCLCPP_WARN_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 1000,
+                    "Clamp true yaw command from %.6f deg to left limit %.6f deg before drift compensation.",
+                    static_cast<double>(limited_cmd_yaw_true), yaw_left_limit_deg_);
+                limited_cmd_yaw_true = static_cast<float>(yaw_left_limit_deg_);
+            }
+
             const float base_yaw_true =
-                (has_cmd ? cmd_yaw_true : 0.0f) +
+                limited_cmd_yaw_true +
                 static_cast<float>(zero_yaw_offset + manual_yaw_bias_deg_);
             const float base_pitch_ctrl =
                 (has_cmd ? cmd_pitch : 0.0f) +
@@ -966,6 +986,8 @@ private:
 
     // same unit as yaw per second
     double yaw_drift_rate_{0.0};
+    bool yaw_left_limit_enable_{true};
+    double yaw_left_limit_deg_{3.0};
 
     // protocol/frame pitch bias:
     // tx to MCU   : pitch_hw   = pitch_ctrl + bias
