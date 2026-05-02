@@ -58,6 +58,10 @@ def _build_launch(context):
     referee_tx_mode = LaunchConfiguration("referee_tx_mode").perform(context)
     referee_serial_device = LaunchConfiguration("referee_serial_device").perform(context)
     referee_serial_baudrate = int(LaunchConfiguration("referee_serial_baudrate").perform(context))
+    referee_publish_raw_debug = ParameterValue(
+        LaunchConfiguration("referee_publish_raw_debug"),
+        value_type=bool,
+    )
     decision_params_file = LaunchConfiguration("decision_params_file").perform(context)
     pdu_poll_period_ms = int(LaunchConfiguration("pdu_poll_period_ms").perform(context))
     enable_calibration = LaunchConfiguration("enable_calibration").perform(context).strip().lower()
@@ -99,8 +103,12 @@ def _build_launch(context):
     auto_aim_info_cfg = os.path.join(auto_aim_share, "config", "camera_info.yaml")
 
     intra = [{"use_intra_process_comms": True}]
-    enemy_uav_coord = (27.131, 2.369, 1.7)
+    enemy_uav_coord = (26.831, 1.969, 1.7)
     enemy_uav_default = {
+        "uav_enemy_default_x": enemy_uav_coord[0],
+        "uav_enemy_default_y": enemy_uav_coord[1],
+        "uav_enemy_default_z": enemy_uav_coord[2],
+        "uav_use_enemy_default_by_identity": True,
         "uav_default_out_blue_x": 0.0,
         "uav_default_out_blue_y": 0.0,
         "uav_default_out_blue_z": 0.0,
@@ -232,6 +240,10 @@ def _build_launch(context):
                 "region_points_path": resolve_region_points_yaml,
                 "minimap_path": resolve_minimap_png,
                 "is_test": False,
+                "self_color_override": team["match_self_color"],
+                "use_match_info_color": False,
+                "use_referee_identity_color": True,
+                "referee_identity_topic": "/radar/referee/robot_identity",
                 "uav_publish_default_output": True,
                 **enemy_uav_default,
             }
@@ -247,6 +259,7 @@ def _build_launch(context):
             {
                 "use_match_info_color": False,
                 "self_color_override": team["match_self_color"],
+                "use_referee_identity_color": True,
                 "semantic_tracking_enabled": True,
                 "semantic_history_size": 20,
                 "semantic_confirm_min_hits": 2,
@@ -300,6 +313,7 @@ def _build_launch(context):
         parameters=[
             {
                 "our_color": team["decision_my_color"],
+                "use_referee_identity_color": True,
                 "input_detect_topic": "/kalman_detect",
                 "output_our_tracks_topic": "/radar/perception/our_tracks",
                 "output_enemy_tracks_topic": "/radar/perception/enemy_tracks",
@@ -317,7 +331,7 @@ def _build_launch(context):
                 "map_path": os.path.join(debug_map_share, "config", "RM2025.png"),
                 "use_match_info_color": False,
                 "self_color_override": team["match_self_color"],
-                "use_referee_identity_color": False,
+                "use_referee_identity_color": True,
             }
         ],
         extra_arguments=intra,
@@ -408,6 +422,7 @@ def _build_launch(context):
                         "tx_mode": referee_tx_mode,
                         "device": referee_serial_device,
                         "baudrate": referee_serial_baudrate,
+                        "publish_raw_debug": referee_publish_raw_debug,
                     },
                 ],
                 extra_arguments=intra,
@@ -777,6 +792,11 @@ def generate_launch_description():
                 "referee_serial_baudrate",
                 default_value="115200",
                 description="referee serial baudrate",
+            ),
+            DeclareLaunchArgument(
+                "referee_publish_raw_debug",
+                default_value="false",
+                description="publish raw referee serial RX bytes to /radar/debug/referee_raw_bytes",
             ),
             DeclareLaunchArgument(
                 "decision_params_file",

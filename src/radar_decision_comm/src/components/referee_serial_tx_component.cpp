@@ -33,7 +33,7 @@ public:
     tx_mode_ = this->declare_parameter<std::string>("tx_mode", "topic");
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
     map_0305_layout_ = this->declare_parameter<std::string>("map_0305_layout", "legacy24");
-    device_ = this->declare_parameter<std::string>("device", "/dev/ttyUSB0");
+    device_ = this->declare_parameter<std::string>("device", "/dev/ttyUSB1");
     baudrate_ = this->declare_parameter<int>("baudrate", 115200);
     timeout_ms_ = this->declare_parameter<int>("timeout_ms", 2);
     reconnect_interval_ms_ = this->declare_parameter<int>("reconnect_interval_ms", 1000);

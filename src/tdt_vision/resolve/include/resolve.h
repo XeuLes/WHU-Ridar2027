@@ -22,6 +22,7 @@
 #include <pcl_conversions/pcl_conversions.h>
 
 #include "radar_utils.h"
+#include "radar_decision_comm/msg/referee_robot_identity.hpp"
 #include "vision_interface/msg/detect_result.hpp"
 #include "vision_interface/msg/match_info.hpp"
 
@@ -38,12 +39,16 @@ public:
         const vision_interface::msg::DetectResult::SharedPtr msg);
     void MatchInfoCallback(
         const vision_interface::msg::MatchInfo::SharedPtr msg);
+    void RefereeIdentityCallback(
+        const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg);
 
     rclcpp::Subscription<geometry_msgs::msg::Vector3>::SharedPtr point_sub;
     rclcpp::Subscription<vision_interface::msg::DetectResult>::SharedPtr
         detect_sub;
     rclcpp::Subscription<vision_interface::msg::MatchInfo>::SharedPtr
         match_info_sub;
+    rclcpp::Subscription<radar_decision_comm::msg::RefereeRobotIdentity>::SharedPtr
+        referee_identity_sub;
 
     parser* parser_{nullptr};
 
@@ -119,10 +124,30 @@ private:
     // parameters
     bool is_test_{false};
     bool uav_publish_default_output_{true};
+    bool use_match_info_color_{true};
+    bool use_referee_identity_color_{true};
+    bool has_referee_identity_color_{false};
+    bool uav_use_enemy_default_by_identity_{true};
+
+    int8_t self_color_override_{-1};
+    int8_t referee_identity_color_{-1};
+
+    double uav_config_default_out_x_[2]{0.0, 0.0};
+    double uav_config_default_out_y_[2]{0.0, 0.0};
+    double uav_config_default_out_z_[2]{0.0, 0.0};
+
+    double uav_enemy_default_x_{0.0};
+    double uav_enemy_default_y_{0.0};
+    double uav_enemy_default_z_{0.0};
 
     double uav_default_out_x_[2]{0.0, 0.0};
     double uav_default_out_y_[2]{0.0, 0.0};
     double uav_default_out_z_[2]{0.0, 0.0};
+
+    int8_t NormalizeSelfColor(int raw_color, int8_t fallback) const;
+    void RefreshEffectiveSelfColorFromFallback();
+    void RefreshUavDefaultOutputs();
+    bool HasEnemyDefaultPose() const;
 
     int    uav_other_timeout_ms_{500};
     double uav_default_z_{1.95};

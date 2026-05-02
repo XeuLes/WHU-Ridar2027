@@ -148,6 +148,15 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
 
     this->declare_parameter<bool>("is_test", false);
     this->declare_parameter<bool>("uav_publish_default_output", true);
+    this->declare_parameter<bool>("use_match_info_color", true);
+    this->declare_parameter<bool>("use_referee_identity_color", true);
+    this->declare_parameter<int>("self_color_override", -1);
+    this->declare_parameter<std::string>(
+        "referee_identity_topic", "/radar/referee/robot_identity");
+    this->declare_parameter<bool>("uav_use_enemy_default_by_identity", true);
+    this->declare_parameter<double>("uav_enemy_default_x", 0.0);
+    this->declare_parameter<double>("uav_enemy_default_y", 0.0);
+    this->declare_parameter<double>("uav_enemy_default_z", 0.0);
 
     this->declare_parameter<double>("uav_default_out_blue_x", 0.0);
     this->declare_parameter<double>("uav_default_out_blue_y", 0.0);
@@ -167,6 +176,23 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     is_test_ = this->get_parameter("is_test").as_bool();
     uav_publish_default_output_ =
         this->get_parameter("uav_publish_default_output").as_bool();
+    use_match_info_color_ =
+        this->get_parameter("use_match_info_color").as_bool();
+    use_referee_identity_color_ =
+        this->get_parameter("use_referee_identity_color").as_bool();
+    self_color_override_ = NormalizeSelfColor(
+        this->get_parameter("self_color_override").as_int(), -1);
+    self_color_ = self_color_override_;
+    uav_use_enemy_default_by_identity_ =
+        this->get_parameter("uav_use_enemy_default_by_identity").as_bool();
+    uav_enemy_default_x_ =
+        this->get_parameter("uav_enemy_default_x").as_double();
+    uav_enemy_default_y_ =
+        this->get_parameter("uav_enemy_default_y").as_double();
+    uav_enemy_default_z_ =
+        this->get_parameter("uav_enemy_default_z").as_double();
+    const std::string referee_identity_topic =
+        this->get_parameter("referee_identity_topic").as_string();
 
     // -------------------- construct parser --------------------
     parser_ = nullptr;
@@ -199,6 +225,12 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
         this->create_subscription<vision_interface::msg::MatchInfo>(
             "match_info", rclcpp::SensorDataQoS(),
             std::bind(&Resolve::MatchInfoCallback, this,
+                      std::placeholders::_1));
+
+    referee_identity_sub =
+        this->create_subscription<radar_decision_comm::msg::RefereeRobotIdentity>(
+            referee_identity_topic, 10,
+            std::bind(&Resolve::RefereeIdentityCallback, this,
                       std::placeholders::_1));
 
     detect_sub =
@@ -452,18 +484,31 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     uav_r_meas_z_ = this->get_parameter("uav_r_meas_z").as_double();
     uav_gate_maha_ = this->get_parameter("uav_gate_maha").as_double();
 
-    uav_default_out_x_[0] =
+    uav_config_default_out_x_[0] =
         this->get_parameter("uav_default_out_blue_x").as_double();
-    uav_default_out_y_[0] =
+    uav_config_default_out_y_[0] =
         this->get_parameter("uav_default_out_blue_y").as_double();
-    uav_default_out_z_[0] =
+    uav_config_default_out_z_[0] =
         this->get_parameter("uav_default_out_blue_z").as_double();
-    uav_default_out_x_[1] =
+    uav_config_default_out_x_[1] =
         this->get_parameter("uav_default_out_red_x").as_double();
-    uav_default_out_y_[1] =
+    uav_config_default_out_y_[1] =
         this->get_parameter("uav_default_out_red_y").as_double();
-    uav_default_out_z_[1] =
+    uav_config_default_out_z_[1] =
         this->get_parameter("uav_default_out_red_z").as_double();
+    if (!HasEnemyDefaultPose()) {
+        for (int idx = 0; idx < 2; ++idx) {
+            if (std::fabs(uav_config_default_out_x_[idx]) > 1e-6 ||
+                std::fabs(uav_config_default_out_y_[idx]) > 1e-6 ||
+                std::fabs(uav_config_default_out_z_[idx]) > 1e-6) {
+                uav_enemy_default_x_ = uav_config_default_out_x_[idx];
+                uav_enemy_default_y_ = uav_config_default_out_y_[idx];
+                uav_enemy_default_z_ = uav_config_default_out_z_[idx];
+                break;
+            }
+        }
+    }
+    RefreshUavDefaultOutputs();
     for (int idx = 0; idx < 2; ++idx) {
         uav_z_prior_[idx] = ClampUavZ(uav_default_z_);
         uav_z_prior_inited_[idx] = true;
@@ -485,6 +530,13 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
                 uav_lidar_only_seed_timeout_ms_,
                 uav_lidar_only_use_half_roi_ ? "true" : "false",
                 uav_lidar_only_half_split_y_);
+    RCLCPP_INFO(this->get_logger(),
+                "[INIT] Resolve color priority: referee=%s match_info=%s fallback_self_color=%d effective_self_color=%d enemy_default=(%.3f, %.3f, %.3f)",
+                use_referee_identity_color_ ? "true" : "false",
+                use_match_info_color_ ? "true" : "false",
+                static_cast<int>(self_color_override_),
+                static_cast<int>(self_color_),
+                uav_enemy_default_x_, uav_enemy_default_y_, uav_enemy_default_z_);
 }
 Resolve::~Resolve()
 {
@@ -494,15 +546,105 @@ Resolve::~Resolve()
     }
 }
 
+int8_t Resolve::NormalizeSelfColor(int raw_color, int8_t fallback) const
+{
+    if (raw_color == 0 || raw_color == 2) {
+        return static_cast<int8_t>(raw_color);
+    }
+    return fallback;
+}
+
+bool Resolve::HasEnemyDefaultPose() const
+{
+    return std::fabs(uav_enemy_default_x_) > 1e-6 ||
+           std::fabs(uav_enemy_default_y_) > 1e-6 ||
+           std::fabs(uav_enemy_default_z_) > 1e-6;
+}
+
+void Resolve::RefreshEffectiveSelfColorFromFallback()
+{
+    self_color_ = self_color_override_;
+}
+
+void Resolve::RefreshUavDefaultOutputs()
+{
+    for (int idx = 0; idx < 2; ++idx) {
+        uav_default_out_x_[idx] = uav_config_default_out_x_[idx];
+        uav_default_out_y_[idx] = uav_config_default_out_y_[idx];
+        uav_default_out_z_[idx] = uav_config_default_out_z_[idx];
+    }
+
+    if (!uav_use_enemy_default_by_identity_ || !HasEnemyDefaultPose()) {
+        return;
+    }
+
+    if (self_color_ != 0 && self_color_ != 2) {
+        return;
+    }
+
+    for (int idx = 0; idx < 2; ++idx) {
+        uav_default_out_x_[idx] = 0.0;
+        uav_default_out_y_[idx] = 0.0;
+        uav_default_out_z_[idx] = 0.0;
+    }
+
+    // idx 0 = blue UAV, idx 1 = red UAV. Default pose is only for enemy UAV.
+    const int enemy_idx = (self_color_ == 0) ? 1 : 0;
+    uav_default_out_x_[enemy_idx] = uav_enemy_default_x_;
+    uav_default_out_y_[enemy_idx] = uav_enemy_default_y_;
+    uav_default_out_z_[enemy_idx] = uav_enemy_default_z_;
+}
+
 void Resolve::MatchInfoCallback(
     const vision_interface::msg::MatchInfo::SharedPtr msg)
 {
-    self_color_ = msg->self_color;
+    if (!msg) {
+        return;
+    }
+    if (use_referee_identity_color_ && has_referee_identity_color_) {
+        self_color_ = referee_identity_color_;
+    } else if (use_match_info_color_) {
+        self_color_ = NormalizeSelfColor(msg->self_color, self_color_override_);
+    } else {
+        RefreshEffectiveSelfColorFromFallback();
+    }
+    RefreshUavDefaultOutputs();
     for (int i = 0; i < 6; i++)
         markers[i] = msg->marks[i];
     for (int i = 0; i < 16; i++)
         robot_hp[i] = msg->robot_hp[i];
     match_time = msg->match_time;
+}
+
+void Resolve::RefereeIdentityCallback(
+    const radar_decision_comm::msg::RefereeRobotIdentity::SharedPtr msg)
+{
+    if (!use_referee_identity_color_ || !msg || !msg->valid) {
+        return;
+    }
+
+    const int8_t next_color =
+        NormalizeSelfColor(msg->self_color, self_color_override_);
+    if (next_color != 0 && next_color != 2) {
+        RCLCPP_WARN_THROTTLE(
+            this->get_logger(), *this->get_clock(), 2000,
+            "[REFEREE] Ignore invalid identity self_color=%d robot_id=%u",
+            static_cast<int>(msg->self_color), msg->robot_id);
+        return;
+    }
+
+    const bool changed =
+        !has_referee_identity_color_ || referee_identity_color_ != next_color;
+    has_referee_identity_color_ = true;
+    referee_identity_color_ = next_color;
+    self_color_ = next_color;
+    RefreshUavDefaultOutputs();
+
+    if (changed) {
+        RCLCPP_INFO(this->get_logger(),
+                    "[REFEREE] Resolve switched self_color=%d from robot_id=%u",
+                    static_cast<int>(self_color_), msg->robot_id);
+    }
 }
 
 void Resolve::callback(const geometry_msgs::msg::Vector3::SharedPtr msg)

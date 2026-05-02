@@ -15,6 +15,7 @@
   <depend>OpenCV</depend>
   <depend>roborts_utils</depend>
   <depend>geometry_msgs</depend>
+  <depend>radar_decision_comm</depend>
   <depend>vision_interface</depend>
   <depend>perception_interface</depend>
   <depend>std_srvs</depend>

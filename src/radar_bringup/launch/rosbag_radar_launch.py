@@ -17,6 +17,7 @@ from launch.events.process import ShutdownProcess, matches_executable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import ComposableNodeContainer, Node
 from launch_ros.descriptions import ComposableNode
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def _team_config(our_color: str):
@@ -51,6 +52,10 @@ def _build_launch(context):
     referee_tx_mode = LaunchConfiguration("referee_tx_mode").perform(context)
     referee_serial_device = LaunchConfiguration("referee_serial_device").perform(context)
     referee_serial_baudrate = int(LaunchConfiguration("referee_serial_baudrate").perform(context))
+    referee_publish_raw_debug = ParameterValue(
+        LaunchConfiguration("referee_publish_raw_debug"),
+        value_type=bool,
+    )
     rosbag_file = LaunchConfiguration("rosbag_file").perform(context)
     calib_first = LaunchConfiguration("calib_first").perform(context).strip().lower()
     calib_first = calib_first in ("1", "true", "yes", "on")
@@ -69,6 +74,10 @@ def _build_launch(context):
     intra = [{"use_intra_process_comms": True}]
     enemy_uav_coord = (27.131, 2.369, 1.7)
     enemy_uav_default = {
+        "uav_enemy_default_x": enemy_uav_coord[0],
+        "uav_enemy_default_y": enemy_uav_coord[1],
+        "uav_enemy_default_z": enemy_uav_coord[2],
+        "uav_use_enemy_default_by_identity": True,
         "uav_default_out_blue_x": 0.0,
         "uav_default_out_blue_y": 0.0,
         "uav_default_out_blue_z": 0.0,
@@ -195,6 +204,10 @@ def _build_launch(context):
                 "camera_params_path": os.path.join(bringup_config, "camera_params.yaml"),
                 "region_points_path": os.path.join(bringup_config, "RM2025_Points.yaml"),
                 "minimap_path": os.path.join(bringup_config, "RM2025.png"),
+                "self_color_override": team["match_self_color"],
+                "use_match_info_color": False,
+                "use_referee_identity_color": True,
+                "referee_identity_topic": "/radar/referee/robot_identity",
                 "uav_publish_default_output": True,
                 **enemy_uav_default,
             }
@@ -210,6 +223,7 @@ def _build_launch(context):
             {
                 "use_match_info_color": False,
                 "self_color_override": team["match_self_color"],
+                "use_referee_identity_color": True,
                 "semantic_tracking_enabled": True,
                 "semantic_history_size": 20,
                 "semantic_confirm_min_hits": 2,
@@ -263,6 +277,7 @@ def _build_launch(context):
         parameters=[
             {
                 "our_color": team["decision_my_color"],
+                "use_referee_identity_color": True,
             }
         ],
         extra_arguments=intra,
@@ -277,7 +292,7 @@ def _build_launch(context):
                 "map_path": os.path.join(debug_map_share, "config", "RM2025.png"),
                 "use_match_info_color": False,
                 "self_color_override": team["match_self_color"],
-                "use_referee_identity_color": False,
+                "use_referee_identity_color": True,
             }
         ],
         extra_arguments=intra,
@@ -334,6 +349,7 @@ def _build_launch(context):
                         "tx_mode": referee_tx_mode,
                         "device": referee_serial_device,
                         "baudrate": referee_serial_baudrate,
+                        "publish_raw_debug": referee_publish_raw_debug,
                     },
                 ],
                 extra_arguments=intra,
@@ -574,6 +590,11 @@ def generate_launch_description():
                 "referee_serial_baudrate",
                 default_value="115200",
                 description="referee serial baudrate for bridge mode",
+            ),
+            DeclareLaunchArgument(
+                "referee_publish_raw_debug",
+                default_value="false",
+                description="publish raw referee serial RX bytes to /radar/debug/referee_raw_bytes",
             ),
             DeclareLaunchArgument(
                 "calib_first",

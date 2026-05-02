@@ -910,13 +910,18 @@ void KalmanFilter::publish_tracks(const rclcpp::Time& time,
         fill_detect(track);
     }
 
+    auto has_publish_point = [](float x, float y) {
+        return std::isfinite(x) && std::isfinite(y) &&
+               (x != 0.0f || y != 0.0f);
+    };
+
     if (effective_self_color() == 0) {
         for (int i = 0; i < 7; i++) {
-            if (detect_msg.blue_x[i] != 0 && detect_msg.blue_y[i] != 0) {
+            if (has_publish_point(detect_msg.blue_x[i], detect_msg.blue_y[i])) {
                 detect_msg.blue_x[i] = 28 - detect_msg.blue_x[i];
                 detect_msg.blue_y[i] = 15 - detect_msg.blue_y[i];
             }
-            if (detect_msg.red_x[i] != 0 && detect_msg.red_y[i] != 0) {
+            if (has_publish_point(detect_msg.red_x[i], detect_msg.red_y[i])) {
                 detect_msg.red_x[i] = 28 - detect_msg.red_x[i];
                 detect_msg.red_y[i] = 15 - detect_msg.red_y[i];
             }
