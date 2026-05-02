@@ -1,10 +1,12 @@
 #include "resolve.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdlib>
 #include <deque>
 #include <limits>
+#include <string>
 
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
@@ -257,6 +259,14 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<double>("uav_quality_size_ref", 12.0);
     this->declare_parameter<double>("uav_quality_measurement_threshold", 0.60);
     this->declare_parameter<double>("uav_quality_z_prior_threshold", 0.75);
+    this->declare_parameter<int>("uav_degrade_l0_to_l1_ms", 200);
+    this->declare_parameter<int>("uav_degrade_l1_to_l2_ms", 250);
+    this->declare_parameter<int>("uav_degrade_l2_to_l3_ms", 500);
+    this->declare_parameter<double>("uav_lidar_only_assign_gate_m", 3.0);
+    this->declare_parameter<double>("uav_lidar_only_cluster_spread_max_m", 1.2);
+    this->declare_parameter<int>("uav_lidar_only_seed_timeout_ms", 1500);
+    this->declare_parameter<bool>("uav_lidar_only_use_half_roi", true);
+    this->declare_parameter<double>("uav_lidar_only_half_split_y", 7.5);
     this->declare_parameter<double>(
         "uav_world_to_field_y_offset",
         std::numeric_limits<double>::quiet_NaN());
@@ -331,6 +341,22 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
         this->get_parameter("uav_quality_measurement_threshold").as_double();
     uav_quality_z_prior_threshold_ =
         this->get_parameter("uav_quality_z_prior_threshold").as_double();
+    uav_degrade_l0_to_l1_ms_ =
+        this->get_parameter("uav_degrade_l0_to_l1_ms").as_int();
+    uav_degrade_l1_to_l2_ms_ =
+        this->get_parameter("uav_degrade_l1_to_l2_ms").as_int();
+    uav_degrade_l2_to_l3_ms_ =
+        this->get_parameter("uav_degrade_l2_to_l3_ms").as_int();
+    uav_lidar_only_assign_gate_m_ =
+        this->get_parameter("uav_lidar_only_assign_gate_m").as_double();
+    uav_lidar_only_cluster_spread_max_m_ =
+        this->get_parameter("uav_lidar_only_cluster_spread_max_m").as_double();
+    uav_lidar_only_seed_timeout_ms_ =
+        this->get_parameter("uav_lidar_only_seed_timeout_ms").as_int();
+    uav_lidar_only_use_half_roi_ =
+        this->get_parameter("uav_lidar_only_use_half_roi").as_bool();
+    uav_lidar_only_half_split_y_ =
+        this->get_parameter("uav_lidar_only_half_split_y").as_double();
     const double uav_world_to_field_y_offset_param =
         this->get_parameter("uav_world_to_field_y_offset").as_double();
     uav_field_min_x_ = this->get_parameter("uav_field_min_x").as_double();
@@ -364,6 +390,18 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
         std::clamp(uav_quality_measurement_threshold_, 0.0, 1.0);
     uav_quality_z_prior_threshold_ =
         std::clamp(uav_quality_z_prior_threshold_, 0.0, 1.0);
+    uav_degrade_l0_to_l1_ms_ = std::max(0, uav_degrade_l0_to_l1_ms_);
+    uav_degrade_l1_to_l2_ms_ = std::max(0, uav_degrade_l1_to_l2_ms_);
+    uav_degrade_l2_to_l3_ms_ = std::max(0, uav_degrade_l2_to_l3_ms_);
+    uav_lidar_only_assign_gate_m_ =
+        std::max(0.1, uav_lidar_only_assign_gate_m_);
+    uav_lidar_only_cluster_spread_max_m_ =
+        std::max(0.05, uav_lidar_only_cluster_spread_max_m_);
+    uav_lidar_only_seed_timeout_ms_ =
+        std::max(0, uav_lidar_only_seed_timeout_ms_);
+    if (!std::isfinite(uav_lidar_only_half_split_y_)) {
+        uav_lidar_only_half_split_y_ = 7.5;
+    }
     if (uav_field_min_x_ > uav_field_max_x_) {
         std::swap(uav_field_min_x_, uav_field_max_x_);
     }
@@ -437,6 +475,16 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
                 uav_field_min_x_, uav_field_max_x_,
                 uav_field_min_y_, uav_field_max_y_,
                 uav_field_margin_m_);
+    RCLCPP_INFO(this->get_logger(),
+                "[INIT] UAV source ladder: frustum -> lidar_only -> vision_z -> default, degrade_ms=%d/%d/%d, lidar_only_gate=%.2f spread=%.2f seed_timeout=%dms half_roi=%s split_y=%.2f",
+                uav_degrade_l0_to_l1_ms_,
+                uav_degrade_l1_to_l2_ms_,
+                uav_degrade_l2_to_l3_ms_,
+                uav_lidar_only_assign_gate_m_,
+                uav_lidar_only_cluster_spread_max_m_,
+                uav_lidar_only_seed_timeout_ms_,
+                uav_lidar_only_use_half_roi_ ? "true" : "false",
+                uav_lidar_only_half_split_y_);
 }
 Resolve::~Resolve()
 {
@@ -449,6 +497,7 @@ Resolve::~Resolve()
 void Resolve::MatchInfoCallback(
     const vision_interface::msg::MatchInfo::SharedPtr msg)
 {
+    self_color_ = msg->self_color;
     for (int i = 0; i < 6; i++)
         markers[i] = msg->marks[i];
     for (int i = 0; i < 16; i++)
@@ -756,6 +805,129 @@ void Resolve::UpdateUavZPrior(int idx, double z_raw, const rclcpp::Time& stamp)
     uav_z_prior_last_update_[idx] = safe_stamp;
 }
 
+const char* Resolve::UavSourceName(UavMeasurementSource source) const
+{
+    switch (source) {
+        case UavMeasurementSource::Frustum:
+            return "frustum";
+        case UavMeasurementSource::LidarOnly:
+            return "lidar_only";
+        case UavMeasurementSource::VisionZ:
+            return "vision_z";
+        case UavMeasurementSource::DefaultPose:
+        default:
+            return "default";
+    }
+}
+
+int Resolve::UavSourcePriority(UavMeasurementSource source) const
+{
+    return static_cast<int>(source);
+}
+
+int Resolve::UavDegradeHoldMs(UavMeasurementSource from,
+                              UavMeasurementSource to) const
+{
+    const int from_priority = UavSourcePriority(from);
+    const int to_priority = UavSourcePriority(to);
+    if (to_priority <= from_priority) {
+        return 0;
+    }
+
+    int hold_ms = 0;
+    for (int level = from_priority; level < to_priority; ++level) {
+        if (level == UavSourcePriority(UavMeasurementSource::Frustum)) {
+            hold_ms += uav_degrade_l0_to_l1_ms_;
+        } else if (level == UavSourcePriority(UavMeasurementSource::LidarOnly)) {
+            hold_ms += uav_degrade_l1_to_l2_ms_;
+        } else if (level == UavSourcePriority(UavMeasurementSource::VisionZ)) {
+            hold_ms += uav_degrade_l2_to_l3_ms_;
+        }
+    }
+    return hold_ms;
+}
+
+bool Resolve::BuildUavLidarOnlySeed(int idx,
+                                    const rclcpp::Time& stamp,
+                                    cv::Vec3d& seed) const
+{
+    if (idx < 0 || idx >= 2) {
+        return false;
+    }
+
+    if (uav_kf_inited_[idx]) {
+        seed = cv::Vec3d(uav_x_[idx], uav_y_[idx], uav_z_[idx]);
+        return true;
+    }
+
+    if (uav_last_measurement_valid_[idx]) {
+        bool seed_fresh = true;
+        if (uav_lidar_only_seed_timeout_ms_ > 0 &&
+            uav_last_measurement_stamp_[idx].nanoseconds() != 0 &&
+            stamp.nanoseconds() != 0) {
+            const double age_ms =
+                std::fabs((stamp - uav_last_measurement_stamp_[idx]).seconds()) * 1000.0;
+            seed_fresh =
+                age_ms <= static_cast<double>(uav_lidar_only_seed_timeout_ms_);
+        }
+        if (seed_fresh) {
+            seed = cv::Vec3d(uav_last_measurement_x_[idx],
+                             uav_last_measurement_y_[idx],
+                             uav_last_measurement_z_[idx]);
+            return true;
+        }
+    }
+
+    const double dx = uav_default_out_x_[idx];
+    const double dy = uav_default_out_y_[idx];
+    const double dz = uav_default_out_z_[idx];
+    if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(dz) &&
+        (std::fabs(dx) > 1e-6 || std::fabs(dy) > 1e-6 || std::fabs(dz) > 1e-6)) {
+        seed = cv::Vec3d(dx, dy, ClampUavZ(dz));
+        return true;
+    }
+
+    return false;
+}
+
+bool Resolve::IsUavLidarOnlyClusterAllowedForSide(int idx, double y) const
+{
+    if (!uav_lidar_only_use_half_roi_) {
+        return true;
+    }
+    if (idx < 0 || idx >= 2 || !std::isfinite(y)) {
+        return false;
+    }
+
+    bool side_is_enemy = false;
+    bool side_known = false;
+    if (self_color_ == 0 || self_color_ == 2) {
+        // idx 0 = blue UAV, idx 1 = red UAV.
+        side_is_enemy =
+            (self_color_ == 0 && idx == 1) ||
+            (self_color_ == 2 && idx == 0);
+        side_known = true;
+    } else {
+        const bool default_nonzero =
+            std::fabs(uav_default_out_x_[idx]) > 1e-6 ||
+            std::fabs(uav_default_out_y_[idx]) > 1e-6 ||
+            std::fabs(uav_default_out_z_[idx]) > 1e-6;
+        if (default_nonzero) {
+            side_is_enemy = true;
+            side_known = true;
+        }
+    }
+
+    if (!side_known) {
+        return true;
+    }
+
+    if (side_is_enemy) {
+        return y < uav_lidar_only_half_split_y_;
+    }
+    return y >= uav_lidar_only_half_split_y_;
+}
+
 bool Resolve::SolveUavFrustumMeasurement(
     const cv::Rect2f& roi,
     const std::vector<pcl::PointXYZ>& points,
@@ -934,6 +1106,126 @@ bool Resolve::SolveUavFrustumMeasurement(
             out.cluster_size = static_cast<int>(valid_cluster_indices.size());
             out.cluster_uvs = std::move(cluster_uvs);
         }
+    }
+
+    return out.valid;
+}
+
+bool Resolve::SolveUavLidarOnlyMeasurement(
+    int idx,
+    const std::vector<pcl::PointXYZ>& points,
+    const rclcpp::Time& stamp,
+    UavPointCloudMeasurement& out) const
+{
+    out = UavPointCloudMeasurement{};
+    out.input_size = static_cast<int>(points.size());
+    if (points.empty()) {
+        return false;
+    }
+
+    cv::Vec3d seed;
+    if (!BuildUavLidarOnlySeed(idx, stamp, seed)) {
+        return false;
+    }
+
+    pcl::PointCloud<pcl::PointXYZ>::Ptr filtered(new pcl::PointCloud<pcl::PointXYZ>);
+    filtered->reserve(points.size());
+    for (const auto& p : points) {
+        if (!std::isfinite(p.x) || !std::isfinite(p.y) || !std::isfinite(p.z)) {
+            continue;
+        }
+        if (p.z < uav_point_min_z_ || p.z > uav_point_max_z_) {
+            continue;
+        }
+        if (!IsUavFieldPointInside(p.x, p.y)) {
+            continue;
+        }
+        filtered->push_back(p);
+    }
+    out.z_valid_size = static_cast<int>(filtered->size());
+
+    if (filtered->size() < static_cast<size_t>(std::max(1, uav_cluster_min_size_))) {
+        return false;
+    }
+
+    pcl::search::KdTree<pcl::PointXYZ>::Ptr tree(new pcl::search::KdTree<pcl::PointXYZ>);
+    tree->setInputCloud(filtered);
+
+    pcl::EuclideanClusterExtraction<pcl::PointXYZ> ec;
+    ec.setClusterTolerance(uav_cluster_tolerance_);
+    ec.setMinClusterSize(std::max(1, uav_cluster_min_size_));
+    ec.setMaxClusterSize(std::max(uav_cluster_min_size_, uav_cluster_max_size_));
+    ec.setSearchMethod(tree);
+    ec.setInputCloud(filtered);
+
+    std::vector<pcl::PointIndices> cluster_indices;
+    ec.extract(cluster_indices);
+    out.cluster_count = static_cast<int>(cluster_indices.size());
+    if (cluster_indices.empty()) {
+        return false;
+    }
+
+    double best_score = std::numeric_limits<double>::infinity();
+    for (const auto& indices : cluster_indices) {
+        if (indices.indices.empty()) {
+            continue;
+        }
+
+        cv::Vec3d center(0.0, 0.0, 0.0);
+        std::vector<double> z_values;
+        z_values.reserve(indices.indices.size());
+        for (int point_index : indices.indices) {
+            const auto& p = filtered->points[point_index];
+            center += cv::Vec3d(p.x, p.y, p.z);
+            z_values.push_back(p.z);
+        }
+        center *= 1.0 / static_cast<double>(indices.indices.size());
+        if (!IsUavLidarOnlyClusterAllowedForSide(idx, center[1])) {
+            continue;
+        }
+
+        double spread_sum = 0.0;
+        for (int point_index : indices.indices) {
+            const auto& p = filtered->points[point_index];
+            const cv::Vec3d delta(p.x - center[0],
+                                  p.y - center[1],
+                                  p.z - center[2]);
+            spread_sum += delta.dot(delta);
+        }
+        const double spread =
+            std::sqrt(spread_sum / static_cast<double>(indices.indices.size()));
+        if (!std::isfinite(spread) ||
+            spread > uav_lidar_only_cluster_spread_max_m_) {
+            continue;
+        }
+
+        const cv::Vec3d seed_delta(center[0] - seed[0],
+                                   center[1] - seed[1],
+                                   center[2] - seed[2]);
+        const double seed_distance = cv::norm(seed_delta);
+        if (!std::isfinite(seed_distance) ||
+            seed_distance > uav_lidar_only_assign_gate_m_) {
+            continue;
+        }
+
+        const double size_term =
+            std::min(static_cast<double>(indices.indices.size()),
+                     uav_quality_size_ref_);
+        const double score =
+            seed_distance + 0.35 * spread - 0.03 * size_term;
+        if (score >= best_score) {
+            continue;
+        }
+
+        best_score = score;
+        out.valid = true;
+        out.x = center[0];
+        out.y = center[1];
+        out.z = ClampUavZ(compute_median(std::move(z_values)));
+        out.cluster_z_median = out.z;
+        out.seed_distance = seed_distance;
+        out.cluster_spread = spread;
+        out.cluster_size = static_cast<int>(indices.indices.size());
     }
 
     return out.valid;
@@ -1127,6 +1419,24 @@ void Resolve::DetectCallback(
         send_data.red_car_box_x2[i] = msg->red_car_box_x2[i];
         send_data.red_car_box_y2[i] = msg->red_car_box_y2[i];
     }
+    send_data.blue_uav_bbox_x = msg->blue_uav_bbox_x;
+    send_data.blue_uav_bbox_y = msg->blue_uav_bbox_y;
+    send_data.blue_uav_bbox_w = msg->blue_uav_bbox_w;
+    send_data.blue_uav_bbox_h = msg->blue_uav_bbox_h;
+    send_data.blue_uav_conf = msg->blue_uav_conf;
+    send_data.red_uav_bbox_x = msg->red_uav_bbox_x;
+    send_data.red_uav_bbox_y = msg->red_uav_bbox_y;
+    send_data.red_uav_bbox_w = msg->red_uav_bbox_w;
+    send_data.red_uav_bbox_h = msg->red_uav_bbox_h;
+    send_data.red_uav_conf = msg->red_uav_conf;
+    send_data.blue_uav_light_count = msg->blue_uav_light_count;
+    send_data.red_uav_light_count = msg->red_uav_light_count;
+    for (int i = 0; i < 2; ++i) {
+        send_data.blue_uav_light_x[i] = msg->blue_uav_light_x[i];
+        send_data.blue_uav_light_y[i] = msg->blue_uav_light_y[i];
+        send_data.red_uav_light_x[i] = msg->red_uav_light_x[i];
+        send_data.red_uav_light_y[i] = msg->red_uav_light_y[i];
+    }
 
     geometry_msgs::msg::PoseArray uav_out;
     uav_out.header = msg->header;
@@ -1242,6 +1552,19 @@ void Resolve::DetectCallback(
         }
     }
 
+    const rclcpp::Time t_now = detect_stamp;
+
+    struct UavCandidate {
+        bool valid{false};
+        bool updates_kf{false};
+        UavMeasurementSource source{UavMeasurementSource::DefaultPose};
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        double quality{0.0};
+        bool from_lidar{false};
+    };
+
     // Lambda: pure vision fallback uses the same calibrated ray as frustum scoring.
     auto solve_xy_on_z = [&](float px,
                              float py,
@@ -1251,15 +1574,95 @@ void Resolve::DetectCallback(
                                       static_cast<double>(z_plane),
                                       point_field);
     };
-    // ========== 阶段三：视锥体求交 + 聚类中心 ==========
+
+    // ========== 阶段三：生成四级候选测量 ==========
     bool   meas_ok[2]{false, false};
-    bool   meas_from_lidar[2]{false, false};
+    bool   source_holding[2]{false, false};
     double meas_quality[2]{0.0, 0.0};
     double meas_x[2]{0, 0}, meas_y[2]{0, 0}, meas_z[2]{0, 0};
+    UavMeasurementSource meas_source[2]{
+        UavMeasurementSource::DefaultPose,
+        UavMeasurementSource::DefaultPose};
     std::vector<cv::Point2f> debug_uvs_all;
     std::vector<cv::Point2f> debug_cluster_uvs_all;
     debug_uvs_all.reserve(256);
     debug_cluster_uvs_all.reserve(128);
+
+    auto best_available_candidate =
+        [&](const std::array<UavCandidate, 4>& candidates) -> UavCandidate {
+        UavCandidate best;
+        for (const auto& candidate : candidates) {
+            if (!candidate.valid) {
+                continue;
+            }
+            if (!best.valid ||
+                UavSourcePriority(candidate.source) < UavSourcePriority(best.source)) {
+                best = candidate;
+            }
+        }
+        if (!best.valid) {
+            best.valid = true;
+            best.source = UavMeasurementSource::DefaultPose;
+        }
+        return best;
+    };
+
+    auto select_candidate = [&](int idx,
+                                const std::array<UavCandidate, 4>& candidates,
+                                const char* side_name) -> UavCandidate {
+        UavCandidate best = best_available_candidate(candidates);
+        const UavMeasurementSource current = uav_active_source_[idx];
+        const int best_priority = UavSourcePriority(best.source);
+        const int current_priority = UavSourcePriority(current);
+
+        if (best_priority <= current_priority) {
+            if (best.source != current) {
+                RCLCPP_INFO(this->get_logger(),
+                            "  %s: UAV源升级 %s -> %s",
+                            side_name,
+                            UavSourceName(current),
+                            UavSourceName(best.source));
+            }
+            uav_active_source_[idx] = best.source;
+            uav_source_last_update_[idx] = t_now;
+            return best;
+        }
+
+        const int hold_ms = UavDegradeHoldMs(current, best.source);
+        double missing_ms = std::numeric_limits<double>::infinity();
+        if (uav_source_last_update_[idx].nanoseconds() != 0) {
+            missing_ms =
+                std::fabs((t_now - uav_source_last_update_[idx]).seconds()) * 1000.0;
+        }
+
+        if (uav_kf_inited_[idx] &&
+            missing_ms < static_cast<double>(hold_ms)) {
+            UavCandidate hold;
+            hold.valid = true;
+            hold.source = current;
+            source_holding[idx] = true;
+            RCLCPP_INFO_THROTTLE(
+                this->get_logger(), *this->get_clock(), 300,
+                "  %s: %s 暂缺 %.1f/%dms，保持KF预测，暂不退化到 %s",
+                side_name,
+                UavSourceName(current),
+                missing_ms,
+                hold_ms,
+                UavSourceName(best.source));
+            return hold;
+        }
+
+        RCLCPP_WARN(this->get_logger(),
+                    "  %s: UAV源退化 %s -> %s (missing=%.1fms, hold=%dms)",
+                    side_name,
+                    UavSourceName(current),
+                    UavSourceName(best.source),
+                    missing_ms,
+                    hold_ms);
+        uav_active_source_[idx] = best.source;
+        uav_source_last_update_[idx] = t_now;
+        return best;
+    };
 
     auto compute_meas = [&](int idx,
                             bool has_target,
@@ -1272,9 +1675,7 @@ void Resolve::DetectCallback(
                             float bbox_h,
                             float bbox_conf) {
         const char* side_name = (idx == 0) ? "蓝方" : "红方";
-        if (!has_target) {
-            return;
-        }
+        std::array<UavCandidate, 4> candidates{};
 
         const cv::Rect2f roi = has_bbox
             ? BuildUavRoiFromBbox(bbox_x, bbox_y, bbox_w, bbox_h)
@@ -1295,12 +1696,18 @@ void Resolve::DetectCallback(
                 const double quality =
                     EvaluateUavMeasurementQuality(bbox_conf, frustum_meas);
                 if (quality >= uav_quality_measurement_threshold_) {
-                    meas_ok[idx] = true;
-                    meas_from_lidar[idx] = true;
-                    meas_quality[idx] = quality;
-                    meas_x[idx] = frustum_meas.x;
-                    meas_y[idx] = frustum_meas.y;
-                    meas_z[idx] = GetFilteredZPlane(idx, frustum_meas.z);
+                    candidates[UavSourcePriority(UavMeasurementSource::Frustum)].valid = true;
+                    candidates[UavSourcePriority(UavMeasurementSource::Frustum)].updates_kf = true;
+                    candidates[UavSourcePriority(UavMeasurementSource::Frustum)].source =
+                        UavMeasurementSource::Frustum;
+                    candidates[UavSourcePriority(UavMeasurementSource::Frustum)].from_lidar = true;
+                    candidates[UavSourcePriority(UavMeasurementSource::Frustum)].quality = quality;
+                    candidates[UavSourcePriority(UavMeasurementSource::Frustum)].x =
+                        frustum_meas.x;
+                    candidates[UavSourcePriority(UavMeasurementSource::Frustum)].y =
+                        frustum_meas.y;
+                    candidates[UavSourcePriority(UavMeasurementSource::Frustum)].z =
+                        GetFilteredZPlane(idx, frustum_meas.z);
 
                     if (quality >= uav_quality_z_prior_threshold_) {
                         UpdateUavZPrior(idx, frustum_meas.cluster_z_median, detect_stamp);
@@ -1314,7 +1721,9 @@ void Resolve::DetectCallback(
                                   std::numeric_limits<double>::quiet_NaN());
                     (void)solve_xy_on_z(roi_center.x,
                                         roi_center.y,
-                                        static_cast<float>(meas_z[idx]),
+                                        static_cast<float>(
+                                            candidates[UavSourcePriority(
+                                                UavMeasurementSource::Frustum)].z),
                                         pv);
 
                     RCLCPP_INFO(
@@ -1322,31 +1731,32 @@ void Resolve::DetectCallback(
                         "  %s: 视锥求交成功 roi=(%.1f, %.1f, %.1f, %.1f) -> lidar=(%.3f, %.3f, %.3f), q=%.3f, ray_med=%.3f, ray_spread=%.3f, n=%d, z_prior=%.3f, vision@z=(%.3f, %.3f)",
                         side_name,
                         roi.x, roi.y, roi.width, roi.height,
-                        meas_x[idx], meas_y[idx], meas_z[idx],
+                        candidates[UavSourcePriority(UavMeasurementSource::Frustum)].x,
+                        candidates[UavSourcePriority(UavMeasurementSource::Frustum)].y,
+                        candidates[UavSourcePriority(UavMeasurementSource::Frustum)].z,
                         quality,
                         frustum_meas.ray_dist_median,
                         frustum_meas.ray_dist_spread,
                         frustum_meas.cluster_size,
                         GetUavFallbackZ(idx),
                         pv[0], pv[1]);
-                    return;
+                } else {
+                    RCLCPP_WARN(
+                        this->get_logger(),
+                        "  %s: 视锥求交得到点簇但质量不足 q=%.3f < %.3f (ray_med=%.3f, ray_spread=%.3f, n=%d, conf=%.2f)，尝试低层候选",
+                        side_name,
+                        quality,
+                        uav_quality_measurement_threshold_,
+                        frustum_meas.ray_dist_median,
+                        frustum_meas.ray_dist_spread,
+                        frustum_meas.cluster_size,
+                        bbox_conf);
                 }
-
-                RCLCPP_WARN(
-                    this->get_logger(),
-                    "  %s: 视锥求交得到点簇但质量不足 q=%.3f < %.3f (ray_med=%.3f, ray_spread=%.3f, n=%d, conf=%.2f)，转入纯视觉 fallback",
-                    side_name,
-                    quality,
-                    uav_quality_measurement_threshold_,
-                    frustum_meas.ray_dist_median,
-                    frustum_meas.ray_dist_spread,
-                    frustum_meas.cluster_size,
-                    bbox_conf);
             }
 
             if (!has_cluster_candidate) {
                 RCLCPP_WARN(this->get_logger(),
-                            "  %s: ROI 视锥求交未得到有效聚类 input=%d, z_ok=%d, roi_ok=%d, clusters=%d, min_cluster=%d，转入纯视觉 fallback",
+                            "  %s: ROI 视锥求交未得到有效聚类 input=%d, z_ok=%d, roi_ok=%d, clusters=%d, min_cluster=%d，尝试低层候选",
                             side_name,
                             frustum_meas.input_size,
                             frustum_meas.z_valid_size,
@@ -1356,39 +1766,105 @@ void Resolve::DetectCallback(
             }
         }
 
-        if (px != 0.0f && py != 0.0f) {
+        if (other_fresh && !other_points.empty()) {
+            UavPointCloudMeasurement lidar_only_meas;
+            if (SolveUavLidarOnlyMeasurement(idx, other_points, detect_stamp,
+                                             lidar_only_meas)) {
+                candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].valid = true;
+                candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].updates_kf = true;
+                candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].source =
+                    UavMeasurementSource::LidarOnly;
+                candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].from_lidar = true;
+                candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].quality = 0.5;
+                candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].x =
+                    lidar_only_meas.x;
+                candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].y =
+                    lidar_only_meas.y;
+                candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].z =
+                    GetFilteredZPlane(idx, lidar_only_meas.z);
+                RCLCPP_INFO(
+                    this->get_logger(),
+                    "  %s: 无框点云候选 -> (%.3f, %.3f, %.3f), seed_dist=%.3f, spread=%.3f, n=%d",
+                    side_name,
+                    candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].x,
+                    candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].y,
+                    candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].z,
+                    lidar_only_meas.seed_distance,
+                    lidar_only_meas.cluster_spread,
+                    lidar_only_meas.cluster_size);
+            }
+        }
+
+        float vision_px = px;
+        float vision_py = py;
+        if ((vision_px == 0.0f || vision_py == 0.0f) && has_bbox) {
+            const cv::Rect2f vision_roi = roi.width > 1.0f && roi.height > 1.0f
+                ? roi
+                : BuildUavRoiFromBbox(bbox_x, bbox_y, bbox_w, bbox_h);
+            if (vision_roi.width > 1.0f && vision_roi.height > 1.0f) {
+                vision_px = vision_roi.x + vision_roi.width * 0.5f;
+                vision_py = vision_roi.y + vision_roi.height * 0.5f;
+            }
+        }
+
+        if (has_target && vision_px != 0.0f && vision_py != 0.0f) {
             const float z_plane = static_cast<float>(GetUavFallbackZ(idx));
             cv::Vec3d pv;
-            if (!solve_xy_on_z(px, py, z_plane, pv)) {
+            if (!solve_xy_on_z(vision_px, vision_py, z_plane, pv)) {
                 RCLCPP_WARN(this->get_logger(),
                             "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f 射线无法与高度平面求交",
-                            side_name, px, py, z_plane);
-                return;
-            }
-
-            if (!IsUavFieldPointInside(pv[0], pv[1])) {
+                            side_name, vision_px, vision_py, z_plane);
+            } else if (!IsUavFieldPointInside(pv[0], pv[1])) {
                 RCLCPP_WARN(
                     this->get_logger(),
                     "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f -> raw=(%.3f, %.3f, %.3f) 场外，丢弃该视觉测量",
-                    side_name, px, py, z_plane,
+                    side_name, vision_px, vision_py, z_plane,
                     pv[0], pv[1], pv[2]);
-                return;
+            } else {
+                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].valid = true;
+                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].updates_kf = true;
+                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].source =
+                    UavMeasurementSource::VisionZ;
+                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].quality =
+                    std::clamp(static_cast<double>(bbox_conf), 0.0, 1.0);
+                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].x = pv[0];
+                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].y = pv[1];
+                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].z = z_plane;
+
+                RCLCPP_WARN(this->get_logger(),
+                            "  %s: 纯视觉候选 center=(%.1f, %.1f) z_prior=%.2f -> (%.3f, %.3f, %.3f)",
+                            side_name, vision_px, vision_py, z_plane,
+                            pv[0], pv[1], z_plane);
             }
+        }
 
+        candidates[UavSourcePriority(UavMeasurementSource::DefaultPose)].valid = true;
+        candidates[UavSourcePriority(UavMeasurementSource::DefaultPose)].updates_kf = false;
+        candidates[UavSourcePriority(UavMeasurementSource::DefaultPose)].source =
+            UavMeasurementSource::DefaultPose;
+        candidates[UavSourcePriority(UavMeasurementSource::DefaultPose)].x =
+            uav_publish_default_output_ ? uav_default_out_x_[idx] : 0.0;
+        candidates[UavSourcePriority(UavMeasurementSource::DefaultPose)].y =
+            uav_publish_default_output_ ? uav_default_out_y_[idx] : 0.0;
+        candidates[UavSourcePriority(UavMeasurementSource::DefaultPose)].z =
+            uav_publish_default_output_ ? uav_default_out_z_[idx] : 0.0;
+
+        const UavCandidate selected = select_candidate(idx, candidates, side_name);
+        meas_source[idx] = selected.source;
+        if (selected.updates_kf) {
             meas_ok[idx] = true;
-            meas_x[idx] = pv[0];
-            meas_y[idx] = pv[1];
-            meas_z[idx] = z_plane;
-
-            RCLCPP_WARN(this->get_logger(),
-                        "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f -> (%.3f, %.3f, %.3f)",
-                        side_name, px, py, z_plane,
-                        meas_x[idx], meas_y[idx], meas_z[idx]);
+            meas_quality[idx] = selected.quality;
+            meas_x[idx] = selected.x;
+            meas_y[idx] = selected.y;
+            meas_z[idx] = selected.z;
+            if (selected.source == UavMeasurementSource::LidarOnly) {
+                UpdateUavZPrior(idx, selected.z, detect_stamp);
+            }
         }
     };
 
-    if (has_blue_uav || has_red_uav) {
-        RCLCPP_INFO(this->get_logger(), "========== [阶段三：视锥体求交测量] ==========");
+    if (has_blue_uav || has_red_uav || (other_fresh && !other_points.empty())) {
+        RCLCPP_INFO(this->get_logger(), "========== [阶段三：UAV分层候选测量] ==========");
     }
     compute_meas(0, has_blue_uav, has_blue_bbox,
                  msg->blue_x[6], msg->blue_y[6],
@@ -1443,13 +1919,15 @@ void Resolve::DetectCallback(
     }
 
     // ========== 阶段四：卡尔曼滤波预测与更新 ==========
-    const rclcpp::Time t_now = is_stamp_zero(msg->header.stamp) 
-                               ? this->now() 
-                               : rclcpp::Time(msg->header.stamp);
-    
+    bool uav_final_valid[2]{false, false};
+    bool uav_final_observed[2]{false, false};
+    double uav_final_x[2]{0.0, 0.0};
+    double uav_final_y[2]{0.0, 0.0};
+    double uav_final_z[2]{0.0, 0.0};
+
     bool any_kf_activity = false;
     for (int idx = 0; idx < 2; ++idx) {
-        if (uav_kf_inited_[idx] || meas_ok[idx]) {
+        if (uav_kf_inited_[idx] || meas_ok[idx] || source_holding[idx]) {
             any_kf_activity = true;
             break;
         }
@@ -1461,28 +1939,41 @@ void Resolve::DetectCallback(
     
     for (int idx = 0; idx < 2; ++idx) {
         const char* side_name = (idx == 0) ? "蓝方" : "红方";
-        
+
+        if (uav_kf_inited_[idx] &&
+            meas_source[idx] == UavMeasurementSource::DefaultPose &&
+            !meas_ok[idx] && !source_holding[idx]) {
+            UavKalmanReset(idx);
+            RCLCPP_WARN(this->get_logger(),
+                        "  %s: 退化到默认坐标，重置KF", side_name);
+        }
+
         if (uav_kf_inited_[idx]) {
             UavKalmanPredict(idx, t_now);
             if (meas_ok[idx]) {
                 UavKalmanUpdate(idx, meas_x[idx], meas_y[idx], meas_z[idx]);
                 uav_kf_last_update_[idx] = t_now;
-                RCLCPP_INFO(this->get_logger(), "  %s: KF更新 -> (%.3f, %.3f, %.3f)", 
-                    side_name, uav_x_[idx], uav_y_[idx], uav_z_[idx]);
-            } else {
-                const double dt_ms =
-                    std::fabs((t_now - uav_kf_last_update_[idx]).seconds()) * 1000.0;
-                if (uav_kf_last_update_[idx].nanoseconds() != 0 &&
-                    dt_ms > (double)uav_lost_timeout_ms_) {
-                    UavKalmanReset(idx);
-                    RCLCPP_WARN(this->get_logger(), "  %s: ⚠️ 超时%.1fms，重置KF", side_name, dt_ms);
-                }
+                RCLCPP_INFO(this->get_logger(),
+                            "  %s: KF更新[%s] -> (%.3f, %.3f, %.3f)",
+                            side_name,
+                            UavSourceName(meas_source[idx]),
+                            uav_x_[idx], uav_y_[idx], uav_z_[idx]);
+            } else if (source_holding[idx]) {
+                RCLCPP_INFO_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 300,
+                    "  %s: KF短时衔接[%s] -> (%.3f, %.3f, %.3f)",
+                    side_name,
+                    UavSourceName(uav_active_source_[idx]),
+                    uav_x_[idx], uav_y_[idx], uav_z_[idx]);
             }
         } else {
             if (meas_ok[idx]) {
                 UavKalmanInit(idx, meas_x[idx], meas_y[idx], meas_z[idx], t_now);
-                RCLCPP_INFO(this->get_logger(), "  %s: ✓ KF初始化 at (%.3f, %.3f, %.3f)", 
-                    side_name, uav_x_[idx], uav_y_[idx], uav_z_[idx]);
+                RCLCPP_INFO(this->get_logger(),
+                            "  %s: ✓ KF初始化[%s] at (%.3f, %.3f, %.3f)",
+                            side_name,
+                            UavSourceName(meas_source[idx]),
+                            uav_x_[idx], uav_y_[idx], uav_z_[idx]);
             }
         }
 
@@ -1491,18 +1982,36 @@ void Resolve::DetectCallback(
             uav_out.poses[idx].position.y = uav_y_[idx];
             uav_out.poses[idx].position.z = uav_z_[idx];
             mark_observed_uav_pose(uav_out.poses[idx]);
-        } else if (meas_ok[idx]) {
-            uav_out.poses[idx].position.x = meas_x[idx];
-            uav_out.poses[idx].position.y = meas_y[idx];
-            uav_out.poses[idx].position.z = meas_z[idx];
-            mark_observed_uav_pose(uav_out.poses[idx]);
+            uav_final_valid[idx] = true;
+            uav_final_observed[idx] = true;
+            uav_final_x[idx] = uav_x_[idx];
+            uav_final_y[idx] = uav_y_[idx];
+            uav_final_z[idx] = uav_z_[idx];
+
+            if (meas_ok[idx]) {
+                uav_last_measurement_valid_[idx] = true;
+                uav_last_measurement_x_[idx] = uav_x_[idx];
+                uav_last_measurement_y_[idx] = uav_y_[idx];
+                uav_last_measurement_z_[idx] = uav_z_[idx];
+                uav_last_measurement_stamp_[idx] = t_now;
+            }
+        } else if (meas_source[idx] == UavMeasurementSource::DefaultPose) {
+            if (uav_publish_default_output_) {
+                set_default_pose(idx, uav_out.poses[idx]);
+                uav_final_valid[idx] = true;
+                uav_final_x[idx] = uav_default_out_x_[idx];
+                uav_final_y[idx] = uav_default_out_y_[idx];
+                uav_final_z[idx] = uav_default_out_z_[idx];
+            } else {
+                set_zero_pose(uav_out.poses[idx]);
+            }
         }
     }
 
     // ========== 阶段六：最终输出坐标 ==========
     bool has_output = false;
     for (int idx = 0; idx < 2; ++idx) {
-        if (uav_kf_inited_[idx] || meas_ok[idx]) {
+        if (uav_final_valid[idx]) {
             has_output = true;
             break;
         }
@@ -1510,59 +2019,51 @@ void Resolve::DetectCallback(
     
     if (has_output) {
         RCLCPP_INFO(this->get_logger(), "========== [阶段六：最终输出] ==========");
-        if (uav_kf_inited_[0] || meas_ok[0]) {
-            double out_x = uav_kf_inited_[0] ? uav_x_[0] : meas_x[0];
-            double out_y = uav_kf_inited_[0] ? uav_y_[0] : meas_y[0];
-            double out_z = uav_kf_inited_[0] ? uav_z_[0] : meas_z[0];
-            RCLCPP_INFO(this->get_logger(), "  蓝方UAV输出: (%.3f, %.3f, %.3f) [%s/%s q=%.3f z_prior=%.3f]", 
-                out_x, out_y, out_z, uav_kf_inited_[0] ? "KF" : "测量",
-                meas_from_lidar[0] ? "激光" : "视觉",
-                meas_quality[0], GetUavFallbackZ(0));
+        if (uav_final_valid[0]) {
+            RCLCPP_INFO(this->get_logger(),
+                        "  蓝方UAV输出: (%.3f, %.3f, %.3f) [%s/%s q=%.3f z_prior=%.3f]",
+                        uav_final_x[0], uav_final_y[0], uav_final_z[0],
+                        uav_final_observed[0] ? "KF" : "默认",
+                        UavSourceName(meas_source[0]),
+                        meas_quality[0], GetUavFallbackZ(0));
         }
-        if (uav_kf_inited_[1] || meas_ok[1]) {
-            double out_x = uav_kf_inited_[1] ? uav_x_[1] : meas_x[1];
-            double out_y = uav_kf_inited_[1] ? uav_y_[1] : meas_y[1];
-            double out_z = uav_kf_inited_[1] ? uav_z_[1] : meas_z[1];
-            RCLCPP_INFO(this->get_logger(), "  红方UAV输出: (%.3f, %.3f, %.3f) [%s/%s q=%.3f z_prior=%.3f]", 
-                out_x, out_y, out_z, uav_kf_inited_[1] ? "KF" : "测量",
-                meas_from_lidar[1] ? "激光" : "视觉",
-                meas_quality[1], GetUavFallbackZ(1));
+        if (uav_final_valid[1]) {
+            RCLCPP_INFO(this->get_logger(),
+                        "  红方UAV输出: (%.3f, %.3f, %.3f) [%s/%s q=%.3f z_prior=%.3f]",
+                        uav_final_x[1], uav_final_y[1], uav_final_z[1],
+                        uav_final_observed[1] ? "KF" : "默认",
+                        UavSourceName(meas_source[1]),
+                        meas_quality[1], GetUavFallbackZ(1));
         }
     }
 
     // Now keep original car outputs (i=0..5) and fill UAV slot from KF/measurement
     for (int i = 0; i < 7; i++) {
         // blue
-        if (msg->blue_x[i] != 0 && msg->blue_y[i] != 0) {
-            cv::Point2f p(msg->blue_x[i], msg->blue_y[i]);
-            if (i == 6) {
-                // UAV: 直接使用KF或测量值,无需重新转换
-                if (uav_kf_inited_[0]) {
-                    send_data.blue_x[i] = (float)uav_x_[0];
-                    send_data.blue_y[i] = (float)uav_y_[0];
-                } else if (meas_ok[0]) {
-                    send_data.blue_x[i] = (float)meas_x[0];
-                    send_data.blue_y[i] = (float)meas_y[0];
-                } else {
-                    send_data.blue_x[i] = 0;
-                    send_data.blue_y[i] = 0;
-                }
+        if (i == 6) {
+            if (uav_final_valid[0]) {
+                send_data.blue_x[i] = static_cast<float>(uav_final_x[0]);
+                send_data.blue_y[i] = static_cast<float>(uav_final_y[0]);
             } else {
-                float h = parser_->get_height(p);
-                auto cp = parser_->parse_with_height(p, h);
-                
-                if (is_test_) {
-                    // 测试模式：直接使用投影原始值，不做y偏移和clamp
-                    send_data.blue_x[i] = cp.x;
-                    send_data.blue_y[i] = cp.y;
-                } else {
-                    // 原逻辑：做y偏移和clamp
-                    float y_offset = cp.y + static_cast<float>(uav_world_to_field_y_offset_);
-                    float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
-                    float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-                    send_data.blue_x[i] = clamp_x;
-                    send_data.blue_y[i] = clamp_y;
-                }
+                send_data.blue_x[i] = 0;
+                send_data.blue_y[i] = 0;
+            }
+        } else if (msg->blue_x[i] != 0 && msg->blue_y[i] != 0) {
+            cv::Point2f p(msg->blue_x[i], msg->blue_y[i]);
+            float h = parser_->get_height(p);
+            auto cp = parser_->parse_with_height(p, h);
+
+            if (is_test_) {
+                // 测试模式：直接使用投影原始值，不做y偏移和clamp
+                send_data.blue_x[i] = cp.x;
+                send_data.blue_y[i] = cp.y;
+            } else {
+                // 原逻辑：做y偏移和clamp
+                float y_offset = cp.y + static_cast<float>(uav_world_to_field_y_offset_);
+                float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
+                float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
+                send_data.blue_x[i] = clamp_x;
+                send_data.blue_y[i] = clamp_y;
             }
         } else {
             send_data.blue_x[i] = 0;
@@ -1570,36 +2071,29 @@ void Resolve::DetectCallback(
         }
 
         // red
-        if (msg->red_x[i] != 0 && msg->red_y[i] != 0) {
-            cv::Point2f p(msg->red_x[i], msg->red_y[i]);
-            if (i == 6) {
-                // UAV: 直接使用KF或测量值,无需重新转换
-                if (uav_kf_inited_[1]) {
-                    send_data.red_x[i] = (float)uav_x_[1];
-                    send_data.red_y[i] = (float)uav_y_[1];
-                } else if (meas_ok[1]) {
-                    send_data.red_x[i] = (float)meas_x[1];
-                    send_data.red_y[i] = (float)meas_y[1];
-                } else {
-                    send_data.red_x[i] = 0;
-                    send_data.red_y[i] = 0;
-                }
+        if (i == 6) {
+            if (uav_final_valid[1]) {
+                send_data.red_x[i] = static_cast<float>(uav_final_x[1]);
+                send_data.red_y[i] = static_cast<float>(uav_final_y[1]);
             } else {
-                
-                float h = parser_->get_height(p);
-                auto cp = parser_->parse_with_height(p, h);
-                if (is_test_) {
-                    // 测试模式：直接使用投影原始值，不做y偏移和clamp
-                    send_data.red_x[i] = cp.x;
-                    send_data.red_y[i] = cp.y;
-                } else {
-                    // 原逻辑：做y偏移和clamp
-                    float y_offset = cp.y + static_cast<float>(uav_world_to_field_y_offset_);
-                    float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
-                    float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-                    send_data.red_x[i] = clamp_x;
-                    send_data.red_y[i] = clamp_y;
-                }
+                send_data.red_x[i] = 0;
+                send_data.red_y[i] = 0;
+            }
+        } else if (msg->red_x[i] != 0 && msg->red_y[i] != 0) {
+            cv::Point2f p(msg->red_x[i], msg->red_y[i]);
+            float h = parser_->get_height(p);
+            auto cp = parser_->parse_with_height(p, h);
+            if (is_test_) {
+                // 测试模式：直接使用投影原始值，不做y偏移和clamp
+                send_data.red_x[i] = cp.x;
+                send_data.red_y[i] = cp.y;
+            } else {
+                // 原逻辑：做y偏移和clamp
+                float y_offset = cp.y + static_cast<float>(uav_world_to_field_y_offset_);
+                float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
+                float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
+                send_data.red_x[i] = clamp_x;
+                send_data.red_y[i] = clamp_y;
             }
         } else {
             send_data.red_x[i] = 0;

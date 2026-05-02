@@ -577,7 +577,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "calib_first",
-                default_value="true",
+                default_value="false",
                 description="run pnp_calib_node_new before starting the normal replay flow",
             ),
             DeclareLaunchArgument(

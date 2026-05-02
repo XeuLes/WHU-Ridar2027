@@ -50,6 +50,7 @@ public:
     cv::Mat minimap;
     int     markers[6]{};
     int16_t match_time{};
+    int8_t  self_color_{-1};
     uint8_t robot_hp[16]{};
 
 private:
@@ -69,6 +70,27 @@ private:
         int cluster_count{0};
         std::vector<cv::Point2f> debug_uvs;
         std::vector<cv::Point2f> cluster_uvs;
+    };
+
+    enum class UavMeasurementSource : int {
+        Frustum = 0,
+        LidarOnly = 1,
+        VisionZ = 2,
+        DefaultPose = 3,
+    };
+
+    struct UavPointCloudMeasurement {
+        bool valid{false};
+        double x{0.0};
+        double y{0.0};
+        double z{0.0};
+        double cluster_z_median{0.0};
+        double seed_distance{std::numeric_limits<double>::infinity()};
+        double cluster_spread{std::numeric_limits<double>::infinity()};
+        int cluster_size{0};
+        int input_size{0};
+        int z_valid_size{0};
+        int cluster_count{0};
     };
 
     // existing outputs
@@ -130,6 +152,14 @@ private:
     double uav_quality_size_ref_{12.0};
     double uav_quality_measurement_threshold_{0.60};
     double uav_quality_z_prior_threshold_{0.75};
+    int    uav_degrade_l0_to_l1_ms_{200};
+    int    uav_degrade_l1_to_l2_ms_{250};
+    int    uav_degrade_l2_to_l3_ms_{500};
+    double uav_lidar_only_assign_gate_m_{3.0};
+    double uav_lidar_only_cluster_spread_max_m_{1.2};
+    int    uav_lidar_only_seed_timeout_ms_{1500};
+    bool   uav_lidar_only_use_half_roi_{true};
+    double uav_lidar_only_half_split_y_{7.5};
     double uav_world_to_field_y_offset_{15.0};
     double uav_field_min_x_{0.0};
     double uav_field_max_x_{28.0};
@@ -157,6 +187,18 @@ private:
                                   rclcpp::Time(0, 0, RCL_ROS_TIME)};
     rclcpp::Time uav_kf_last_update_[2]{rclcpp::Time(0, 0, RCL_ROS_TIME),
                                         rclcpp::Time(0, 0, RCL_ROS_TIME)};
+
+    UavMeasurementSource uav_active_source_[2]{
+        UavMeasurementSource::DefaultPose,
+        UavMeasurementSource::DefaultPose};
+    rclcpp::Time uav_source_last_update_[2]{rclcpp::Time(0, 0, RCL_ROS_TIME),
+                                            rclcpp::Time(0, 0, RCL_ROS_TIME)};
+    bool uav_last_measurement_valid_[2]{false, false};
+    double uav_last_measurement_x_[2]{0.0, 0.0};
+    double uav_last_measurement_y_[2]{0.0, 0.0};
+    double uav_last_measurement_z_[2]{0.0, 0.0};
+    rclcpp::Time uav_last_measurement_stamp_[2]{rclcpp::Time(0, 0, RCL_ROS_TIME),
+                                                rclcpp::Time(0, 0, RCL_ROS_TIME)};
 
     // state [x y z vx vy vz]
     double uav_x_[2]{0.0, 0.0};
@@ -198,10 +240,23 @@ private:
                                          const UavFrustumMeasurement& meas) const;
     double GetUavFallbackZ(int idx) const;
     void UpdateUavZPrior(int idx, double z_raw, const rclcpp::Time& stamp);
+    const char* UavSourceName(UavMeasurementSource source) const;
+    int UavSourcePriority(UavMeasurementSource source) const;
+    int UavDegradeHoldMs(UavMeasurementSource from,
+                         UavMeasurementSource to) const;
+    bool BuildUavLidarOnlySeed(int idx,
+                               const rclcpp::Time& stamp,
+                               cv::Vec3d& seed) const;
+    bool IsUavLidarOnlyClusterAllowedForSide(int idx, double y) const;
     bool SolveUavFrustumMeasurement(
         const cv::Rect2f& roi,
         const std::vector<pcl::PointXYZ>& points,
         UavFrustumMeasurement& out) const;
+    bool SolveUavLidarOnlyMeasurement(
+        int idx,
+        const std::vector<pcl::PointXYZ>& points,
+        const rclcpp::Time& stamp,
+        UavPointCloudMeasurement& out) const;
     void  UavKalmanReset(int idx);
     void  UavKalmanInit(int idx, double x, double y, double z,
                         const rclcpp::Time& stamp);
