@@ -436,34 +436,35 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     }
 
     // === 定义区域过滤器 ===
-    auto dart_cloud_filter = [](pcl::PointXYZ& point) {
+    auto dart_cloud_filter = [](const pcl::PointXYZ& point) {
         return (point.x > 28 - 0.5889 - 0.1885 && point.x < 28 - 0.5889) &&
                (point.y > 3.925 && point.y < 4.525) &&
                (point.z > 2.4722 - 0.859 + 0.1 && point.z < 2.4722);
     };
 
-    auto fly_safe_filter = [](pcl::PointXYZ& point) {
+    auto fly_safe_filter = [](const pcl::PointXYZ& point) {
         return (point.x > 28 - 2.775 && point.x < 27.5) &&
                (point.y > 0.2 && point.y < 2.2) &&
-               (point.z > 1.7 && point.z < 3);
+               (point.z > 1.5 && point.z < 3.5);
     };
 
-    auto fly_warn_filter = [](pcl::PointXYZ& point) {
+    auto fly_warn_filter = [](const pcl::PointXYZ& point) {
         return (point.x > 19.83 && point.x < 28 - 2.7) &&
                (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
-               (point.z > 1.7 && point.z < 3);
+            //    origin point.y < 1.356 + 2.4 + 0.8
+               (point.z > 1.5 && point.z < 3.5);
     };
 
-    auto fly_alarm_filter = [](pcl::PointXYZ& point) {
+    auto fly_alarm_filter = [](const pcl::PointXYZ& point) {
         return (point.x > 13 && point.x < 20.5) &&
                (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
-               (point.z > 1.7 && point.z < 3);
+               (point.z > 1.5 && point.z < 3.5);
     };
 
-    auto uav_other_filter = [this](const pcl::PointXYZ& point) {
-        return point.x >= uav_other_min_x_ && point.x <= uav_other_max_x_ &&
-               point.y >= uav_other_min_y_ && point.y <= uav_other_max_y_ &&
-               point.z >= uav_other_min_z_ && point.z <= uav_other_max_z_;
+    auto uav_other_filter = [&](const pcl::PointXYZ& point) {
+        return fly_safe_filter(point) ||
+               fly_warn_filter(point) ||
+               fly_alarm_filter(point);
     };
 
     // 1. 转换ROS消息到PCL
@@ -532,8 +533,8 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
 
         if (is_out_of_bounds) {
             // 虽然是场外点，但检查是否在特殊关注区域（如飞镖/飞机区）
-            if ((point.x > 27.0 && point.x < 28.0 && point.y > 3.9 && point.y < 4.6 && point.z > 1.5) ||
-                (point.x > 13.0 && point.x < 27.5 && point.y > 0.2 && point.y < 4.5 && point.z > 1.7)) {
+            if ((point.x > 27.0 && point.x < 28.0 && point.y > 3.9 && point.y < 4.6 && point.z > 1.5 && point.z<4.5) ||
+                (point.x > 13.0 && point.x < 27.5 && point.y > 0.2 && point.y < 4.5 && point.z > 1.7 && point.z<4.5)) {
                 if (!is_uav_other) {
                     other_filtered_cloud.push_back(point);
                 }
@@ -586,7 +587,7 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
                             "当前无有效差分地图，跳过动态差分");
     } else {
-        GetDynamicCloud(filtered_cloud, dynamic_pointcloud, 0.03, 12);
+        GetDynamicCloud(filtered_cloud, dynamic_pointcloud, 0.08, 12);
     }
 
     RCLCPP_INFO_THROTTLE(

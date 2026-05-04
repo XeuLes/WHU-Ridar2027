@@ -5,6 +5,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <deque>
+#include <iomanip>
+#include <sstream>
 #include <limits>
 #include <string>
 
@@ -255,6 +257,9 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     pub_uav_cluster_debug_ =
         this->create_publisher<sensor_msgs::msg::PointCloud2>(
             "/uav_cluster_debug", rclcpp::SensorDataQoS());
+    pub_uav_resolve_debug_status_ =
+        this->create_publisher<std_msgs::msg::String>(
+            "/uav_resolve_debug_status", 10);
 
     sub_uav_other_cloud_ =
         this->create_subscription<sensor_msgs::msg::PointCloud2>(
@@ -1020,15 +1025,9 @@ bool Resolve::BuildUavLidarOnlySeed(int idx,
         }
     }
 
-    const double dx = uav_default_out_x_[idx];
-    const double dy = uav_default_out_y_[idx];
-    const double dz = uav_default_out_z_[idx];
-    if (std::isfinite(dx) && std::isfinite(dy) && std::isfinite(dz) &&
-        (std::fabs(dx) > 1e-6 || std::fabs(dy) > 1e-6 || std::fabs(dz) > 1e-6)) {
-        seed = cv::Vec3d(dx, dy, ClampUavZ(dz));
-        return true;
-    }
-
+    // Do not seed lidar-only tracking from the default UAV pose. The default
+    // pose has no color evidence, so using it here can let the side without a
+    // detected UAV attach to the other side's point-cloud cluster.
     return false;
 }
 
@@ -1143,6 +1142,18 @@ bool Resolve::SolveUavFrustumMeasurement(
     }
     out.roi_point_size = static_cast<int>(intersected->size());
 
+    if (!intersected->empty()) {
+        cv::Vec3d frustum_center(0.0, 0.0, 0.0);
+        for (const auto& p : intersected->points) {
+            frustum_center += cv::Vec3d(p.x, p.y, p.z);
+        }
+        frustum_center *= 1.0 / static_cast<double>(intersected->size());
+        out.frustum_coord_valid = true;
+        out.frustum_x = frustum_center[0];
+        out.frustum_y = frustum_center[1];
+        out.frustum_z = frustum_center[2];
+    }
+
     if (intersected->size() < static_cast<size_t>(std::max(1, uav_cluster_min_size_))) {
         return false;
     }
@@ -1241,6 +1252,9 @@ bool Resolve::SolveUavFrustumMeasurement(
             out.x = best_point.x;
             out.y = best_point.y;
             out.z = best_point.z;
+            out.cluster_x = best_point.x;
+            out.cluster_y = best_point.y;
+            out.cluster_z = best_point.z;
             out.cluster_z_median = cluster_z_median;
             out.ray_dist_median = ray_dist_median;
             out.ray_dist_spread = ray_dist_spread;
@@ -1722,6 +1736,13 @@ void Resolve::DetectCallback(
     bool   source_holding[2]{false, false};
     double meas_quality[2]{0.0, 0.0};
     double meas_x[2]{0, 0}, meas_y[2]{0, 0}, meas_z[2]{0, 0};
+    bool   frustum_coord_valid[2]{false, false};
+    double frustum_x[2]{0.0, 0.0}, frustum_y[2]{0.0, 0.0}, frustum_z[2]{0.0, 0.0};
+    bool   cluster_coord_valid[2]{false, false};
+    double cluster_x[2]{0.0, 0.0}, cluster_y[2]{0.0, 0.0}, cluster_z[2]{0.0, 0.0};
+    bool   vision_coord_valid[2]{false, false};
+    bool   vision_inside_field[2]{false, false};
+    double vision_x[2]{0.0, 0.0}, vision_y[2]{0.0, 0.0}, vision_z[2]{0.0, 0.0};
     UavMeasurementSource meas_source[2]{
         UavMeasurementSource::DefaultPose,
         UavMeasurementSource::DefaultPose};
@@ -1826,8 +1847,20 @@ void Resolve::DetectCallback(
         if (has_bbox && other_fresh && !other_points.empty()) {
             bool has_cluster_candidate = false;
             UavFrustumMeasurement frustum_meas;
-            if (SolveUavFrustumMeasurement(roi, other_points, frustum_meas)) {
+            const bool frustum_solved =
+                SolveUavFrustumMeasurement(roi, other_points, frustum_meas);
+            if (frustum_meas.frustum_coord_valid) {
+                frustum_coord_valid[idx] = true;
+                frustum_x[idx] = frustum_meas.frustum_x;
+                frustum_y[idx] = frustum_meas.frustum_y;
+                frustum_z[idx] = frustum_meas.frustum_z;
+            }
+            if (frustum_solved) {
                 has_cluster_candidate = true;
+                cluster_coord_valid[idx] = true;
+                cluster_x[idx] = frustum_meas.cluster_x;
+                cluster_y[idx] = frustum_meas.cluster_y;
+                cluster_z[idx] = frustum_meas.cluster_z;
                 debug_uvs_all.insert(debug_uvs_all.end(),
                                      frustum_meas.debug_uvs.begin(),
                                      frustum_meas.debug_uvs.end());
@@ -1956,27 +1989,34 @@ void Resolve::DetectCallback(
                 RCLCPP_WARN(this->get_logger(),
                             "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f 射线无法与高度平面求交",
                             side_name, vision_px, vision_py, z_plane);
-            } else if (!IsUavFieldPointInside(pv[0], pv[1])) {
-                RCLCPP_WARN(
-                    this->get_logger(),
-                    "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f -> raw=(%.3f, %.3f, %.3f) 场外，丢弃该视觉测量",
-                    side_name, vision_px, vision_py, z_plane,
-                    pv[0], pv[1], pv[2]);
             } else {
-                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].valid = true;
-                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].updates_kf = true;
-                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].source =
-                    UavMeasurementSource::VisionZ;
-                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].quality =
-                    std::clamp(static_cast<double>(bbox_conf), 0.0, 1.0);
-                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].x = pv[0];
-                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].y = pv[1];
-                candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].z = z_plane;
+                vision_coord_valid[idx] = true;
+                vision_inside_field[idx] = IsUavFieldPointInside(pv[0], pv[1]);
+                vision_x[idx] = pv[0];
+                vision_y[idx] = pv[1];
+                vision_z[idx] = z_plane;
+                if (!vision_inside_field[idx]) {
+                    RCLCPP_WARN(
+                        this->get_logger(),
+                        "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f -> raw=(%.3f, %.3f, %.3f) 场外，丢弃该视觉测量",
+                        side_name, vision_px, vision_py, z_plane,
+                        pv[0], pv[1], pv[2]);
+                } else {
+                    candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].valid = true;
+                    candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].updates_kf = true;
+                    candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].source =
+                        UavMeasurementSource::VisionZ;
+                    candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].quality =
+                        std::clamp(static_cast<double>(bbox_conf), 0.0, 1.0);
+                    candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].x = pv[0];
+                    candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].y = pv[1];
+                    candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].z = z_plane;
 
-                RCLCPP_WARN(this->get_logger(),
-                            "  %s: 纯视觉候选 center=(%.1f, %.1f) z_prior=%.2f -> (%.3f, %.3f, %.3f)",
-                            side_name, vision_px, vision_py, z_plane,
-                            pv[0], pv[1], z_plane);
+                    RCLCPP_WARN(this->get_logger(),
+                                "  %s: 纯视觉候选 center=(%.1f, %.1f) z_prior=%.2f -> (%.3f, %.3f, %.3f)",
+                                side_name, vision_px, vision_py, z_plane,
+                                pv[0], pv[1], z_plane);
+                }
             }
         }
 
@@ -2150,6 +2190,44 @@ void Resolve::DetectCallback(
         }
     }
 
+    if (uav_final_observed[0] && uav_final_observed[1]) {
+        const double dx = uav_final_x[0] - uav_final_x[1];
+        const double dy = uav_final_y[0] - uav_final_y[1];
+        const double dz = uav_final_z[0] - uav_final_z[1];
+        const double duplicate_dist = std::sqrt(dx * dx + dy * dy + dz * dz);
+        const double duplicate_gate =
+            std::max(0.45, static_cast<double>(uav_cluster_tolerance_));
+        const bool blue_has_direct_evidence = has_blue_uav;
+        const bool red_has_direct_evidence = has_red_uav;
+
+        auto clear_observed_output = [&](int idx, const char* side_name) {
+            RCLCPP_WARN(
+                this->get_logger(),
+                "  %s: UAV最终结果与另一方重合且本帧无视觉证据，清除该侧KF以避免蓝红串用",
+                side_name);
+            UavKalmanReset(idx);
+            uav_last_measurement_valid_[idx] = false;
+            uav_active_source_[idx] = UavMeasurementSource::DefaultPose;
+            uav_source_last_update_[idx] = rclcpp::Time(0, 0, RCL_ROS_TIME);
+            set_zero_pose(uav_out.poses[idx]);
+            uav_final_valid[idx] = false;
+            uav_final_observed[idx] = false;
+            uav_final_x[idx] = 0.0;
+            uav_final_y[idx] = 0.0;
+            uav_final_z[idx] = 0.0;
+            meas_source[idx] = UavMeasurementSource::DefaultPose;
+        };
+
+        if (duplicate_dist <= duplicate_gate &&
+            blue_has_direct_evidence != red_has_direct_evidence) {
+            if (!blue_has_direct_evidence) {
+                clear_observed_output(0, "蓝方");
+            } else {
+                clear_observed_output(1, "红方");
+            }
+        }
+    }
+
     // ========== 阶段六：最终输出坐标 ==========
     bool has_output = false;
     for (int idx = 0; idx < 2; ++idx) {
@@ -2179,11 +2257,74 @@ void Resolve::DetectCallback(
         }
     }
 
+    if (pub_uav_resolve_debug_status_) {
+        auto mode_name = [&](int idx) -> const char* {
+            if (source_holding[idx]) {
+                switch (uav_active_source_[idx]) {
+                    case UavMeasurementSource::Frustum:
+                        return "kf_hold_radar_vision_fusion";
+                    case UavMeasurementSource::LidarOnly:
+                        return "kf_hold_radar_only";
+                    case UavMeasurementSource::VisionZ:
+                        return "kf_hold_pure_vision";
+                    case UavMeasurementSource::DefaultPose:
+                    default:
+                        return "kf_hold_default";
+                }
+            }
+
+            switch (meas_source[idx]) {
+                case UavMeasurementSource::Frustum:
+                    return "radar_vision_fusion";
+                case UavMeasurementSource::LidarOnly:
+                    return "radar_only";
+                case UavMeasurementSource::VisionZ:
+                    return "pure_vision";
+                case UavMeasurementSource::DefaultPose:
+                default:
+                    return "default";
+            }
+        };
+
+        std::ostringstream stream;
+        stream << "stamp," << std::fixed << std::setprecision(6)
+               << t_now.seconds() << '\n';
+        auto append_side = [&](int idx, const char* side) {
+            stream << side << ','
+                   << mode_name(idx) << ','
+                   << (frustum_coord_valid[idx] ? 1 : 0) << ','
+                   << std::setprecision(3)
+                   << frustum_x[idx] << ','
+                   << frustum_y[idx] << ','
+                   << frustum_z[idx] << ','
+                   << (cluster_coord_valid[idx] ? 1 : 0) << ','
+                   << cluster_x[idx] << ','
+                   << cluster_y[idx] << ','
+                   << cluster_z[idx] << ','
+                   << (vision_coord_valid[idx] ? 1 : 0) << ','
+                   << vision_x[idx] << ','
+                   << vision_y[idx] << ','
+                   << vision_z[idx] << ','
+                   << (vision_inside_field[idx] ? 1 : 0) << ','
+                   << (uav_final_observed[idx] ? 1 : 0) << ','
+                   << (uav_final_observed[idx] ? uav_final_x[idx] : 0.0) << ','
+                   << (uav_final_observed[idx] ? uav_final_y[idx] : 0.0) << ','
+                   << (uav_final_observed[idx] ? uav_final_z[idx] : 0.0) << '\n';
+        };
+
+        append_side(0, "B");
+        append_side(1, "R");
+
+        std_msgs::msg::String debug_msg;
+        debug_msg.data = stream.str();
+        pub_uav_resolve_debug_status_->publish(debug_msg);
+    }
+
     // Now keep original car outputs (i=0..5) and fill UAV slot from KF/measurement
     for (int i = 0; i < 7; i++) {
         // blue
         if (i == 6) {
-            if (uav_final_valid[0]) {
+            if (uav_final_observed[0]) {
                 send_data.blue_x[i] = static_cast<float>(uav_final_x[0]);
                 send_data.blue_y[i] = static_cast<float>(uav_final_y[0]);
             } else {
@@ -2214,7 +2355,7 @@ void Resolve::DetectCallback(
 
         // red
         if (i == 6) {
-            if (uav_final_valid[1]) {
+            if (uav_final_observed[1]) {
                 send_data.red_x[i] = static_cast<float>(uav_final_x[1]);
                 send_data.red_y[i] = static_cast<float>(uav_final_y[1]);
             } else {

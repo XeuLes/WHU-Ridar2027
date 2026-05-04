@@ -57,6 +57,11 @@ def _build_launch(context):
         value_type=bool,
     )
     rosbag_file = LaunchConfiguration("rosbag_file").perform(context)
+    lidar_input_topic = LaunchConfiguration("lidar_input_topic").perform(context)
+    image_input_topic = LaunchConfiguration("image_input_topic").perform(context)
+    compressed_image_input_topic = LaunchConfiguration(
+        "compressed_image_input_topic"
+    ).perform(context)
     calib_first = LaunchConfiguration("calib_first").perform(context).strip().lower()
     calib_first = calib_first in ("1", "true", "yes", "on")
 
@@ -99,7 +104,12 @@ def _build_launch(context):
         })
 
     def make_rosbag_player_component(extra_params=None, remappings=None):
-        params = {"rosbag_file": rosbag_file}
+        params = {
+            "rosbag_file": rosbag_file,
+            "lidar_input_topic": lidar_input_topic,
+            "image_input_topic": image_input_topic,
+            "compressed_image_input_topic": compressed_image_input_topic,
+        }
         if extra_params:
             params.update(extra_params)
         return ComposableNode(
@@ -444,6 +454,14 @@ def _build_launch(context):
                 "kalman_topic": "/kalman_detect",
                 "debug_map_topic": "/debug_map_result",
                 "status_topic": "/kalman_track_status",
+                "identity_topic": "/radar/referee/robot_identity",
+                "self_color_override": team["match_self_color"],
+                "out_matrix_path": camera_extrinsic_yaml,
+                "camera_params_path": os.path.join(bringup_config, "camera_params.yaml"),
+                "region_points_path": os.path.join(bringup_config, "RM2025_Points.yaml"),
+                "uav_intersection_debug_topic": "/uav_intersection_debug",
+                "uav_cluster_debug_topic": "/uav_cluster_debug",
+                "uav_resolve_debug_status_topic": "/uav_resolve_debug_status",
             }
         ],
     )
@@ -558,13 +576,28 @@ def generate_launch_description():
         [
             DeclareLaunchArgument(
                 "our_color",
-                default_value="blue",
+                default_value="red",
                 description="our team color: red or blue",
             ),
             DeclareLaunchArgument(
                 "rosbag_file",
                 default_value="/home/user/DATA/rosbag.db3",
                 description="input rosbag path for replay",
+            ),
+            DeclareLaunchArgument(
+                "lidar_input_topic",
+                default_value="/livox/lidar",
+                description="input PointCloud2 topic in the rosbag",
+            ),
+            DeclareLaunchArgument(
+                "image_input_topic",
+                default_value="/camera0/image",
+                description="input raw sensor_msgs/Image topic in the rosbag",
+            ),
+            DeclareLaunchArgument(
+                "compressed_image_input_topic",
+                default_value="/compressed_image",
+                description="input sensor_msgs/CompressedImage topic in the rosbag",
             ),
             DeclareLaunchArgument(
                 "decision_params_file",

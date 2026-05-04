@@ -170,7 +170,6 @@ def _build_launch(context):
     )
 
     camera0_rectifier_component = make_rectifier_component("camera0")
-    camera1_rectifier_component = make_rectifier_component("camera1")
     camera2_rectifier_component = make_rectifier_component("camera2")
 
     localization_component = ComposableNode(
@@ -364,7 +363,6 @@ def _build_launch(context):
             hik_camera_component,
             detect_component,
             camera0_rectifier_component,
-            camera1_rectifier_component,
             camera2_rectifier_component,
             auto_aim_component,
         ],
@@ -597,6 +595,14 @@ def _build_launch(context):
                 "kalman_topic": "/kalman_detect",
                 "debug_map_topic": "/debug_map_result",
                 "status_topic": "/kalman_track_status",
+                "identity_topic": "/radar/referee/robot_identity",
+                "self_color_override": team["match_self_color"],
+                "out_matrix_path": camera_extrinsic_yaml,
+                "camera_params_path": resolve_camera_params_yaml,
+                "region_points_path": resolve_region_points_yaml,
+                "uav_intersection_debug_topic": "/uav_intersection_debug",
+                "uav_cluster_debug_topic": "/uav_cluster_debug",
+                "uav_resolve_debug_status_topic": "/uav_resolve_debug_status",
             }
         ],
     )

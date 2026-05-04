@@ -122,7 +122,7 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "start_camera",
             default_value="true",
-            description="Whether to start the Hik camera driver and camera1 rectifier",
+            description="Whether to start the Hik camera driver",
         ),
         DeclareLaunchArgument(
             "start_auto_aim",
@@ -435,21 +435,6 @@ def generate_launch_description():
                     plugin="hik_camera_ros2_driver::HikCameraRos2DriverNode",
                     name="hik_camera_ros2_driver",
                     parameters=[hik_params_file],
-                    extra_arguments=intra,
-                ),
-                ComposableNode(
-                    package="hik_camera_ros2_driver",
-                    plugin="hik_camera_ros2_driver::HikCameraRectifierNode",
-                    name="camera1_rectifier",
-                    parameters=[
-                        {
-                            "input_image_topic": "/camera1/image",
-                            "input_camera_info_topic": "/camera1/camera_info",
-                            "output_image_topic": "/camera1_rect/image",
-                            "output_camera_info_topic": "/camera1_rect/camera_info",
-                            "use_sensor_data_qos": True,
-                        }
-                    ],
                     extra_arguments=intra,
                 ),
                 ComposableNode(

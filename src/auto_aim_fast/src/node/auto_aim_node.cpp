@@ -66,8 +66,8 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
 {
   cv::setNumThreads(3);
 
-  this->declare_parameter<std::string>("image_topic", "/camera0/image");
-  this->declare_parameter<std::string>("camera_info_topic", "/camera0/camera_info");
+  this->declare_parameter<std::string>("image_topic", "/camera1/image");
+  this->declare_parameter<std::string>("camera_info_topic", "/camera1/camera_info");
   this->declare_parameter<bool>("use_referee_identity_color", true);
   this->declare_parameter<std::string>("referee_identity_topic", "/radar/referee/robot_identity");
   this->declare_parameter<bool>("gimbal.require_ready", true);

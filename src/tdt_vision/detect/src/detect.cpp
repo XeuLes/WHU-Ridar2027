@@ -54,17 +54,23 @@ int buildTensorRTEngine(
     const std::string& shape,
     const std::string& input_name,
     bool fp16,
+    bool use_shape_args = true,
     const std::vector<std::string>& extra_args = {})
 {
     std::ostringstream command;
     command << "python3 src/utils/onnx2trt.py"
             << " --onnx " << shellQuote(onnx_path)
-            << " --saveEngine " << shellQuote(engine_path)
-            << " --Shape " << shellQuote(shape)
-            << " --minBatch " << min_batch
-            << " --optBatch " << opt_batch
-            << " --maxBatch " << max_batch
-            << " --input_name " << shellQuote(input_name);
+            << " --saveEngine " << shellQuote(engine_path);
+
+    if (use_shape_args) {
+        command << " --Shape " << shellQuote(shape)
+                << " --minBatch " << min_batch
+                << " --optBatch " << opt_batch
+                << " --maxBatch " << max_batch
+                << " --input_name " << shellQuote(input_name);
+    } else {
+        command << " --noShapeArgs";
+    }
 
     if (fp16) {
         command << " --fp16";
@@ -404,7 +410,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
 
 
     RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo_path = %s", yolo_path.c_str());
-RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
+    RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
 
 
     // 6. 加载UAV检测器
@@ -413,7 +419,7 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
     constexpr int kUavMinBatch = 1;
     constexpr int kUavOptBatch = 4;
     constexpr int kUavMaxBatch = 8;
-    const std::string uav_onnx_path = "model/ONNX/uav.onnx";
+    const std::string uav_onnx_path = "model/ONNX/RM-Plane-yolo26n-p2-2026-04-03.onnx";
     if (!fileExists(uav_path)) {
         if (!fileExists(uav_onnx_path)) {
             RCLCPP_ERROR(
@@ -423,8 +429,8 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
         } else {
             RCLCPP_WARN(
                 this->get_logger(),
-                "[INIT] UAV engine missing, rebuilding with FP16 dynamic batch profile %d/%d/%d: %s",
-                kUavMinBatch, kUavOptBatch, kUavMaxBatch, uav_path.c_str());
+                "[INIT] UAV engine missing, rebuilding fixed-shape FP16 engine: %s",
+                uav_path.c_str());
             const int build_ret = buildTensorRTEngine(
                 uav_onnx_path,
                 uav_path,
@@ -434,6 +440,7 @@ RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
                 "1280x1280",
                 "images",
                 true,
+                false,
                 {"--profilingVerbosity=detailed"});
             if (build_ret != 0 || !fileExists(uav_path)) {
                 RCLCPP_ERROR(

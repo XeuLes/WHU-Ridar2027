@@ -19,6 +19,7 @@ install(DIRECTORY
 )
 
 install(PROGRAMS
+  src/camera_lidar_bag_extract.py
   src/referee_rosbag_recorder.py
   DESTINATION lib/${PROJECT_NAME}
 )

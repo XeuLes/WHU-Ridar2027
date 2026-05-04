@@ -364,7 +364,9 @@ bool saveHomographyToFile()
     std::lock_guard<std::mutex> lk(mtx_);
     for (int idx = 0; idx < 2; ++idx) {
       const auto & p = msg->poses[idx].position;
-      if (!isFinite3(p.x, p.y, p.z) || (p.x == 0.0 && p.y == 0.0)) {
+      const auto & q = msg->poses[idx].orientation;
+      if (!isFinite3(p.x, p.y, p.z) || std::fabs(q.w - 1.0) > 1e-3 ||
+          (p.x == 0.0 && p.y == 0.0)) {
         uav_valid_[idx] = false;
         uav_xy_[idx] = cv::Point2f(0.0f, 0.0f);
         uav_t_[idx] = 0.0;

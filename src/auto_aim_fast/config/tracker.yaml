@@ -1,6 +1,6 @@
 auto_aim_node:
   ros__parameters:
-    image_topic: "/camera1_rect/image"
+    image_topic: "/camera1/image"
 
     tracker.confirm_track_frames: 3
     tracker.lost_to_lost_frames: 5

@@ -14,7 +14,9 @@ def build_trtexec_command(args: argparse.Namespace) -> list[str]:
         f"--saveEngine={args.saveEngine}",
     ]
 
-    if args.static:
+    if args.noShapeArgs:
+        pass
+    elif args.static:
         infer_shape = args.optShape or make_nchw_shape(args.optBatch, args.Shape)
         command.append(f"--shapes={args.input_name}:{infer_shape}")
     else:
@@ -51,6 +53,11 @@ if __name__ == "__main__":
     parser.add_argument("--optShape", default="", help="Explicit opt NCHW shape, overrides --optBatch/--Shape.")
     parser.add_argument("--maxShape", default="", help="Explicit max NCHW shape, overrides --maxBatch/--Shape.")
     parser.add_argument("--static", action="store_true", help="Build a static-shape engine and skip min/opt/max profiles.")
+    parser.add_argument(
+        "--noShapeArgs",
+        action="store_true",
+        help="Do not pass --shapes/--minShapes/--optShapes/--maxShapes; use for fixed-shape ONNX models.",
+    )
     parser.add_argument("--fp16", action="store_true", help="Enable TensorRT FP16 build.")
     parser.add_argument(
         "--extraArg",

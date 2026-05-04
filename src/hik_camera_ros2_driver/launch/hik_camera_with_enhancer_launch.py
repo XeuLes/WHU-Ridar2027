@@ -41,13 +41,13 @@ def generate_launch_description():
 
     declare_enhancer_input_cmd = DeclareLaunchArgument(
         "enhancer_input_topic", 
-        default_value="/camera1_rect/image",
+        default_value="/camera1/image",
         description="图像增强节点的输入话题"
     )
 
     declare_enhancer_output_cmd = DeclareLaunchArgument(
         "enhancer_output_topic", 
-        default_value="/camera1_rect/enhance", 
+        default_value="/camera1/enhance",
         description="图像增强节点的输出话题"
     )
 
@@ -68,7 +68,7 @@ def generate_launch_description():
             extra_arguments=intra,
         )
 
-    # 相机驱动+去畸变组件容器
+    # 相机驱动+cam0/cam2去畸变组件容器
     start_hik_camera_cmd = ComposableNodeContainer(
         name="hik_camera_with_rectifier_container",
         namespace="",
@@ -83,7 +83,6 @@ def generate_launch_description():
                 extra_arguments=intra,
             ),
             rectifier_component("camera0"),
-            rectifier_component("camera1"),
             rectifier_component("camera2"),
         ],
         arguments=["--ros-args", "--log-level", log_level],

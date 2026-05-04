@@ -1,4 +1,5 @@
 #include <cv_bridge/cv_bridge.h>
+#include <cmath>
 #include <cstring>  // memset
 #include <fstream>
 #include <limits>
@@ -194,8 +195,16 @@ public:
         match_info.self_color = referee_identity_color_;
     }
 
+    cv::Point2f apply_self_color_flip(const cv::Point2f& pt) const
+    {
+        if (match_info.self_color == 0) {
+            return cv::Point2f(28.0f - pt.x, 15.0f - pt.y);
+        }
+        return pt;
+    }
+
     // 订阅最终融合UAV结果：poses[0]=blue UAV, poses[1]=red UAV
-    // position=NaN 表示无效，不更新绘制点
+    // position=NaN 表示无效。这里缓存原始场地坐标；绘制时再按当前己方颜色翻转。
     void uav_callback(const geometry_msgs::msg::PoseArray::SharedPtr msg)
     {
         auto   now = std::chrono::system_clock::now();
@@ -211,10 +220,13 @@ public:
 
         auto update_one = [&](int idx) {
             const auto& p = msg->poses[idx].position;
+            const auto& q = msg->poses[idx].orientation;
 
-            // NaN 或默认零坐标都视作无效，避免自方默认 UAV 点翻转后画到地图角落。
+            // orientation.w == 1 means an observed/KF UAV result from resolve.
+            // Default fallback poses use w == 0 and must not be drawn as detections.
             if (!std::isfinite(p.x) || !std::isfinite(p.y) ||
-                !std::isfinite(p.z) || (p.x == 0.0 && p.y == 0.0)) {
+                !std::isfinite(p.z) || std::fabs(q.w - 1.0) > 1e-3 ||
+                (p.x == 0.0 && p.y == 0.0)) {
                 // 不更新，保持上次值；为了避免残留旧点一直画，可将更新时间置0
                 // 这里选择“置0”，保证无效时不绘制
                 uav_update[idx] = 0.0;
@@ -225,13 +237,7 @@ public:
             cv::Point2f pt(static_cast<float>(p.x),
                            static_cast<float>(p.y));
 
-            // 与车辆显示逻辑一致：self_color==0 时翻转坐标
-            if (match_info.self_color == 0) {
-                pt.x = 28.0f - pt.x;
-                pt.y = 15.0f - pt.y;
-            }
-
-            // clamp
+            // clamp raw field coordinate before caching
             pt.x = std::clamp(pt.x, 0.0f, 28.0f);
             pt.y = std::clamp(pt.y, 0.0f, 15.0f);
 
@@ -264,6 +270,19 @@ public:
                 result.red_x[i] = red_point[i].x;
                 result.red_y[i] = red_point[i].y;
             }
+        }
+
+        if ((uav_point[0].x != 0.0f || uav_point[0].y != 0.0f) &&
+            time - uav_update[0] < kUavDisplayTimeoutSeconds) {
+            cv::Point2f pt = apply_self_color_flip(uav_point[0]);
+            result.blue_x[6] = pt.x;
+            result.blue_y[6] = pt.y;
+        }
+        if ((uav_point[1].x != 0.0f || uav_point[1].y != 0.0f) &&
+            time - uav_update[1] < kUavDisplayTimeoutSeconds) {
+            cv::Point2f pt = apply_self_color_flip(uav_point[1]);
+            result.red_x[6] = pt.x;
+            result.red_y[6] = pt.y;
         }
 
         debug_map_result_pub->publish(result);
@@ -321,8 +340,9 @@ public:
         // poses[0]=蓝UAV
         if ((uav_point[0].x != 0.0f || uav_point[0].y != 0.0f) &&
             (time - uav_update[0] < kUavDisplayTimeoutSeconds)) {
-            cv::Point2f point(clone_map.cols * uav_point[0].x / 28,
-                              clone_map.rows * (15 - uav_point[0].y) / 15);
+            cv::Point2f uav_world = apply_self_color_flip(uav_point[0]);
+            cv::Point2f point(clone_map.cols * uav_world.x / 28,
+                              clone_map.rows * (15 - uav_world.y) / 15);
             cv::circle(clone_map, point, 12, cv::Scalar(200, 0, 0), -1);
             cv::putText(
                 clone_map, "UAV-B", cv::Point(point.x - 20, point.y + 5),
@@ -332,8 +352,9 @@ public:
         // poses[1]=红UAV
         if ((uav_point[1].x != 0.0f || uav_point[1].y != 0.0f) &&
             (time - uav_update[1] < kUavDisplayTimeoutSeconds)) {
-            cv::Point2f point(clone_map.cols * uav_point[1].x / 28,
-                              clone_map.rows * (15 - uav_point[1].y) / 15);
+            cv::Point2f uav_world = apply_self_color_flip(uav_point[1]);
+            cv::Point2f point(clone_map.cols * uav_world.x / 28,
+                              clone_map.rows * (15 - uav_world.y) / 15);
             cv::circle(clone_map, point, 12, cv::Scalar(0, 0, 200), -1);
             cv::putText(
                 clone_map, "UAV-R", cv::Point(point.x - 20, point.y + 5),

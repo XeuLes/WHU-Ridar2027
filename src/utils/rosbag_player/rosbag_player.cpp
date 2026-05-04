@@ -44,6 +44,14 @@ public:
         // 声明并获取"rosbag_file"参数（bag文件路径），默认值为空
         this->declare_parameter<std::string>("rosbag_file", "");
         this->get_parameter("rosbag_file", rosbag_file);
+        this->declare_parameter<std::string>("lidar_input_topic", "/livox/lidar");
+        this->declare_parameter<std::string>("image_input_topic", "/camera0/image");
+        this->declare_parameter<std::string>("compressed_image_input_topic",
+                                            "/compressed_image");
+        this->get_parameter("lidar_input_topic", lidar_input_topic_);
+        this->get_parameter("image_input_topic", image_input_topic_);
+        this->get_parameter("compressed_image_input_topic",
+                            compressed_image_input_topic_);
         this->declare_parameter<bool>("static_image_only", false);
         this->declare_parameter<double>("static_image_publish_rate", 5.0);
         this->get_parameter("static_image_only", static_image_only_);
@@ -92,11 +100,22 @@ public:
     }
 
 private:
-    bool read_next_compressed_image(sensor_msgs::msg::Image& output_msg)
+    bool read_next_image(sensor_msgs::msg::Image& output_msg)
     {
         while (rclcpp::ok() && reader_.has_next()) {
             auto bag_message = reader_.read_next();
-            if (bag_message->topic_name != "/compressed_image") {
+            if (bag_message->topic_name == image_input_topic_) {
+                auto image_msg = std::make_shared<sensor_msgs::msg::Image>();
+                rclcpp::Serialization<sensor_msgs::msg::Image> serialization;
+                rclcpp::SerializedMessage serialized_msg(
+                    *bag_message->serialized_data);
+                serialization.deserialize_message(&serialized_msg,
+                                                  image_msg.get());
+                output_msg = *image_msg;
+                return true;
+            }
+
+            if (bag_message->topic_name != compressed_image_input_topic_) {
                 continue;
             }
 
@@ -112,7 +131,7 @@ private:
             auto img = cv::imdecode(image_msg->data, cv::IMREAD_COLOR);
             if (img.empty()) {
                 RCLCPP_WARN(this->get_logger(),
-                            "Decoded /compressed_image is empty, skipping.");
+                            "Decoded compressed image is empty, skipping.");
                 continue;
             }
 
@@ -128,10 +147,12 @@ private:
     void publish_static_image_from_bag()
     {
         sensor_msgs::msg::Image static_image;
-        if (!read_next_compressed_image(static_image)) {
+        if (!read_next_image(static_image)) {
             RCLCPP_ERROR(this->get_logger(),
-                         "No valid /compressed_image found in rosbag: %s",
-                         rosbag_file.c_str());
+                         "No valid image found in rosbag: %s "
+                         "(image_input_topic=%s, compressed_image_input_topic=%s)",
+                         rosbag_file.c_str(), image_input_topic_.c_str(),
+                         compressed_image_input_topic_.c_str());
             return;
         }
 
@@ -169,7 +190,7 @@ private:
             auto ros_time = rclcpp::Clock().now();
 
             // 根据话题名称判断消息类型并处理
-            if (bag_message->topic_name == "/livox/lidar") {
+            if (bag_message->topic_name == lidar_input_topic_) {
                 // 处理点云消息
                 auto pointcloud_msg =
                     std::make_shared<sensor_msgs::msg::PointCloud2>();
@@ -186,7 +207,17 @@ private:
                 pointcloud_msg->header.stamp = ros_time;
                 // 发布点云消息
                 pointcloud_publisher_->publish(*pointcloud_msg);
-            } else if (bag_message->topic_name == "/compressed_image") {
+            } else if (bag_message->topic_name == image_input_topic_) {
+                // 处理原始图像消息
+                auto image_msg = std::make_shared<sensor_msgs::msg::Image>();
+                rclcpp::Serialization<sensor_msgs::msg::Image> serialization;
+                rclcpp::SerializedMessage serialized_msg(
+                    *bag_message->serialized_data);
+                serialization.deserialize_message(&serialized_msg,
+                                                  image_msg.get());
+                image_msg->header.stamp = ros_time;
+                image_publisher_->publish(*image_msg);
+            } else if (bag_message->topic_name == compressed_image_input_topic_) {
                 // 处理压缩图像消息
                 auto image_msg =
                     std::make_shared<sensor_msgs::msg::CompressedImage>();
@@ -258,6 +289,9 @@ private:
     std::shared_ptr<std::thread> processing_thread_;
     // rosbag文件路径
     std::string rosbag_file;
+    std::string lidar_input_topic_{"/livox/lidar"};
+    std::string image_input_topic_{"/camera0/image"};
+    std::string compressed_image_input_topic_{"/compressed_image"};
     // 只从 rosbag 读取第一帧图像并静态发布，用于启动前 PnP 标定
     bool static_image_only_{false};
     double static_image_publish_rate_{5.0};

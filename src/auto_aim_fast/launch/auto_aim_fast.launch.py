@@ -140,21 +140,6 @@ def generate_launch_description():
                 extra_arguments=intra,
             ),
             ComposableNode(
-                package="hik_camera_ros2_driver",
-                plugin="hik_camera_ros2_driver::HikCameraRectifierNode",
-                name="camera1_rectifier",
-                parameters=[
-                    {
-                        "input_image_topic": "/camera1/image",
-                        "input_camera_info_topic": "/camera1/camera_info",
-                        "output_image_topic": "/camera1_rect/image",
-                        "output_camera_info_topic": "/camera1_rect/camera_info",
-                        "use_sensor_data_qos": True,
-                    }
-                ],
-                extra_arguments=intra,
-            ),
-            ComposableNode(
                 package="auto_aim_fast",
                 plugin="auto_aim_fast::AutoAimNode",
                 name="auto_aim_node",

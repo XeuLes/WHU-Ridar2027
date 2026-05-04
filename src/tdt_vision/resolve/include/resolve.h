@@ -15,6 +15,7 @@
 #include <geometry_msgs/msg/vector3.hpp>
 
 #include <sensor_msgs/msg/point_cloud2.hpp>
+#include <std_msgs/msg/string.hpp>
 
 #include <opencv2/opencv.hpp>
 
@@ -61,6 +62,13 @@ public:
 private:
     struct UavFrustumMeasurement {
         bool valid{false};
+        bool frustum_coord_valid{false};
+        double frustum_x{0.0};
+        double frustum_y{0.0};
+        double frustum_z{0.0};
+        double cluster_x{0.0};
+        double cluster_y{0.0};
+        double cluster_z{0.0};
         double x{0.0};
         double y{0.0};
         double z{0.0};
@@ -111,6 +119,8 @@ private:
         pub_uav_intersection_debug_;
     rclcpp::Publisher<sensor_msgs::msg::PointCloud2>::SharedPtr
         pub_uav_cluster_debug_;
+    rclcpp::Publisher<std_msgs::msg::String>::SharedPtr
+        pub_uav_resolve_debug_status_;
 
     // UAV lidar other cluster input
     rclcpp::Subscription<sensor_msgs::msg::PointCloud2>::SharedPtr
