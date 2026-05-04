@@ -213,7 +213,6 @@ private:
   bool has_rough_cmd_{false};
   double rough_yaw_deg_{0.0};
   double rough_pitch_deg_{0.0};
-  bool rough_target_observed_{true};
 
   bool has_manual_cmd_{false};
   double manual_yaw_deg_{0.0};
@@ -253,15 +252,6 @@ private:
   double scan_period_s_{4.0};
   double scan_phase_x_rad_{0.0};
   double scan_phase_y_rad_{1.57079632679};
-
-  double wide_scan_window_half_yaw_deg_{10.0};
-  double wide_scan_window_half_pitch_deg_{30.0};
-  double wide_scan_speed_scale_{3.0};
-  double wide_scan_pitch_max_speed_deg_s_{10.0};
-  double wide_scan_fov_overlap_{0.65};
-  int wide_scan_max_pitch_cycles_per_yaw_sweep_{64};
-  double wide_scan_camera_image_width_px_{1624.0};
-  double wide_scan_camera_image_height_px_{1240.0};
 
   ControlMode mode_{ControlMode::HOLD};
   ControlMode last_mode_{ControlMode::HOLD};
