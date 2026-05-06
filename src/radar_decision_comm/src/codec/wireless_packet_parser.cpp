@@ -27,14 +27,13 @@ uint16_t le_u16(const std::vector<uint8_t> & data, std::size_t offset)
 std::array<uint16_t, 6> enemy_ids_for_color(const std::string & my_color)
 {
   if (my_color == "Red") {
-    return {101, 102, 103, 104, 105, 107};
+    return {101, 102, 103, 104, 106, 107};
   }
-  return {1, 2, 3, 4, 5, 7};
+  return {1, 2, 3, 4, 6, 7};
 }
 
-template<typename MsgT>
-void fill_six_u16_msg(
-  MsgT & msg,
+void fill_enemy_hp_msg(
+  radar_decision_comm::msg::WirelessEnemyHp & msg,
   const std::vector<uint8_t> & payload,
   const rclcpp::Time & stamp)
 {
@@ -43,7 +42,7 @@ void fill_six_u16_msg(
   msg.engineer = le_u16(payload, 2);
   msg.infantry_3 = le_u16(payload, 4);
   msg.infantry_4 = le_u16(payload, 6);
-  msg.infantry_5 = le_u16(payload, 8);
+  msg.reserved = le_u16(payload, 8);
   msg.sentinel = le_u16(payload, 10);
 }
 
@@ -193,8 +192,8 @@ WirelessParseResult WirelessPacketParser::parse(
 
   switch (cmd_id) {
     case 0x0A01: {
-      if (payload.size() < 24) {
-        out.warning = "0x0A01 payload too short";
+      if (payload.size() != 24) {
+        out.warning = "0x0A01 payload length mismatch";
         return out;
       }
 
@@ -238,18 +237,18 @@ WirelessParseResult WirelessPacketParser::parse(
     }
 
     case 0x0A02: {
-      if (payload.size() < 12) {
-        out.warning = "0x0A02 payload too short";
+      if (payload.size() != 12) {
+        out.warning = "0x0A02 payload length mismatch";
         return out;
       }
       out.has_enemy_hp = true;
-      fill_six_u16_msg(out.enemy_hp, payload, stamp);
+      fill_enemy_hp_msg(out.enemy_hp, payload, stamp);
       break;
     }
 
     case 0x0A03: {
-      if (payload.size() < 10) {
-        out.warning = "0x0A03 payload too short";
+      if (payload.size() != 10) {
+        out.warning = "0x0A03 payload length mismatch";
         return out;
       }
       out.has_enemy_ammo = true;
@@ -258,13 +257,28 @@ WirelessParseResult WirelessPacketParser::parse(
     }
 
     case 0x0A04: {
+      if (payload.size() != 8) {
+        out.warning = "0x0A04 payload length mismatch";
+        return out;
+      }
       out.has_macro_state = true;
       out.macro_state.header.stamp = stamp;
+      out.macro_state.coins_remaining = le_u16(payload, 0);
+      out.macro_state.coins_total = le_u16(payload, 2);
+      out.macro_state.status_bits =
+        static_cast<uint32_t>(payload[4]) |
+        (static_cast<uint32_t>(payload[5]) << 8U) |
+        (static_cast<uint32_t>(payload[6]) << 16U) |
+        (static_cast<uint32_t>(payload[7]) << 24U);
       out.macro_state.raw_bytes = payload;
       break;
     }
 
     case 0x0A05: {
+      if (payload.size() != 36) {
+        out.warning = "0x0A05 payload length mismatch";
+        return out;
+      }
       out.has_enemy_buffs = true;
       out.enemy_buffs.header.stamp = stamp;
       out.enemy_buffs.raw_bytes = payload;
@@ -272,8 +286,15 @@ WirelessParseResult WirelessPacketParser::parse(
     }
 
     case 0x0A06: {
+      if (payload.size() != 6) {
+        out.warning = "0x0A06 payload length mismatch";
+        return out;
+      }
       out.has_interference_key = true;
       out.interference_key.header.stamp = stamp;
+      for (std::size_t i = 0; i < 6; ++i) {
+        out.interference_key.key[i] = payload[i];
+      }
       out.interference_key.raw_bytes = payload;
       break;
     }
@@ -311,6 +332,14 @@ WirelessBridgePacket WirelessPacketParser::parse_bridge_packet(
 
   if (!hex_to_bytes(data_hex, out.payload)) {
     out.warning = "bridge json data_hex invalid";
+    return out;
+  }
+
+  int64_t data_len = -1;
+  if (extract_json_int64(json_text, "data_len", data_len) && data_len >= 0 &&
+    static_cast<std::size_t>(data_len) != out.payload.size())
+  {
+    out.warning = "bridge json data_len does not match data_hex";
     return out;
   }
 

@@ -10,6 +10,11 @@ setup(
         ('share/ament_index/resource_index/packages',
          ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
+        ('lib/' + package_name, [
+            'executables/pdu_subscriber_node',
+            'executables/shm_pdu_broadcast_node',
+            'executables/radar_decision_sync_shm_node',
+        ]),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -17,11 +22,4 @@ setup(
     maintainer_email='1984027855@qq.com',
     description='Temporary ROS2 bridge for GNU Radio PDU broadcast',
     license='Apache License 2.0',
-    entry_points={
-        'console_scripts': [
-            'pdu_subscriber_node = radar_pdu_bridge.pdu_subscriber_node:main',
-            'shm_pdu_broadcast_node = radar_pdu_bridge.shm_pdu_broadcast_node:main',
-            'radar_decision_sync_shm_node = radar_pdu_bridge.radar_decision_sync_shm_node:main',
-        ],
-    },
 )

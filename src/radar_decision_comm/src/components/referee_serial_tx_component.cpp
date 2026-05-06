@@ -32,7 +32,7 @@ public:
     enabled_ = this->declare_parameter<bool>("enabled", true);
     tx_mode_ = this->declare_parameter<std::string>("tx_mode", "topic");
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
-    map_0305_layout_ = this->declare_parameter<std::string>("map_0305_layout", "legacy24");
+    map_0305_layout_ = this->declare_parameter<std::string>("map_0305_layout", "rm2026_48");
     device_ = this->declare_parameter<std::string>("device", "/dev/ttyUSB1");
     baudrate_ = this->declare_parameter<int>("baudrate", 115200);
     timeout_ms_ = this->declare_parameter<int>("timeout_ms", 2);
@@ -328,7 +328,7 @@ private:
 
   std::string tx_mode_{"topic"};
   std::string my_color_{"Red"};
-  std::string map_0305_layout_{"legacy24"};
+  std::string map_0305_layout_{"rm2026_48"};
   std::string device_;
   std::string debug_raw_frame_topic_;
   std::string identity_topic_;

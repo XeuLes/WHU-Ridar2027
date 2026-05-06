@@ -28,9 +28,9 @@ struct TeamRobotIds
 TeamRobotIds ids_for_team(const std::string & color)
 {
   if (color == "Red" || color == "red") {
-    return TeamRobotIds{{1U, 2U, 3U, 4U, 5U, 7U}};
+    return TeamRobotIds{{1U, 2U, 3U, 4U, 6U, 7U}};
   }
-  return TeamRobotIds{{101U, 102U, 103U, 104U, 105U, 107U}};
+  return TeamRobotIds{{101U, 102U, 103U, 104U, 106U, 107U}};
 }
 
 bool slot_valid(float x, float y)

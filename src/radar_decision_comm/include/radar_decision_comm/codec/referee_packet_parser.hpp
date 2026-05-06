@@ -52,8 +52,8 @@ public:
 
 private:
   std::string my_color_{"Red"};
-  bool legacy_mark_progress_{true};
-  bool legacy_dart_bits_{true};
+  bool legacy_mark_progress_{false};
+  bool legacy_dart_bits_{false};
 };
 
 }  // namespace radar_decision_comm

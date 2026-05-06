@@ -11,7 +11,10 @@ int main()
   radar_decision_comm::RefereeDecoder decoder;
 
   const uint16_t cmd_id = 0x0305;
-  const std::vector<uint8_t> payload{0x11, 0x22, 0x33, 0x44, 0x55};
+  std::vector<uint8_t> payload(48, 0);
+  for (std::size_t i = 0; i < payload.size(); ++i) {
+    payload[i] = static_cast<uint8_t>(i);
+  }
 
   auto frame = encoder.encode_frame(cmd_id, payload);
   decoder.push_bytes(frame);
@@ -30,6 +33,10 @@ int main()
   if (decoded->payload != payload) {
     std::cerr << "selfcheck failed: payload mismatch" << std::endl;
     return 3;
+  }
+  if (decoded->raw_frame.size() != 57) {
+    std::cerr << "selfcheck failed: 0x0305 frame length mismatch" << std::endl;
+    return 4;
   }
 
   std::cout << "selfcheck ok" << std::endl;

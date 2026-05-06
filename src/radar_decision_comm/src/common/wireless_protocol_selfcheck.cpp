@@ -62,27 +62,38 @@ int main()
 
   // 0x0A04
   const auto parsed_macro = parser.parse_bridge_json(
-    make_pdu_json("info", 0x0A04, "01020304", 123456792),
+    make_pdu_json("info", 0x0A04, "6400c80003020000", 123456792),
     rclcpp::Time(0, 0, RCL_ROS_TIME));
-  if (!parsed_macro.has_macro_state || parsed_macro.macro_state.raw_bytes.size() != 4) {
+  if (!parsed_macro.has_macro_state || parsed_macro.macro_state.raw_bytes.size() != 8 ||
+    parsed_macro.macro_state.coins_remaining != 100 ||
+    parsed_macro.macro_state.coins_total != 200 ||
+    parsed_macro.macro_state.status_bits != 0x00000203U)
+  {
     std::cerr << "wireless selfcheck failed: 0x0A04 parse mismatch" << std::endl;
     return 8;
   }
 
   // 0x0A05
   const auto parsed_buffs = parser.parse_bridge_json(
-    make_pdu_json("info", 0x0A05, "05060708", 123456793),
+    make_pdu_json(
+      "info",
+      0x0A05,
+      "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20212223",
+      123456793),
     rclcpp::Time(0, 0, RCL_ROS_TIME));
-  if (!parsed_buffs.has_enemy_buffs || parsed_buffs.enemy_buffs.raw_bytes.size() != 4) {
+  if (!parsed_buffs.has_enemy_buffs || parsed_buffs.enemy_buffs.raw_bytes.size() != 36) {
     std::cerr << "wireless selfcheck failed: 0x0A05 parse mismatch" << std::endl;
     return 10;
   }
 
   // 0x0A06
   const auto parsed_key = parser.parse_bridge_json(
-    make_pdu_json("jam", 0x0A06, "090a0b0c", 123456794),
+    make_pdu_json("jam", 0x0A06, "414243313233", 123456794),
     rclcpp::Time(0, 0, RCL_ROS_TIME));
-  if (!parsed_key.has_interference_key || parsed_key.interference_key.raw_bytes.size() != 4) {
+  if (!parsed_key.has_interference_key || parsed_key.interference_key.raw_bytes.size() != 6 ||
+    parsed_key.interference_key.key[0] != static_cast<uint8_t>('A') ||
+    parsed_key.interference_key.key[5] != static_cast<uint8_t>('3'))
+  {
     std::cerr << "wireless selfcheck failed: 0x0A06 parse mismatch" << std::endl;
     return 12;
   }

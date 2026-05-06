@@ -27,13 +27,13 @@ referee_serial_bridge:
     debug_mock_publish: true
     debug_mock_rate_hz: 2.0
     my_color: "Blue"
-    legacy_mark_progress: true
-    legacy_dart_bits: true
+    legacy_mark_progress: false
+    legacy_dart_bits: false
     use_referee_identity_color: true
     send_queue_depth: 128
     rx_mode: "serial"          # mock / topic / serial
     tx_mode: "serial"          # topic / serial
-    map_0305_layout: "legacy24"
+    map_0305_layout: "rm2026_48"
     debug_raw_bytes_topic: "/radar/debug/referee_raw_bytes"
     debug_raw_frame_topic: "/radar/debug/referee_tx_raw_bytes"
     output_identity_topic: "/radar/referee/robot_identity"
@@ -57,8 +57,8 @@ referee_serial_rx:
     debug_mock_publish: true
     debug_mock_rate_hz: 2.0
     my_color: "Blue"
-    legacy_mark_progress: true
-    legacy_dart_bits: true
+    legacy_mark_progress: false
+    legacy_dart_bits: false
     rx_mode: "topic"             # mock / topic / serial
     debug_raw_bytes_topic: "/radar/debug/referee_raw_bytes"
 
@@ -233,7 +233,7 @@ referee_serial_tx:
     enabled: true
     tx_mode: "topic"           # topic / serial
     my_color: "Blue"
-    map_0305_layout: "legacy24"   # legacy24 / proto48_operational   # legacy24 / proto48_operational   # legacy24 / proto48_operational   # legacy24 / proto48_operational
+    map_0305_layout: "rm2026_48"   # rm2026_48 / legacy24
     device: "/dev/ttyUSB0"
     baudrate: 115200
     timeout_ms: 2

@@ -296,7 +296,7 @@ private:
         case 102: return 1;
         case 103: return 2;
         case 104: return 3;
-        case 105: return 4;
+        case 106: return 4;
         case 107: return 5;
         default: return -1;
       }
@@ -306,7 +306,7 @@ private:
       case 2: return 1;
       case 3: return 2;
       case 4: return 3;
-      case 5: return 4;
+      case 6: return 4;
       case 7: return 5;
       default: return -1;
     }
@@ -319,7 +319,7 @@ private:
       case 1: return last_blackboard_.wireless_enemy_hp.engineer;
       case 2: return last_blackboard_.wireless_enemy_hp.infantry_3;
       case 3: return last_blackboard_.wireless_enemy_hp.infantry_4;
-      case 4: return last_blackboard_.wireless_enemy_hp.infantry_5;
+      case 4: return 0;
       case 5: return last_blackboard_.wireless_enemy_hp.sentinel;
       default: return 0;
     }
@@ -332,7 +332,7 @@ private:
       case 1: return 0;
       case 2: return last_blackboard_.wireless_enemy_ammo.infantry_3;
       case 3: return last_blackboard_.wireless_enemy_ammo.infantry_4;
-      case 4: return 0;
+      case 4: return last_blackboard_.wireless_enemy_ammo.aerial_6;
       case 5: return last_blackboard_.wireless_enemy_ammo.sentinel;
       default: return 0;
     }
@@ -379,11 +379,21 @@ private:
   std::string build_map_signature() const
   {
     std::ostringstream oss;
-    oss << "n=" << last_blackboard_.enemy_state.robots.size() << ";";
+    oss << "enemy_n=" << last_blackboard_.enemy_state.robots.size() << ";";
     for (const auto & robot : last_blackboard_.enemy_state.robots) {
       const int x_cm = static_cast<int>(std::lround(robot.field_position.x * 100.0));
       const int y_cm = static_cast<int>(std::lround(robot.field_position.y * 100.0));
-      oss << robot.robot_id << ":" << x_cm << "," << y_cm << ";";
+      oss << "e" << robot.robot_id << ":" << x_cm << "," << y_cm << ";";
+    }
+    oss << "our_stale=" << (last_blackboard_.our_stale ? 1 : 0)
+        << ";our_n=" << (last_blackboard_.our_stale ? 0 : last_blackboard_.our_state.robots.size())
+        << ";";
+    if (!last_blackboard_.our_stale) {
+      for (const auto & robot : last_blackboard_.our_state.robots) {
+        const int x_cm = static_cast<int>(std::lround(robot.field_position.x * 100.0));
+        const int y_cm = static_cast<int>(std::lround(robot.field_position.y * 100.0));
+        oss << "a" << robot.robot_id << ":" << x_cm << "," << y_cm << ";";
+      }
     }
     return oss.str();
   }
@@ -402,6 +412,12 @@ private:
     map_msg.header.stamp = this->now();
     map_msg.force = false;
     map_msg.robots = last_blackboard_.enemy_state.robots;
+    if (!last_blackboard_.our_stale) {
+      map_msg.robots.insert(
+        map_msg.robots.end(),
+        last_blackboard_.our_state.robots.begin(),
+        last_blackboard_.our_state.robots.end());
+    }
     map_request_pub_->publish(map_msg);
 
     map_state_.signature = signature;
@@ -471,7 +487,7 @@ private:
 
   bool evaluate_hero_alert() const
   {
-    if (!last_blackboard_.referee_stale && last_blackboard_.mark_progress.hero >= 100) {
+    if (!last_blackboard_.referee_stale && last_blackboard_.mark_progress.hero != 0) {
       return true;
     }
     if (current_selected_target_.has_target &&
@@ -497,7 +513,7 @@ private:
     in.double_effect_active =
       (!last_blackboard_.referee_stale && last_blackboard_.radar_sync.is_double_effect_active);
     in.hero_marked =
-      (!last_blackboard_.referee_stale && last_blackboard_.mark_progress.hero >= 100);
+      (!last_blackboard_.referee_stale && last_blackboard_.mark_progress.hero != 0);
     in.hero_hp = wireless_hp_for_robot(static_cast<uint16_t>(enemy_hero_id_));
     in.hero_ammo = wireless_ammo_for_robot(static_cast<uint16_t>(enemy_hero_id_));
     in.has_buffs = (!last_blackboard_.wireless_stale &&

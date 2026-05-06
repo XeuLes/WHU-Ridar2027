@@ -12,6 +12,7 @@ from launch.actions import (
     Shutdown,
     TimerAction,
 )
+from launch.conditions import IfCondition
 from launch.event_handlers import OnProcessExit
 from launch.events.process import ShutdownProcess, matches_executable
 from launch.substitutions import LaunchConfiguration
@@ -56,6 +57,7 @@ def _build_launch(context):
         LaunchConfiguration("referee_publish_raw_debug"),
         value_type=bool,
     )
+    pdu_poll_period_ms = int(LaunchConfiguration("pdu_poll_period_ms").perform(context))
     rosbag_file = LaunchConfiguration("rosbag_file").perform(context)
     lidar_input_topic = LaunchConfiguration("lidar_input_topic").perform(context)
     image_input_topic = LaunchConfiguration("image_input_topic").perform(context)
@@ -419,6 +421,19 @@ def _build_launch(context):
         ],
     )
 
+    shm_pdu_broadcast_node = Node(
+        package="radar_pdu_bridge",
+        executable="shm_pdu_broadcast_node",
+        name="shm_pdu_broadcast_node",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_pdu_bridge")),
+        parameters=[
+            {
+                "poll_period_ms": pdu_poll_period_ms,
+            }
+        ],
+    )
+
     map_pcd_publisher = Node(
         package="pcl_ros",
         executable="pcd_to_pointcloud",
@@ -470,6 +485,7 @@ def _build_launch(context):
         LogInfo(msg=f"rosbag_radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"rosbag file: {rosbag_file}"),
         replay_container,
+        shm_pdu_broadcast_node,
         radar_decision_comm_container,
         map_pcd_publisher,
         track_status_window_node,
@@ -566,22 +582,22 @@ def generate_launch_description():
         calib_tool_share, "config", "camera_intrinsics.yaml"
     )
     default_calib_reference_points = os.path.join(
-        calib_tool_share, "config", "reference_points_RM.yaml"
+        calib_tool_share, "config", "reference_points_RM_guanggu.yaml"
     )
     default_calib_out_matrix = os.path.join(
-        bringup_share, "config", "out_matrix_RM.yaml"
+        bringup_share, "config", "out_matrix_RM_guanggu.yaml"
     )
 
     return LaunchDescription(
         [
             DeclareLaunchArgument(
                 "our_color",
-                default_value="red",
+                default_value="blue",
                 description="our team color: red or blue",
             ),
             DeclareLaunchArgument(
                 "rosbag_file",
-                default_value="/home/user/DATA/rosbag.db3",
+                default_value="/home/user/DATA/RADAR_ROSBAG/radar_match_camera_lidar/radar_match_camera_lidar_0.db3",
                 description="input rosbag path for replay",
             ),
             DeclareLaunchArgument(
@@ -628,6 +644,16 @@ def generate_launch_description():
                 "referee_publish_raw_debug",
                 default_value="false",
                 description="publish raw referee serial RX bytes to /radar/debug/referee_raw_bytes",
+            ),
+            DeclareLaunchArgument(
+                "enable_pdu_bridge",
+                default_value="true",
+                description="start shared-memory PDU bridge during replay",
+            ),
+            DeclareLaunchArgument(
+                "pdu_poll_period_ms",
+                default_value="2",
+                description="shared-memory PDU poll period in milliseconds",
             ),
             DeclareLaunchArgument(
                 "calib_first",

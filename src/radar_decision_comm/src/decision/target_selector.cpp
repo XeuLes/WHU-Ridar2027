@@ -15,7 +15,7 @@ int TargetSelector::enemy_slot_from_robot_id(const std::string & my_color, uint1
       case 102: return 1;
       case 103: return 2;
       case 104: return 3;
-      case 105: return 4;
+      case 106: return 4;
       case 107: return 5;
       default: return -1;
     }
@@ -26,7 +26,7 @@ int TargetSelector::enemy_slot_from_robot_id(const std::string & my_color, uint1
     case 2: return 1;
     case 3: return 2;
     case 4: return 3;
-    case 5: return 4;
+    case 6: return 4;
     case 7: return 5;
     default: return -1;
   }
@@ -41,7 +41,7 @@ uint16_t TargetSelector::wireless_hp_for_slot(
     case 1: return bb.wireless_enemy_hp.engineer;
     case 2: return bb.wireless_enemy_hp.infantry_3;
     case 3: return bb.wireless_enemy_hp.infantry_4;
-    case 4: return bb.wireless_enemy_hp.infantry_5;
+    case 4: return 0;
     case 5: return bb.wireless_enemy_hp.sentinel;
     default: return 0;
   }
@@ -56,7 +56,7 @@ uint16_t TargetSelector::wireless_ammo_for_slot(
     case 1: return 0;
     case 2: return bb.wireless_enemy_ammo.infantry_3;
     case 3: return bb.wireless_enemy_ammo.infantry_4;
-    case 4: return 0;
+    case 4: return bb.wireless_enemy_ammo.aerial_6;
     case 5: return bb.wireless_enemy_ammo.sentinel;
     default: return 0;
   }
@@ -106,7 +106,7 @@ TargetSelectorResult TargetSelector::select(
       }
     }
 
-    if (referee_valid && slot == 0 && bb.mark_progress.hero >= 100) {
+    if (referee_valid && slot == 0 && bb.mark_progress.hero != 0) {
       score += 10.0;
     }
 

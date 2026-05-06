@@ -237,7 +237,11 @@ class ShmPduBroadcastNode(Node):
 
     def _make_json_msg(self, item: dict, source_name: str) -> String:
         frame_bytes = item["frame_bytes"]
-        data_hex = frame_bytes[7:-2].hex() if len(frame_bytes) >= 9 else ""
+        data_len = int(item["data_len"])
+        if len(frame_bytes) >= 9 and 0 <= data_len <= max(0, len(frame_bytes) - 9):
+            data_hex = frame_bytes[7:7 + data_len].hex()
+        else:
+            data_hex = ""
 
         obj = {
             "source_type": source_name,

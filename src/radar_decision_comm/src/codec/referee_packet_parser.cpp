@@ -35,6 +35,11 @@ uint64_t le_u64(const std::vector<uint8_t> & data, std::size_t offset)
   return value;
 }
 
+uint8_t bit_flag(uint16_t value, unsigned bit)
+{
+  return static_cast<uint8_t>(((value >> bit) & 0x01U) != 0U ? 1U : 0U);
+}
+
 }  // namespace
 
 void RefereePacketParser::set_my_color(const std::string & my_color)
@@ -61,8 +66,8 @@ RefereeParseResult RefereePacketParser::parse(
 
   switch (cmd_id) {
     case 0x0001: {
-      if (payload.size() < 11) {
-        out.warning = "0x0001 payload too short";
+      if (payload.size() != 11) {
+        out.warning = "0x0001 payload length mismatch";
         return out;
       }
 
@@ -82,38 +87,27 @@ RefereeParseResult RefereePacketParser::parse(
     }
 
     case 0x0003: {
-      if (payload.size() >= 32) {
-        // legacy/old project compatible: red block + blue block
-        const std::size_t base = (my_color_ == "Red") ? 16 : 0;
-
-        out.has_enemy_hp = true;
-        out.enemy_hp.header.stamp = stamp;
-        out.enemy_hp.hero = le_u16(payload, base + 0);
-        out.enemy_hp.engineer = le_u16(payload, base + 2);
-        out.enemy_hp.infantry_3 = le_u16(payload, base + 4);
-        out.enemy_hp.infantry_4 = le_u16(payload, base + 6);
-        out.enemy_hp.infantry_5 = le_u16(payload, base + 8);
-        out.enemy_hp.sentinel = le_u16(payload, base + 10);
-      } else if (payload.size() >= 16) {
-        // 2026 current protocol snippet: ally-only compact format
-        out.has_enemy_hp = true;
-        out.enemy_hp.header.stamp = stamp;
-        out.enemy_hp.hero = le_u16(payload, 0);
-        out.enemy_hp.engineer = le_u16(payload, 2);
-        out.enemy_hp.infantry_3 = le_u16(payload, 4);
-        out.enemy_hp.infantry_4 = le_u16(payload, 6);
-        out.enemy_hp.infantry_5 = 0;
-        out.enemy_hp.sentinel = le_u16(payload, 10);
-        out.warning = "0x0003 parsed with 16-byte ally-only layout; infantry_5 set to 0";
-      } else {
-        out.warning = "0x0003 payload too short";
+      if (payload.size() != 16) {
+        out.warning = "0x0003 payload length mismatch";
+        return out;
       }
+
+      out.has_enemy_hp = true;
+      out.enemy_hp.header.stamp = stamp;
+      out.enemy_hp.hero = le_u16(payload, 0);
+      out.enemy_hp.engineer = le_u16(payload, 2);
+      out.enemy_hp.infantry_3 = le_u16(payload, 4);
+      out.enemy_hp.infantry_4 = le_u16(payload, 6);
+      out.enemy_hp.reserved = le_u16(payload, 8);
+      out.enemy_hp.sentinel = le_u16(payload, 10);
+      out.enemy_hp.outpost = le_u16(payload, 12);
+      out.enemy_hp.base = le_u16(payload, 14);
       break;
     }
 
     case 0x0105: {
-      if (payload.size() < 3) {
-        out.warning = "0x0105 payload too short";
+      if (payload.size() != 3) {
+        out.warning = "0x0105 payload length mismatch";
         return out;
       }
 
@@ -135,8 +129,8 @@ RefereeParseResult RefereePacketParser::parse(
     }
 
     case 0x0201: {
-      if (payload.empty()) {
-        out.warning = "0x0201 payload too short";
+      if (payload.size() != 13) {
+        out.warning = "0x0201 payload length mismatch";
         return out;
       }
 
@@ -156,30 +150,42 @@ RefereeParseResult RefereePacketParser::parse(
     }
 
     case 0x020C: {
-      if (payload.size() >= 6) {
+      if (payload.size() == 2) {
+        const uint16_t mark_bits = le_u16(payload, 0);
+        out.has_mark_progress = true;
+        out.mark_progress.header.stamp = stamp;
+        out.mark_progress.hero = bit_flag(mark_bits, 0);
+        out.mark_progress.engineer = bit_flag(mark_bits, 1);
+        out.mark_progress.infantry_3 = bit_flag(mark_bits, 2);
+        out.mark_progress.infantry_4 = bit_flag(mark_bits, 3);
+        out.mark_progress.aerial_6 = bit_flag(mark_bits, 4);
+        out.mark_progress.sentinel = bit_flag(mark_bits, 5);
+        out.mark_progress.ally_hero = bit_flag(mark_bits, 6);
+        out.mark_progress.ally_engineer = bit_flag(mark_bits, 7);
+        out.mark_progress.ally_infantry_3 = bit_flag(mark_bits, 8);
+        out.mark_progress.ally_infantry_4 = bit_flag(mark_bits, 9);
+        out.mark_progress.ally_aerial_6 = bit_flag(mark_bits, 10);
+        out.mark_progress.ally_sentinel = bit_flag(mark_bits, 11);
+        out.mark_progress.raw_bits = mark_bits;
+      } else if (legacy_mark_progress_ && payload.size() == 6) {
         out.has_mark_progress = true;
         out.mark_progress.header.stamp = stamp;
         out.mark_progress.hero = payload[0];
         out.mark_progress.engineer = payload[1];
         out.mark_progress.infantry_3 = payload[2];
         out.mark_progress.infantry_4 = payload[3];
-        out.mark_progress.infantry_5 = payload[4];
+        out.mark_progress.aerial_6 = payload[4];
         out.mark_progress.sentinel = payload[5];
-      } else if (payload.size() == 2) {
-        if (legacy_mark_progress_) {
-          out.warning = "0x020C received 2-byte compact format but legacy 6-byte parsing is enabled";
-        } else {
-          out.warning = "0x020C 2-byte compact format reserved; field mapping not implemented yet";
-        }
+        out.warning = "0x020C parsed with legacy 6-byte mark progress layout";
       } else {
-        out.warning = "0x020C payload too short";
+        out.warning = "0x020C payload length mismatch";
       }
       break;
     }
 
     case 0x020E: {
-      if (payload.empty()) {
-        out.warning = "0x020E payload too short";
+      if (payload.size() != 1) {
+        out.warning = "0x020E payload length mismatch";
         return out;
       }
 

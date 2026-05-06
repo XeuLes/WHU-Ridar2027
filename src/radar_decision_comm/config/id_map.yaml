@@ -5,6 +5,7 @@ robot_ids:
     engineer: 2
     infantry_3: 3
     infantry_4: 4
+    aerial_6: 6
     infantry_5: 5
     sentinel: 7
     client: 0
@@ -14,6 +15,7 @@ robot_ids:
     engineer: 102
     infantry_3: 103
     infantry_4: 104
+    aerial_6: 106
     infantry_5: 105
     sentinel: 107
     client: 0
@@ -24,6 +26,7 @@ enemy_ids:
     engineer: 102
     infantry_3: 103
     infantry_4: 104
+    aerial_6: 106
     infantry_5: 105
     sentinel: 107
   Blue:
@@ -31,6 +34,7 @@ enemy_ids:
     engineer: 2
     infantry_3: 3
     infantry_4: 4
+    aerial_6: 6
     infantry_5: 5
     sentinel: 7
 

@@ -56,8 +56,8 @@ public:
     debug_mock_publish_ = this->declare_parameter<bool>("debug_mock_publish", true);
     debug_mock_rate_hz_ = this->declare_parameter<double>("debug_mock_rate_hz", 2.0);
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
-    legacy_mark_progress_ = this->declare_parameter<bool>("legacy_mark_progress", true);
-    legacy_dart_bits_ = this->declare_parameter<bool>("legacy_dart_bits", true);
+    legacy_mark_progress_ = this->declare_parameter<bool>("legacy_mark_progress", false);
+    legacy_dart_bits_ = this->declare_parameter<bool>("legacy_dart_bits", false);
     rx_mode_ = this->declare_parameter<std::string>("rx_mode", "mock");
     debug_raw_bytes_topic_ = this->declare_parameter<std::string>(
       "debug_raw_bytes_topic", "/radar/debug/referee_raw_bytes");
@@ -285,7 +285,7 @@ private:
     }
     emit_mock_packet(0x0001, game_payload);
 
-    std::vector<uint8_t> hp_payload(32, 0);
+    std::vector<uint8_t> hp_payload(16, 0);
     auto put16 = [&hp_payload](std::size_t off, uint16_t v) {
       hp_payload[off] = static_cast<uint8_t>(v & 0xFFU);
       hp_payload[off + 1] = static_cast<uint8_t>((v >> 8U) & 0xFFU);
@@ -295,15 +295,10 @@ private:
     put16(2, 140);
     put16(4, 130);
     put16(6, 120);
-    put16(8, 110);
+    put16(8, 0);
     put16(10, 100);
-
-    put16(16, 100);
-    put16(18, 80);
-    put16(20, 60);
-    put16(22, 50);
-    put16(24, 40);
-    put16(26, 120);
+    put16(12, 1500);
+    put16(14, 5000);
 
     emit_mock_packet(0x0003, hp_payload);
 
@@ -320,7 +315,11 @@ private:
     dart_payload[2] = static_cast<uint8_t>((dart_info >> 8U) & 0xFFU);
     emit_mock_packet(0x0105, dart_payload);
 
-    std::vector<uint8_t> mark_payload{100, 45, 20, 0, 0, 80};
+    const uint16_t mark_bits = static_cast<uint16_t>((1U << 0U) | (1U << 5U) | (1U << 6U));
+    std::vector<uint8_t> mark_payload{
+      static_cast<uint8_t>(mark_bits & 0xFFU),
+      static_cast<uint8_t>((mark_bits >> 8U) & 0xFFU)
+    };
     emit_mock_packet(0x020C, mark_payload);
 
     std::vector<uint8_t> sync_payload{
@@ -345,8 +344,8 @@ private:
   bool enable_crc16_check_{true};
   bool publish_raw_debug_{false};
   bool debug_mock_publish_{true};
-  bool legacy_mark_progress_{true};
-  bool legacy_dart_bits_{true};
+  bool legacy_mark_progress_{false};
+  bool legacy_dart_bits_{false};
   double publish_rate_hz_{100.0};
   double debug_mock_rate_hz_{2.0};
   std::string device_;
