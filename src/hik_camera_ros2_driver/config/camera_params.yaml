@@ -18,7 +18,7 @@
     cam0.camera_topic: "camera0/image"
 
     cam0.acquisition_frame_rate: 30.0
-    cam0.exposure_time: 2500
+    cam0.exposure_time: 10000
     cam0.gain: 18.9
 
     # ---------------- cam1（第二台相机） ----------------
@@ -30,7 +30,7 @@
     cam1.camera_topic: "camera1/image"
 
     cam1.acquisition_frame_rate: 100.0
-    cam1.exposure_time: 4000
+    cam1.exposure_time: 8000
     cam1.gain: 15.0
 
     # ---------------- cam2（第三台相机） ----------------
