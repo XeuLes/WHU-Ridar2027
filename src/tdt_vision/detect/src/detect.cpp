@@ -419,7 +419,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     constexpr int kUavMinBatch = 1;
     constexpr int kUavOptBatch = 4;
     constexpr int kUavMaxBatch = 8;
-    const std::string uav_onnx_path = "model/ONNX/RM-Plane-yolo26n-p2-2026-04-03.onnx";
+    const std::string uav_onnx_path = "model/ONNX/uav_train7_best.onnx";
     if (!fileExists(uav_path)) {
         if (!fileExists(uav_onnx_path)) {
             RCLCPP_ERROR(
