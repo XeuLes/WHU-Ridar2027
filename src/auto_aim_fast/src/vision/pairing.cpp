@@ -87,16 +87,19 @@ Pairing::Pairing()
 
 void Pairing::setLegacyParams(const SimpleLightDetector::Params & p)
 {
+  std::lock_guard<std::mutex> lk(params_m_);
   detector_->setParams(p);
 }
 
 void Pairing::setDetectorMode(DetectorMode mode)
 {
+  std::lock_guard<std::mutex> lk(params_m_);
   mode_ = mode;
 }
 
 void Pairing::setYoloParams(const YoloDetectorParams & p)
 {
+  std::lock_guard<std::mutex> lk(params_m_);
   yolo_params_ = p;
   yolo_init_ok_ = false;
   yolo_init_attempted_ = false;
@@ -116,6 +119,8 @@ std::vector<Armor2D> Pairing::pair(const std::vector<LightBar> & lights,
   if (!pre.ok || pre.bgr.empty()) {
     return {};
   }
+
+  std::lock_guard<std::mutex> lk(params_m_);
 
   std::vector<SimpleLightDetector::PairResult> pairs;
   const bool build_debug = debug_enabled_.load(std::memory_order_relaxed);

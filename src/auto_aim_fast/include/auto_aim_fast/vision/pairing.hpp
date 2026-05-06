@@ -82,6 +82,7 @@ public:
   bool getLastBinary(cv::Mat & out_bin) const;
 
 private:
+  mutable std::mutex params_m_;
   std::shared_ptr<SimpleLightDetector> detector_;
   std::shared_ptr<auto_aim_fast::YoloPoseTrtDetector> yolo_detector_;
   DetectorMode mode_{DetectorMode::LEGACY};
