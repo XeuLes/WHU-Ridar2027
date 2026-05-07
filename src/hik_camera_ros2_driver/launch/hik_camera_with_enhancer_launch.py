@@ -68,7 +68,7 @@ def generate_launch_description():
             extra_arguments=intra,
         )
 
-    # 相机驱动+cam0/cam2去畸变组件容器
+    # 相机驱动+camera0去畸变组件容器
     start_hik_camera_cmd = ComposableNodeContainer(
         name="hik_camera_with_rectifier_container",
         namespace="",
@@ -83,7 +83,6 @@ def generate_launch_description():
                 extra_arguments=intra,
             ),
             rectifier_component("camera0"),
-            rectifier_component("camera2"),
         ],
         arguments=["--ros-args", "--log-level", log_level],
         output="screen",

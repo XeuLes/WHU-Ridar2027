@@ -63,7 +63,6 @@ def generate_launch_description():
                 extra_arguments=intra,
             ),
             rectifier_component("camera0"),
-            rectifier_component("camera2"),
         ],
         arguments=["--ros-args", "--log-level", log_level],
         output="screen",

@@ -40,7 +40,9 @@
     cam2.camera_name: "camera2"
     cam2.frame_id: "camera2_optical_frame"
     cam2.camera_topic: "camera2/image"
+    cam2.output_encoding: "bgr8"
 
-    cam2.acquisition_frame_rate: 200.0
-    cam2.exposure_time: 20000
-    cam2.gain: 15.0
+    cam2.acquisition_frame_rate: 250.0
+    cam2.exposure_time: 3500
+    cam2.gain: 16.95
+    cam2.gamma: 0.75

@@ -34,6 +34,7 @@ ament_auto_add_library(${PROJECT_NAME} SHARED
 ## 包含海康SDK头文件
 target_include_directories(${PROJECT_NAME} PUBLIC 
   hikSDK/include
+  ${OpenCV_INCLUDE_DIRS}
 )
 
 ## 根据架构（x86_64/aarch64）链接SDK库并安装
@@ -64,6 +65,7 @@ target_link_libraries(${PROJECT_NAME}
   MvCameraControl
   MVRender
   MvUsb3vTL
+  ${OpenCV_LIBS}
 )
 
 ###########################################################################
@@ -132,6 +134,25 @@ ament_target_dependencies(image_saver_node
 ## 安装图像存储节点
 install(TARGETS
   image_saver_node
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+## 生成视频存储节点可执行文件
+add_executable(video_saver_node
+  src/video_saver_node.cpp
+)
+
+## 链接视频存储节点依赖库（ROS 2 + OpenCV）
+ament_target_dependencies(video_saver_node
+  rclcpp
+  sensor_msgs
+  cv_bridge
+  OpenCV
+)
+
+## 安装视频存储节点
+install(TARGETS
+  video_saver_node
   DESTINATION lib/${PROJECT_NAME}
 )
 

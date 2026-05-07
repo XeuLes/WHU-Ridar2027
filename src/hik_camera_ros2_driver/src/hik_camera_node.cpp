@@ -2,8 +2,10 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdint>
 #include <cstring>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -20,6 +22,7 @@
 #include "rclcpp/utilities.hpp"
 #include "sensor_msgs/msg/camera_info.hpp"
 #include "sensor_msgs/msg/image.hpp"
+#include "sensor_msgs/image_encodings.hpp"
 
 #if __has_include(<opencv2/core.hpp>) && __has_include(<opencv2/cudaimgproc.hpp>) && __has_include(<opencv2/cudaarithm.hpp>)
   #include <opencv2/core.hpp>
@@ -71,6 +74,8 @@ struct CameraContext {
     std::string topic;
     std::string camera_info_url;
     std::string configured_pixel_format;
+    std::string output_encoding;
+    MvGvspPixelType output_pixel_type = PixelType_Gvsp_RGB8_Packed;
 
     std::thread       capture_thread;
     std::thread       publish_thread;
@@ -89,7 +94,10 @@ struct CameraContext {
     std::chrono::steady_clock::time_point last_restart_time =
         std::chrono::steady_clock::now();
 
-    bool     output_direct_rgb = false;
+    bool     output_direct_copy = false;
+    bool     gamma_enabled = false;
+    double   gamma = 0.0;
+    std::array<uint8_t, 256> gamma_lut{};
     uint32_t payload_size = 0;
 
     // hardware timestamp mapping
@@ -102,6 +110,8 @@ struct CameraContext {
 #if HIK_HAS_OPENCV_CUDA
     cv::cuda::GpuMat gpu_bayer_;
     cv::cuda::GpuMat gpu_rgb_;
+    cv::cuda::GpuMat gpu_gamma_;
+    cv::Ptr<cv::cuda::LookUpTable> gpu_gamma_lut_;
 #endif
 };
 
@@ -257,6 +267,73 @@ private:
         }
     }
 
+    std::string normalizeOutputEncoding(
+        const CameraContext& cam,
+        const std::string& requested) const
+    {
+        std::string encoding = requested;
+        std::transform(encoding.begin(), encoding.end(), encoding.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+
+        if (encoding == sensor_msgs::image_encodings::RGB8 ||
+            encoding == sensor_msgs::image_encodings::BGR8) {
+            return encoding;
+        }
+
+        RCLCPP_WARN(this->get_logger(),
+                    "[%s] Unsupported output_encoding=%s, fallback to rgb8.",
+                    cam.prefix.c_str(), requested.c_str());
+        return sensor_msgs::image_encodings::RGB8;
+    }
+
+    static MvGvspPixelType pixelTypeForEncoding(const std::string& encoding)
+    {
+        if (encoding == sensor_msgs::image_encodings::BGR8) {
+            return PixelType_Gvsp_BGR8_Packed;
+        }
+        return PixelType_Gvsp_RGB8_Packed;
+    }
+
+    void resetSdkGamma(CameraContext& cam)
+    {
+        MV_CC_GAMMA_PARAM gamma_param{};
+        gamma_param.enGammaType = MV_CC_GAMMA_TYPE_NONE;
+        MV_CC_SetBayerGammaParam(cam.handle, &gamma_param);
+
+        MV_CC_SetBoolValue(cam.handle, "GammaEnable", false);
+        MV_CC_SetGammaSelector(cam.handle, MV_GAMMA_SELECTOR_USER);
+        MV_CC_SetGamma(cam.handle, 1.0f);
+    }
+
+    int configureGamma(CameraContext& cam, const double gamma)
+    {
+        cam.gamma = gamma;
+        cam.gamma_enabled = gamma > 0.0 && std::abs(gamma - 1.0) > 1e-6;
+
+        for (size_t i = 0; i < cam.gamma_lut.size(); ++i) {
+            int value = static_cast<int>(i);
+            if (cam.gamma_enabled) {
+                value = static_cast<int>(
+                    std::lround(std::pow(static_cast<double>(i) / 255.0,
+                                         gamma) * 255.0));
+                value = std::clamp(value, 0, 255);
+            }
+            cam.gamma_lut[i] = static_cast<uint8_t>(value);
+        }
+
+#if HIK_HAS_OPENCV_CUDA
+        if (cam.gamma_enabled) {
+            cv::Mat lut(1, static_cast<int>(cam.gamma_lut.size()), CV_8U,
+                        cam.gamma_lut.data());
+            cam.gpu_gamma_lut_ = cv::cuda::createLookUpTable(lut);
+        } else {
+            cam.gpu_gamma_lut_.release();
+        }
+#endif
+
+        return MV_OK;
+    }
+
     bool initializeCameras()
     {
         cameras_.clear();
@@ -325,6 +402,12 @@ private:
         const double gain = this->declare_parameter<double>(
             cam.prefix + ".gain", 0.0, param_desc);
 
+        param_desc.description =
+            "[" + cam.prefix + "] Gamma value. Set <= 0 to skip setting";
+        const double gamma = this->declare_parameter<double>(
+            cam.prefix + ".gamma", 0.0, param_desc);
+        configureGamma(cam, gamma);
+
         param_desc.description = "[" + cam.prefix + "] Pixel Format";
         const std::string default_pixel_format =
             prefer_camera_rgb_output_ ? "RGB8Packed" : "BayerRG8";
@@ -338,6 +421,11 @@ private:
             cam.prefix + ".frame_id", cam.camera_name + "_optical_frame");
         cam.topic = this->declare_parameter<std::string>(
             cam.prefix + ".camera_topic", cam.camera_name + "/image_raw");
+        cam.output_encoding = normalizeOutputEncoding(
+            cam,
+            this->declare_parameter<std::string>(
+                cam.prefix + ".output_encoding",
+                sensor_msgs::image_encodings::RGB8));
         cam.camera_info_url = this->declare_parameter<std::string>(
             cam.prefix + ".camera_info_url",
             "package://hik_camera_ros2_driver/config/camera_info.yaml");
@@ -345,6 +433,7 @@ private:
         (void)acquisition_frame_rate;
         (void)exposure_time;
         (void)gain;
+        (void)gamma;
         (void)pixel_format;
     }
 
@@ -563,6 +652,7 @@ private:
         MV_CC_SetEnumValueByString(cam.handle, "TriggerMode", "Off");
         MV_CC_SetEnumValueByString(cam.handle, "ExposureAuto", "Off");
         MV_CC_SetEnumValueByString(cam.handle, "GainAuto", "Off");
+        resetSdkGamma(cam);
 
         if (cam.device_type == "GigE") {
             MV_CC_SetIntValue(cam.handle, "GevSCPSPacketSize", 1500);
@@ -574,8 +664,15 @@ private:
             static_cast<int>(this->get_parameter(cam.prefix + ".exposure_time").as_int());
         const double gain =
             this->get_parameter(cam.prefix + ".gain").as_double();
+        const double gamma =
+            this->get_parameter(cam.prefix + ".gamma").as_double();
+        configureGamma(cam, gamma);
         const std::string pixel_format =
             this->get_parameter(cam.prefix + ".pixel_format").as_string();
+        cam.output_encoding = normalizeOutputEncoding(
+            cam,
+            this->get_parameter(cam.prefix + ".output_encoding").as_string());
+        cam.output_pixel_type = pixelTypeForEncoding(cam.output_encoding);
 
         MV_CC_SetBoolValue(cam.handle, "AcquisitionFrameRateEnable", true);
         MV_CC_SetFloatValue(cam.handle, "AcquisitionFrameRate",
@@ -597,7 +694,11 @@ private:
         }
 
         cam.configured_pixel_format = pixel_format;
-        cam.output_direct_rgb = (pixel_format == "RGB8Packed");
+        cam.output_direct_copy =
+            ((pixel_format == "RGB8Packed" &&
+              cam.output_encoding == sensor_msgs::image_encodings::RGB8) ||
+             (pixel_format == "BGR8Packed" &&
+              cam.output_encoding == sensor_msgs::image_encodings::BGR8));
 
         MV_CC_SetImageNodeNum(cam.handle, 15);
 
@@ -611,7 +712,7 @@ private:
 
         cam.convert_param.nWidth = cam.img_info.nWidthValue;
         cam.convert_param.nHeight = cam.img_info.nHeightValue;
-        cam.convert_param.enDstPixelType = PixelType_Gvsp_RGB8_Packed;
+        cam.convert_param.enDstPixelType = cam.output_pixel_type;
 
         for (auto& slot : cam.ring) {
             slot.data.resize(static_cast<size_t>(cam.img_info.nWidthValue) *
@@ -636,13 +737,14 @@ private:
 
         if (log_success) {
             RCLCPP_INFO(this->get_logger(),
-                        "[%s] Camera connected. idx=%u type=%s serial=%s model=%s pixel_format=%s gpu_debayer=%s",
+                        "[%s] Camera connected. idx=%u type=%s serial=%s model=%s pixel_format=%s output_encoding=%s gpu_debayer=%s",
                         cam.prefix.c_str(),
                         selected_idx,
                         cam.device_type.c_str(),
                         cam.serial.c_str(),
                         cam.model_name.c_str(),
                         cam.configured_pixel_format.c_str(),
+                        cam.output_encoding.c_str(),
 #if HIK_HAS_OPENCV_CUDA
                         (enable_gpu_debayer_ ? "enabled_if_raw" : "disabled"));
 #else
@@ -735,6 +837,14 @@ private:
     }
 
 #if HIK_HAS_OPENCV_CUDA
+    int gpuDemosaicCode(const CameraContext& cam) const
+    {
+        if (cam.output_encoding == sensor_msgs::image_encodings::BGR8) {
+            return cv::cuda::COLOR_BayerRG2BGR_MHT;
+        }
+        return cv::cuda::COLOR_BayerRG2RGB_MHT;
+    }
+
     bool gpuDebayer(CameraContext& cam,
                     const MV_FRAME_OUT& out_frame,
                     FrameSlot& slot)
@@ -746,21 +856,14 @@ private:
                           const_cast<unsigned char*>(out_frame.pBufAddr));
         cam.gpu_bayer_.upload(cpu_bayer);
 
-        int code = -1;
+        cv::cuda::demosaicing(cam.gpu_bayer_, cam.gpu_rgb_,
+                              gpuDemosaicCode(cam), 3);
 
-        #ifdef COLOR_BayerRG2RGB_MHT
-        code = cv::COLOR_BayerRG2RGB_MHT;
-        #elif defined(COLOR_BayerRGGB2RGB_MHT)
-        code = cv::COLOR_BayerRGGB2RGB_MHT;
-        #elif defined(COLOR_BayerRG2RGB)
-        code = cv::COLOR_BayerRG2RGB;
-        #elif defined(COLOR_BayerRGGB2RGB)
-        code = cv::COLOR_BayerRGGB2RGB;
-        #else
-        return false;
-        #endif
-
-        cv::cuda::demosaicing(cam.gpu_bayer_, cam.gpu_rgb_, code, 3);
+        cv::cuda::GpuMat* output = &cam.gpu_rgb_;
+        if (cam.gamma_enabled && cam.gpu_gamma_lut_) {
+            cam.gpu_gamma_lut_->transform(cam.gpu_rgb_, cam.gpu_gamma_);
+            output = &cam.gpu_gamma_;
+        }
 
         const size_t dst_size =
             static_cast<size_t>(width) * static_cast<size_t>(height) * 3U;
@@ -769,10 +872,27 @@ private:
         }
 
         cv::Mat cpu_rgb(height, width, CV_8UC3, slot.data.data());
-        cam.gpu_rgb_.download(cpu_rgb);
+        output->download(cpu_rgb);
         return true;
     }
 #endif
+
+    void applyCpuGamma(CameraContext& cam, FrameSlot& slot) const
+    {
+        if (!cam.gamma_enabled) {
+            return;
+        }
+
+        const size_t bytes =
+            static_cast<size_t>(slot.width) * static_cast<size_t>(slot.height) * 3U;
+        if (slot.data.size() < bytes) {
+            return;
+        }
+
+        for (size_t i = 0; i < bytes; ++i) {
+            slot.data[i] = cam.gamma_lut[slot.data[i]];
+        }
+    }
 
     bool cpuConvertToRgb(CameraContext& cam,
                          const MV_FRAME_OUT& out_frame,
@@ -795,7 +915,7 @@ private:
         cam.convert_param.pSrcData = out_frame.pBufAddr;
         cam.convert_param.nSrcDataLen = out_frame.stFrameInfo.nFrameLen;
         cam.convert_param.enSrcPixelType = out_frame.stFrameInfo.enPixelType;
-        cam.convert_param.enDstPixelType = PixelType_Gvsp_RGB8_Packed;
+        cam.convert_param.enDstPixelType = cam.output_pixel_type;
 
         const int cvt_ret = MV_CC_ConvertPixelType(cam.handle, &cam.convert_param);
         if (cvt_ret != MV_OK) {
@@ -804,6 +924,7 @@ private:
                         cam.prefix.c_str(), cvt_ret);
             return false;
         }
+        applyCpuGamma(cam, slot);
         return true;
     }
 
@@ -815,19 +936,20 @@ private:
         slot.height = out_frame.stFrameInfo.nHeight;
         slot.stamp = makeFrameStamp(cam, out_frame);
 
-        if (cam.output_direct_rgb &&
-            out_frame.stFrameInfo.enPixelType == PixelType_Gvsp_RGB8_Packed) {
+        if (cam.output_direct_copy &&
+            out_frame.stFrameInfo.enPixelType == cam.output_pixel_type) {
             const size_t bytes = static_cast<size_t>(out_frame.stFrameInfo.nFrameLen);
             if (slot.data.size() < bytes) {
                 slot.data.resize(bytes);
             }
             std::memcpy(slot.data.data(), out_frame.pBufAddr, bytes);
+            applyCpuGamma(cam, slot);
             slot.valid = true;
             return true;
         }
 
 #if HIK_HAS_OPENCV_CUDA
-        if (enable_gpu_debayer_ && !cam.output_direct_rgb) {
+        if (enable_gpu_debayer_ && !cam.output_direct_copy) {
             if (gpuDebayer(cam, out_frame, slot)) {
                 slot.valid = true;
                 return true;
@@ -971,7 +1093,7 @@ private:
             image_msg->height = slot.height;
             image_msg->width = slot.width;
             image_msg->step = slot.width * 3U;
-            image_msg->encoding = "rgb8";
+            image_msg->encoding = cam->output_encoding;
 
             image_msg->data.swap(slot.data);
 
@@ -1030,6 +1152,16 @@ private:
                 }
                 status = MV_CC_SetFloatValue(cam->handle, "Gain",
                                              static_cast<float>(param.as_double()));
+
+            } else if (key == "gamma") {
+                if (param.get_type() !=
+                    rclcpp::ParameterType::PARAMETER_DOUBLE) {
+                    result.successful = false;
+                    result.reason = "Parameter type mismatch for " + name;
+                    return result;
+                }
+                resetSdkGamma(*cam);
+                status = configureGamma(*cam, param.as_double());
 
             } else if (key == "exposure_time") {
                 if (param.get_type() !=

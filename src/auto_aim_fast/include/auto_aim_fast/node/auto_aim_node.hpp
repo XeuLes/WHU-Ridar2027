@@ -55,8 +55,8 @@ private:
   bool camera_set_{false};
   bool use_referee_identity_color_{true};
   std::string referee_identity_topic_{"/radar/referee/robot_identity"};
-  std::string image_topic_{"/camera0/image"};
-  std::string camera_info_topic_{"/camera0/camera_info"};
+  std::string image_topic_{"/camera2/image"};
+  std::string camera_info_topic_{"/camera2/camera_info"};
   bool use_camera_info_{false};
   bool require_gimbal_ready_{true};
   std::string gimbal_angles_topic_{"/gimbal/angles_true"};

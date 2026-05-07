@@ -264,7 +264,7 @@ def _build_launch(context):
                 "box_iou_confirm_threshold": 0.25,
                 "box_center_diag_ratio": 0.75,
                 "publish_lost_prediction_to_decision": False,
-                "blind_guess_enabled": True,
+                "blind_guess_enabled": False,
                 "blind_guess_config_path": os.path.join(bringup_config, "guess_pts.yaml"),
                 "blind_guess_after_ms": 250,
                 "blind_guess_hold_ms": 1200,
@@ -301,7 +301,7 @@ def _build_launch(context):
         name="debug_map_node",
         parameters=[
             {
-                "map_path": os.path.join(debug_map_share, "config", "RM2025.png"),
+                "map_path": os.path.join(debug_map_share, "config", "RM2026.png"),
                 "use_match_info_color": False,
                 "self_color_override": team["match_self_color"],
                 "use_referee_identity_color": True,
@@ -582,10 +582,10 @@ def generate_launch_description():
         calib_tool_share, "config", "camera_intrinsics.yaml"
     )
     default_calib_reference_points = os.path.join(
-        calib_tool_share, "config", "reference_points_RM_guanggu.yaml"
+        calib_tool_share, "config", "reference_points_RM.yaml"
     )
     default_calib_out_matrix = os.path.join(
-        bringup_share, "config", "out_matrix_RM_guanggu.yaml"
+        bringup_share, "config", "out_matrix_RM.yaml"
     )
 
     return LaunchDescription(
@@ -597,7 +597,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "rosbag_file",
-                default_value="/home/user/DATA/RADAR_ROSBAG/radar_match_camera_lidar/radar_match_camera_lidar_0.db3",
+                default_value="/home/user/DATA/rosbag.db3",
                 description="input rosbag path for replay",
             ),
             DeclareLaunchArgument(

@@ -1,5 +1,5 @@
 auto_aim_node:
   ros__parameters:
-    camera_info_topic: "/camera1/camera_info"
+    camera_info_topic: "/camera2/camera_info"
     camera.use_camera_info: false
     camera.set_once: true
