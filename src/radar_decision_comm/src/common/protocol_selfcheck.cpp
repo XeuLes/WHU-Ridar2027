@@ -29,6 +29,13 @@ int main()
     std::cerr << "selfcheck failed: cmd_id mismatch" << std::endl;
     return 2;
   }
+  if (
+    decoded->raw_frame.size() < 7 || decoded->raw_frame[5] != 0x05 ||
+    decoded->raw_frame[6] != 0x03)
+  {
+    std::cerr << "selfcheck failed: cmd_id is not encoded little-endian" << std::endl;
+    return 5;
+  }
 
   if (decoded->payload != payload) {
     std::cerr << "selfcheck failed: payload mismatch" << std::endl;

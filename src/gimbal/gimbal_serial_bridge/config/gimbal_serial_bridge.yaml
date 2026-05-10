@@ -23,7 +23,7 @@ gimbal_serial_bridge:
     pitch_protocol_bias_deg: 0.0
     manual_yaw_bias_deg: 0.0
     manual_pitch_bias_deg: 0.0
-    zero_init_sample_count: 20
+    zero_init_sample_count: 30
     zero_stable_window_s: 0.1
     zero_stable_required_count: 10
     zero_stable_max_delta_deg: 0.1

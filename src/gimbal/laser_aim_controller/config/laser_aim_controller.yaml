@@ -74,8 +74,8 @@ laser_aim_controller_node:
 
     yaw_inc_min_deg: -500.0
     yaw_inc_max_deg: 500.0
-    pitch_inc_min_deg: -60.0
-    pitch_inc_max_deg: 40.0
+    pitch_inc_min_deg: -20.0
+    pitch_inc_max_deg: 20.0
     fine_single_step_max_abs_deg: 2.0
 
     # ==================== camera intrinsics ====================
@@ -84,15 +84,15 @@ laser_aim_controller_node:
     camera_cx: 426.297277
     camera_cy: 567.094694
 
-    laser_pixel_uv: [923.0, 368.0]
+    laser_pixel_uv: [1076.0, 222.0]
     # Pitch-axis depth compensation from observed laser row:
-    # 13.5 m -> 368 px, 18.5 m -> 393 px.
+    # 13.0 m -> 222 px, slope kept parallel to the previous line (5 px/m).
     laser_pixel_v_depth_comp_enable: true
-    laser_pixel_v_ref_distance_m: 13.5
-    laser_pixel_v_ref_px: 368.0
+    laser_pixel_v_ref_distance_m: 13.0
+    laser_pixel_v_ref_px: 222.0
     laser_pixel_v_slope_px_per_m: 5.0
-    laser_pixel_v_min_px: 330.0
-    laser_pixel_v_max_px: 430.0
+    laser_pixel_v_min_px: 186.5
+    laser_pixel_v_max_px: 286.5
 
     # ==================== pixel zone ====================
     pixel_far_error_px: 300.0

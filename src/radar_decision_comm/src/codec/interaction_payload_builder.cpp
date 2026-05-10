@@ -18,11 +18,20 @@ void InteractionPayloadBuilder::append_i16_le(std::vector<uint8_t> & out, int16_
   append_u16_le(out, static_cast<uint16_t>(value));
 }
 
+void InteractionPayloadBuilder::append_u32_le(std::vector<uint8_t> & out, uint32_t value)
+{
+  out.push_back(static_cast<uint8_t>(value & 0xFFU));
+  out.push_back(static_cast<uint8_t>((value >> 8U) & 0xFFU));
+  out.push_back(static_cast<uint8_t>((value >> 16U) & 0xFFU));
+  out.push_back(static_cast<uint8_t>((value >> 24U) & 0xFFU));
+}
+
 void InteractionPayloadBuilder::append_float_le(std::vector<uint8_t> & out, float value)
 {
-  uint8_t bytes[sizeof(float)];
-  std::memcpy(bytes, &value, sizeof(float));
-  out.insert(out.end(), bytes, bytes + sizeof(float));
+  static_assert(sizeof(float) == sizeof(uint32_t), "float must be 32-bit IEEE754");
+  uint32_t bits = 0;
+  std::memcpy(&bits, &value, sizeof(bits));
+  append_u32_le(out, bits);
 }
 
 std::vector<uint8_t> InteractionPayloadBuilder::build_sentry_alert_angle_payload(

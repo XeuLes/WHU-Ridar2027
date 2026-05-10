@@ -41,6 +41,7 @@ public:
 
 private:
   static void append_u16_le(std::vector<uint8_t> & out, uint16_t value);
+  static void append_u32_le(std::vector<uint8_t> & out, uint32_t value);
   static void append_i16_le(std::vector<uint8_t> & out, int16_t value);
   static void append_float_le(std::vector<uint8_t> & out, float value);
 };
