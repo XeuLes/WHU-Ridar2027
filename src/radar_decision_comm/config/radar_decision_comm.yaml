@@ -200,6 +200,11 @@ decision_engine:
     enable_radar_double_effect_command: true
     radar_double_effect_period_ms: 1000
     radar_double_effect_keepalive_ms: 1500
+    radar_cmd_counter_state_path: "/tmp/radar_decision_0121_counter.txt"
+    radar_cmd_counter_save_period_ms: 1000
+    enable_interference_key_command: true
+    interference_key_vote_window_ms: 10000
+    interference_key_update_period_ms: 1000
 
     output_map_request_topic: "/radar/decision/map_publish_request"
     output_robot_interaction_topic: "/radar/decision/robot_interaction_request"

@@ -293,8 +293,14 @@ private:
       return;
     }
 
+    uint8_t radar_cmd = msg.radar_cmd;
+    if (radar_cmd == 0U && msg.command_type == 1U && msg.command_value != 0U) {
+      radar_cmd = msg.command_value;
+    }
+
     const auto user_data =
-      RadarCommandPayloadBuilder::build_radar_double_effect_times_payload(msg.command_value);
+      RadarCommandPayloadBuilder::build_radar_decision_payload(
+        radar_cmd, msg.password_cmd, msg.password);
 
     const auto payload = build_0301_payload(
       interaction_cmd_ids::kRadarDecisionInfo,

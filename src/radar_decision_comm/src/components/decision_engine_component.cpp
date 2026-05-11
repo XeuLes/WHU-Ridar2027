@@ -1,12 +1,15 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <deque>
 #include <fstream>
 #include <memory>
 #include <limits>
 #include <optional>
+#include <random>
 #include <sstream>
 #include <string>
 #include <unordered_map>
@@ -111,6 +114,17 @@ public:
     enable_hero_lob_assist_ = this->declare_parameter<bool>("enable_hero_lob_assist", false);
     enable_double_effect_forward_ = this->declare_parameter<bool>("enable_double_effect_forward", true);
     enable_radar_double_effect_command_ = this->declare_parameter<bool>("enable_radar_double_effect_command", true);
+    enable_interference_key_command_ =
+      this->declare_parameter<bool>("enable_interference_key_command", true);
+    interference_key_vote_window_ms_ =
+      this->declare_parameter<int>("interference_key_vote_window_ms", 10000);
+    interference_key_update_period_ms_ =
+      this->declare_parameter<int>("interference_key_update_period_ms", 1000);
+    radar_cmd_counter_state_path_ =
+      this->declare_parameter<std::string>(
+        "radar_cmd_counter_state_path", "/tmp/radar_decision_0121_counter.txt");
+    radar_cmd_counter_save_period_ms_ =
+      this->declare_parameter<int>("radar_cmd_counter_save_period_ms", 1000);
 
     hero_lob_receiver_id_ = this->declare_parameter<int>("hero_lob_receiver_id", my_hero_id_);
     if (derive_ids_from_my_color_) {
@@ -220,6 +234,7 @@ public:
     hero_lob_window_.set_window_seconds(hero_lob_window_s_);
     hero_lob_window_.set_min_samples(static_cast<std::size_t>(std::max(hero_lob_min_samples_, 1)));
     hero_lob_window_.set_max_avg_displacement_m(hero_lob_max_avg_displacement_m_);
+    load_radar_cmd_counter_state();
 
     HeroLobBallisticsConfig hero_lob_ballistics_cfg;
     hero_lob_ballistics_cfg.muzzle_speed_mps = hero_lob_muzzle_speed_mps_;
@@ -271,9 +286,18 @@ private:
   {
     uint8_t command_type{0};
     uint8_t command_value{0};
+    uint8_t radar_cmd{0};
+    uint8_t password_cmd{0};
+    std::array<uint8_t, 6> password{};
     std::string note;
     TimePoint last_sent_tp{};
     bool ever_sent{false};
+  };
+
+  struct InterferenceKeySample
+  {
+    std::array<uint8_t, 6> key{};
+    TimePoint tp{};
   };
 
   struct MapState
@@ -286,6 +310,101 @@ private:
   static bool due(const TimePoint & now, const TimePoint & last, int period_ms)
   {
     return (now - last) >= std::chrono::milliseconds(period_ms);
+  }
+
+  static bool is_alnum_ascii_key(const std::array<uint8_t, 6> & key)
+  {
+    return std::all_of(
+      key.begin(), key.end(),
+      [](uint8_t value) {
+        return std::isalnum(static_cast<unsigned char>(value)) != 0;
+      });
+  }
+
+  static std::string key_to_string(const std::array<uint8_t, 6> & key)
+  {
+    return std::string(key.begin(), key.end());
+  }
+
+  std::array<uint8_t, 6> random_ascii_key()
+  {
+    static constexpr char kAlphabet[] =
+      "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    std::array<uint8_t, 6> key{};
+    std::uniform_int_distribution<std::size_t> dist(0, sizeof(kAlphabet) - 2);
+    for (auto & byte : key) {
+      byte = static_cast<uint8_t>(kAlphabet[dist(rng_)]);
+    }
+    return key;
+  }
+
+  void load_radar_cmd_counter_state()
+  {
+    if (radar_cmd_counter_state_path_.empty()) {
+      return;
+    }
+
+    std::ifstream in(radar_cmd_counter_state_path_);
+    int value = 0;
+    if (!(in >> value)) {
+      return;
+    }
+
+    value = std::clamp(value, 0, 255);
+    radar_cmd_counter_ = static_cast<uint8_t>(value);
+    RCLCPP_INFO(
+      this->get_logger(),
+      "Loaded 0x0121 radar_cmd counter=%d from %s",
+      value,
+      radar_cmd_counter_state_path_.c_str());
+  }
+
+  void save_radar_cmd_counter_state(bool force = false)
+  {
+    if (radar_cmd_counter_state_path_.empty()) {
+      return;
+    }
+    if (
+      !force && have_last_radar_cmd_counter_save_tp_ &&
+      !due(current_tick_now_, last_radar_cmd_counter_save_tp_, radar_cmd_counter_save_period_ms_))
+    {
+      return;
+    }
+
+    std::ofstream out(radar_cmd_counter_state_path_, std::ios::trunc);
+    if (!out) {
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        3000,
+        "Failed to open 0x0121 counter state file: %s",
+        radar_cmd_counter_state_path_.c_str());
+      return;
+    }
+
+    out << static_cast<int>(radar_cmd_counter_) << '\n';
+    last_radar_cmd_counter_save_tp_ = current_tick_now_;
+    have_last_radar_cmd_counter_save_tp_ = true;
+  }
+
+  void update_match_start_counter_reset()
+  {
+    const int progress = static_cast<int>(last_blackboard_.game_state.game_progress);
+    if (last_game_progress_ < 0) {
+      last_game_progress_ = progress;
+      return;
+    }
+
+    if (last_game_progress_ != 4 && progress == 4) {
+      radar_cmd_counter_ = 0U;
+      double_effect_request_latched_ = false;
+      save_radar_cmd_counter_state(true);
+      RCLCPP_INFO(
+        this->get_logger(),
+        "Referee game_progress entered 4; reset 0x0121 radar_cmd counter to 0.");
+    }
+
+    last_game_progress_ = progress;
   }
 
   int enemy_slot_from_robot_id(uint16_t robot_id) const
@@ -466,6 +585,9 @@ private:
       (!radar_cmd_state_.ever_sent) ||
       (radar_cmd_state_.command_type != cmd.command_type) ||
       (radar_cmd_state_.command_value != cmd.command_value) ||
+      (radar_cmd_state_.radar_cmd != cmd.radar_cmd) ||
+      (radar_cmd_state_.password_cmd != cmd.password_cmd) ||
+      (radar_cmd_state_.password != cmd.password) ||
       (radar_cmd_state_.note != cmd.note);
 
     const bool keepalive =
@@ -479,6 +601,9 @@ private:
     radar_command_pub_->publish(cmd);
     radar_cmd_state_.command_type = cmd.command_type;
     radar_cmd_state_.command_value = cmd.command_value;
+    radar_cmd_state_.radar_cmd = cmd.radar_cmd;
+    radar_cmd_state_.password_cmd = cmd.password_cmd;
+    radar_cmd_state_.password = cmd.password;
     radar_cmd_state_.note = cmd.note;
     radar_cmd_state_.last_sent_tp = now;
     radar_cmd_state_.ever_sent = true;
@@ -524,6 +649,96 @@ private:
     in.low_hp_threshold = low_hp_alert_threshold_;
     in.low_ammo_threshold = low_ammo_threshold_;
     return in;
+  }
+
+  void update_interference_key_votes(const TimePoint & now)
+  {
+    const auto & msg = last_blackboard_.wireless_interference_key;
+    const int64_t stamp_ns = rclcpp::Time(msg.header.stamp).nanoseconds();
+    if (stamp_ns > 0 && stamp_ns != last_interference_key_stamp_ns_ && is_alnum_ascii_key(msg.key)) {
+      interference_key_samples_.push_back(InterferenceKeySample{msg.key, now});
+      last_interference_key_stamp_ns_ = stamp_ns;
+      if (!interference_key_window_active_) {
+        interference_key_window_start_ = now;
+        interference_key_window_active_ = true;
+      }
+    }
+
+    const auto window = std::chrono::milliseconds(std::max(interference_key_vote_window_ms_, 1));
+    while (!interference_key_samples_.empty() && (now - interference_key_samples_.front().tp) > window) {
+      interference_key_samples_.pop_front();
+    }
+    if (interference_key_samples_.empty()) {
+      interference_key_window_active_ = false;
+    }
+  }
+
+  bool select_voted_interference_key(std::array<uint8_t, 6> * out) const
+  {
+    if (out == nullptr || interference_key_samples_.empty()) {
+      return false;
+    }
+
+    std::unordered_map<std::string, int> counts;
+    std::unordered_map<std::string, std::array<uint8_t, 6>> keys;
+    for (const auto & sample : interference_key_samples_) {
+      const auto key_text = key_to_string(sample.key);
+      ++counts[key_text];
+      keys[key_text] = sample.key;
+    }
+
+    std::string best_key_text;
+    int best_count = -1;
+    for (const auto & kv : counts) {
+      if (kv.second > best_count || (kv.second == best_count && kv.first < best_key_text)) {
+        best_key_text = kv.first;
+        best_count = kv.second;
+      }
+    }
+
+    if (best_count <= 0) {
+      return false;
+    }
+
+    *out = keys.at(best_key_text);
+    return true;
+  }
+
+  bool take_password_action(uint8_t * password_cmd, std::array<uint8_t, 6> * password)
+  {
+    if (!enable_interference_key_command_ || password_cmd == nullptr || password == nullptr) {
+      return false;
+    }
+
+    if (
+      interference_key_window_active_ &&
+      due(current_tick_now_, interference_key_window_start_, interference_key_vote_window_ms_))
+    {
+      std::array<uint8_t, 6> voted_key{};
+      if (select_voted_interference_key(&voted_key)) {
+        *password_cmd = 2U;
+        *password = voted_key;
+        last_interference_verify_tp_ = current_tick_now_;
+        have_last_interference_verify_tp_ = true;
+        interference_key_samples_.clear();
+        interference_key_window_active_ = false;
+        return true;
+      }
+      interference_key_window_active_ = false;
+    }
+
+    if (
+      !have_last_interference_update_tp_ ||
+      due(current_tick_now_, last_interference_update_tp_, interference_key_update_period_ms_))
+    {
+      *password_cmd = 1U;
+      *password = random_ascii_key();
+      last_interference_update_tp_ = current_tick_now_;
+      have_last_interference_update_tp_ = true;
+      return true;
+    }
+
+    return false;
   }
 
   static double xy_distance(
@@ -877,22 +1092,50 @@ private:
 
   bool action_send_radar_decision()
   {
-    if (!enable_radar_double_effect_command_ || !current_fsm_output_.should_send_radar_command) {
+    bool double_effect_changed = false;
+    if (enable_radar_double_effect_command_ && current_fsm_output_.should_send_radar_command) {
+      if (!double_effect_request_latched_ && radar_cmd_counter_ < 255U) {
+        ++radar_cmd_counter_;
+        double_effect_changed = true;
+        save_radar_cmd_counter_state(true);
+      }
+      double_effect_request_latched_ = true;
+    } else {
+      double_effect_request_latched_ = false;
+    }
+
+    uint8_t password_cmd = 0U;
+    std::array<uint8_t, 6> password{};
+    const bool password_changed = take_password_action(&password_cmd, &password);
+
+    if (!double_effect_changed && !password_changed) {
       return false;
     }
 
     radar_decision_comm::msg::RadarDecisionCommand cmd;
     cmd.header.stamp = this->now();
     cmd.command_type = 1;
-    cmd.command_value = current_fsm_output_.radar_command_times;
+    cmd.command_value = radar_cmd_counter_;
+    cmd.radar_cmd = radar_cmd_counter_;
+    cmd.password_cmd = password_cmd;
+    cmd.password = password;
 
     std::ostringstream note;
-    note << "btcpp_radar_double_effect";
-    if (current_selected_target_.has_target) {
+    note << "btcpp_radar_decision";
+    if (double_effect_changed && current_selected_target_.has_target) {
+      note << "|double_effect=" << static_cast<int>(radar_cmd_counter_);
       note << "|target=" << current_selected_target_.primary_target.robot_id;
       note << "|reason=" << current_selected_target_.reason;
-    } else {
-      note << "|no_target";
+    } else if (double_effect_changed) {
+      note << "|double_effect=" << static_cast<int>(radar_cmd_counter_) << "|no_target";
+    }
+    if (password_changed) {
+      note << "|password_cmd=" << static_cast<int>(password_cmd);
+      if (password_cmd == 2U) {
+        note << "|verify=" << key_to_string(password);
+      } else if (password_cmd == 1U) {
+        note << "|update";
+      }
     }
     cmd.note = note.str();
 
@@ -963,7 +1206,9 @@ private:
     });
 
     factory_.registerSimpleCondition("RadarCommandNeeded", [this](BT::TreeNode &) {
-      return current_fsm_output_.should_send_radar_command ? BT::NodeStatus::SUCCESS : BT::NodeStatus::FAILURE;
+      return (current_fsm_output_.should_send_radar_command || enable_interference_key_command_)
+        ? BT::NodeStatus::SUCCESS
+        : BT::NodeStatus::FAILURE;
     });
   }
 
@@ -999,7 +1244,8 @@ private:
     bt_blackboard_->set("hero_alert", evaluate_hero_alert());
     bt_blackboard_->set("hero_lob_action", current_hero_lob_fsm_output_.action_needed);
     bt_blackboard_->set("double_forward", current_fsm_output_.should_forward);
-    bt_blackboard_->set("radar_cmd", current_fsm_output_.should_send_radar_command);
+    bt_blackboard_->set(
+      "radar_cmd", current_fsm_output_.should_send_radar_command || enable_interference_key_command_);
 
     if (current_selected_target_.has_target) {
       bt_blackboard_->set("target_id", static_cast<int>(current_selected_target_.primary_target.robot_id));
@@ -1034,6 +1280,8 @@ private:
     }
     // 更新時間戳
     current_tick_now_ = Clock::now();
+    update_match_start_counter_reset();
+    update_interference_key_votes(current_tick_now_);
     // 選擇雙倍易傷目標
     current_selected_target_ = TargetSelector::select(last_blackboard_, selector_cfg_);
     // 更新雙倍易傷FSM輸出
@@ -1048,6 +1296,7 @@ private:
     } else {
       tick_btcpp_mode();
     }
+    save_radar_cmd_counter_state(false);
   }
 
   bool enabled_{true};
@@ -1059,6 +1308,7 @@ private:
   bool enable_hero_lob_assist_{false};
   bool enable_double_effect_forward_{true};
   bool enable_radar_double_effect_command_{true};
+  bool enable_interference_key_command_{true};
   bool derive_ids_from_my_color_{true};
   bool use_referee_identity_color_{true};
 
@@ -1081,6 +1331,9 @@ private:
   int hero_lob_solve_period_ms_{200};
   int double_effect_keepalive_ms_{1500};
   int radar_double_effect_keepalive_ms_{1500};
+  int interference_key_vote_window_ms_{10000};
+  int interference_key_update_period_ms_{1000};
+  int radar_cmd_counter_save_period_ms_{1000};
   int hero_lob_min_samples_{10};
 
   int low_hp_alert_threshold_{120};
@@ -1125,6 +1378,7 @@ private:
   std::string output_radar_command_topic_;
   std::string output_hero_lob_status_topic_;
   std::string output_hero_lob_debug_topic_;
+  std::string radar_cmd_counter_state_path_{"/tmp/radar_decision_0121_counter.txt"};
   std::vector<double> hero_lob_target_xyz_when_red_;
   std::vector<double> hero_lob_target_xyz_when_blue_;
 
@@ -1148,10 +1402,24 @@ private:
   bool current_enemy_nearby_3m_{false};
   bool current_hero_lob_solution_usable_{false};
   uint8_t hero_lob_clear_sequence_{0};
+  uint8_t radar_cmd_counter_{0};
+  bool double_effect_request_latched_{false};
+  int last_game_progress_{-1};
   TimePoint current_tick_now_{};
+  TimePoint last_radar_cmd_counter_save_tp_{};
+  bool have_last_radar_cmd_counter_save_tp_{false};
   TimePoint last_hero_lob_solve_tp_{};
   bool have_hero_lob_solve_tp_{false};
   std::optional<TimePoint> hero_lob_ready_since_;
+  std::deque<InterferenceKeySample> interference_key_samples_;
+  TimePoint interference_key_window_start_{};
+  bool interference_key_window_active_{false};
+  TimePoint last_interference_update_tp_{};
+  bool have_last_interference_update_tp_{false};
+  TimePoint last_interference_verify_tp_{};
+  bool have_last_interference_verify_tp_{false};
+  int64_t last_interference_key_stamp_ns_{0};
+  std::mt19937 rng_{std::random_device{}()};
 
   radar_decision_comm::msg::BattleBlackboard last_blackboard_;
 

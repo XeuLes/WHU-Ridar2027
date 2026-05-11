@@ -177,6 +177,12 @@ private:
     std::ostringstream oss;
     oss << static_cast<int>(msg.command_type) << "|"
         << static_cast<int>(msg.command_value) << "|"
+        << static_cast<int>(msg.radar_cmd) << "|"
+        << static_cast<int>(msg.password_cmd) << "|";
+    for (auto b : msg.password) {
+      oss << static_cast<int>(b) << ",";
+    }
+    oss << "|"
         << msg.note;
     return oss.str();
   }
@@ -331,9 +337,11 @@ private:
     if ((log_count++ % 10) == 0) {
       RCLCPP_INFO(
         this->get_logger(),
-        "TxScheduler published RADAR_CMD type=%u value=%u",
+        "TxScheduler published RADAR_CMD type=%u value=%u radar_cmd=%u password_cmd=%u",
         radar_cmd_state_.last_msg.command_type,
-        radar_cmd_state_.last_msg.command_value);
+        radar_cmd_state_.last_msg.command_value,
+        radar_cmd_state_.last_msg.radar_cmd,
+        radar_cmd_state_.last_msg.password_cmd);
     }
   }
 
