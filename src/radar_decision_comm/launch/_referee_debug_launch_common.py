@@ -182,18 +182,18 @@ def hero_lob_payload():
 MAP_REQUEST_YAML = """{
   force: true,
   robots: [
-    # {robot_id: 101, track_id: 101, is_valid: true, confidence: 0.95, field_position: {x: 24.5, y: 3.3, z: 0.0}},
-    # {robot_id: 102, track_id: 102, is_valid: true, confidence: 0.91, field_position: {x: 21.8, y: 7.1, z: 0.0}},
-    # {robot_id: 103, track_id: 103, is_valid: true, confidence: 0.88, field_position: {x: 18.4, y: 5.2, z: 0.0}},
-    # {robot_id: 104, track_id: 104, is_valid: true, confidence: 0.86, field_position: {x: 15.4, y: 9.5, z: 0.0}},
-    # {robot_id: 106, track_id: 106, is_valid: true, confidence: 0.82, field_position: {x: 12.6, y: 6.9, z: 0.0}},
+    {robot_id: 101, track_id: 101, is_valid: true, confidence: 0.95, field_position: {x: 24.5, y: 3.3, z: 0.0}},
+    {robot_id: 102, track_id: 102, is_valid: true, confidence: 0.91, field_position: {x: 21.8, y: 7.1, z: 0.0}},
+    {robot_id: 103, track_id: 103, is_valid: true, confidence: 0.88, field_position: {x: 18.4, y: 5.2, z: 0.0}},
+    {robot_id: 104, track_id: 104, is_valid: true, confidence: 0.86, field_position: {x: 15.4, y: 9.5, z: 0.0}},
+    {robot_id: 106, track_id: 106, is_valid: true, confidence: 0.82, field_position: {x: 12.6, y: 6.9, z: 0.0}},
     {robot_id: 107, track_id: 107, is_valid: true, confidence: 0.90, field_position: {x: 26.5, y: 11.7, z: 0.0}},
-    # {robot_id: 1, track_id: 1, is_valid: true, confidence: 0.95, field_position: {x: 2.5, y: 3.3, z: 0.0}},
-    # {robot_id: 2, track_id: 2, is_valid: true, confidence: 0.91, field_position: {x: 4.8, y: 7.1, z: 0.0}},
-    # {robot_id: 3, track_id: 3, is_valid: true, confidence: 0.88, field_position: {x: 6.4, y: 5.2, z: 0.0}},
-    # {robot_id: 4, track_id: 4, is_valid: true, confidence: 0.86, field_position: {x: 8.4, y: 9.5, z: 0.0}},
-    # {robot_id: 6, track_id: 6, is_valid: true, confidence: 0.82, field_position: {x: 10.6, y: 6.9, z: 0.0}},
-    # {robot_id: 7, track_id: 7, is_valid: true, confidence: 0.90, field_position: {x: 12.5, y: 11.7, z: 0.0}}
+    {robot_id: 1, track_id: 1, is_valid: true, confidence: 0.95, field_position: {x: 2.5, y: 3.3, z: 0.0}},
+    {robot_id: 2, track_id: 2, is_valid: true, confidence: 0.91, field_position: {x: 4.8, y: 7.1, z: 0.0}},
+    {robot_id: 3, track_id: 3, is_valid: true, confidence: 0.88, field_position: {x: 6.4, y: 5.2, z: 0.0}},
+    {robot_id: 4, track_id: 4, is_valid: true, confidence: 0.86, field_position: {x: 8.4, y: 9.5, z: 0.0}},
+    {robot_id: 6, track_id: 6, is_valid: true, confidence: 0.82, field_position: {x: 10.6, y: 6.9, z: 0.0}},
+    {robot_id: 7, track_id: 7, is_valid: true, confidence: 0.90, field_position: {x: 12.5, y: 11.7, z: 0.0}}
   ]
 }"""
 

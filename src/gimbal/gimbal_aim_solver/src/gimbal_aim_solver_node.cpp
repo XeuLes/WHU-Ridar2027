@@ -3,6 +3,7 @@
 #include <cmath>
 #include <vector>
 #include <std_msgs/msg/bool.hpp>
+#include <opencv2/core.hpp>
 
 #include "radar_decision_comm/common/team_identity.hpp"
 
@@ -48,6 +49,7 @@ void GimbalAimSolverNode::declareAndLoadParameters()
   this->declare_parameter<std::string>("gimbal_angles_topic", "/gimbal/angles");
   this->declare_parameter<std::string>("target_angles_topic", "/gimbal/rough_command_angles");
   this->declare_parameter<std::string>("referee_identity_topic", "/radar/referee/robot_identity");
+  this->declare_parameter<std::string>("camera_to_lidar_yaml", "");
 
   this->declare_parameter<std::string>("target_side", "red");
   this->declare_parameter<std::string>("gimbal_angle_order", "yaw_pitch");
@@ -69,6 +71,7 @@ void GimbalAimSolverNode::declareAndLoadParameters()
 
   this->declare_parameter<std::vector<double>>(
     "camera_to_gimbal_xyz", std::vector<double>{-0.05, -0.20, 0.0});
+  this->declare_parameter<double>("camera_to_gimbal_pitch_deg", 0.0);
 
   // 新增：激光发射点相对于云台解算原点，在“云台本体系”下的安装偏置
   this->declare_parameter<std::vector<double>>(
@@ -86,6 +89,7 @@ void GimbalAimSolverNode::declareAndLoadParameters()
   gimbal_angles_topic_ = this->get_parameter("gimbal_angles_topic").as_string();
   target_angles_topic_ = this->get_parameter("target_angles_topic").as_string();
   referee_identity_topic_ = this->get_parameter("referee_identity_topic").as_string();
+  camera_to_lidar_yaml_ = this->get_parameter("camera_to_lidar_yaml").as_string();
 
   target_side_ = this->get_parameter("target_side").as_string();
   gimbal_angle_order_ = this->get_parameter("gimbal_angle_order").as_string();
@@ -121,6 +125,30 @@ void GimbalAimSolverNode::declareAndLoadParameters()
 
   gimbal_geometry_.setCameraToGimbalTranslation(
     Eigen::Vector3d(camera_to_gimbal_xyz[0], camera_to_gimbal_xyz[1], camera_to_gimbal_xyz[2]));
+  double camera_to_gimbal_pitch_deg = this->get_parameter("camera_to_gimbal_pitch_deg").as_double();
+  std::string pitch_source = "camera_to_gimbal_pitch_deg";
+  if (!camera_to_lidar_yaml_.empty()) {
+    double lidar_yaml_pitch_deg = 0.0;
+    if (readCameraPitchFromLidarYaml(camera_to_lidar_yaml_, lidar_yaml_pitch_deg)) {
+      camera_to_gimbal_pitch_deg = lidar_yaml_pitch_deg;
+      pitch_source = camera_to_lidar_yaml_;
+    } else {
+      RCLCPP_WARN(
+        this->get_logger(),
+        "Failed to read camera pitch from camera_to_lidar_yaml=%s, fallback to %.3f deg",
+        camera_to_lidar_yaml_.c_str(),
+        camera_to_gimbal_pitch_deg);
+    }
+  }
+  gimbal_geometry_.setCameraPitchRelativeToGimbal(camera_to_gimbal_pitch_deg);
+  RCLCPP_INFO(
+    this->get_logger(),
+    "camera_to_gimbal_xyz=(%.4f, %.4f, %.4f), camera_pitch_relative_to_gimbal_deg=%.3f source=%s",
+    camera_to_gimbal_xyz[0],
+    camera_to_gimbal_xyz[1],
+    camera_to_gimbal_xyz[2],
+    camera_to_gimbal_pitch_deg,
+    pitch_source.c_str());
 
   const auto laser_offset_xyz = this->get_parameter("laser_offset_xyz").as_double_array();
   if (laser_offset_xyz.size() != 3) {
@@ -169,6 +197,46 @@ void GimbalAimSolverNode::refereeIdentityCallback(
 bool GimbalAimSolverNode::isFinitePoint(const Eigen::Vector3d& p) const
 {
   return std::isfinite(p.x()) && std::isfinite(p.y()) && std::isfinite(p.z());
+}
+
+bool GimbalAimSolverNode::readCameraPitchFromLidarYaml(
+  const std::string& yaml_path,
+  double& pitch_deg) const
+{
+  cv::FileStorage fs(yaml_path, cv::FileStorage::READ);
+  if (!fs.isOpened()) {
+    return false;
+  }
+
+  if (!fs["rotation_rpy_deg"].empty()) {
+    const cv::FileNode rpy = fs["rotation_rpy_deg"];
+    if (rpy.size() == 3) {
+      pitch_deg = static_cast<double>(rpy[1]);
+      return true;
+    }
+  }
+
+  if (!fs["rotation_rpy_rad"].empty()) {
+    constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+    const cv::FileNode rpy = fs["rotation_rpy_rad"];
+    if (rpy.size() == 3) {
+      pitch_deg = static_cast<double>(rpy[1]) * kRadToDeg;
+      return true;
+    }
+  }
+
+  if (!fs["pitch_deg"].empty()) {
+    pitch_deg = static_cast<double>(fs["pitch_deg"]);
+    return true;
+  }
+
+  if (!fs["pitch"].empty()) {
+    constexpr double kRadToDeg = 180.0 / 3.14159265358979323846;
+    pitch_deg = static_cast<double>(fs["pitch"]) * kRadToDeg;
+    return true;
+  }
+
+  return false;
 }
 
 Eigen::Matrix3d GimbalAimSolverNode::rotationFromSolvedYawPitchDeg(

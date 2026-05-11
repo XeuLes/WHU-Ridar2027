@@ -35,8 +35,8 @@ auto_aim_node:
     detector.yolo.input_h: 640
     detector.yolo.max_det: 300
     detector.yolo.target_class_id: 0
-    detector.yolo.conf_thresh: 0.05
-    detector.yolo.nms_thresh: 0.05
+    detector.yolo.conf_thresh: 0.5
+    detector.yolo.nms_thresh: 0.45
     detector.yolo.kpt_conf_thresh: 0.5
     detector.yolo.min_w_ratio: 0.025
     detector.yolo.min_h_ratio: 0.035

@@ -39,6 +39,8 @@ private:
 
   bool isFinitePoint(const Eigen::Vector3d& p) const;
 
+  bool readCameraPitchFromLidarYaml(const std::string& yaml_path, double& pitch_deg) const;
+
   void publishTargetAngles(double yaw_deg, double pitch_deg, bool target_observed) const;
 
 
@@ -66,6 +68,7 @@ private:
   std::string gimbal_angles_topic_;
   std::string target_angles_topic_;
   std::string referee_identity_topic_;
+  std::string camera_to_lidar_yaml_;
 
   std::string target_side_;
   std::string gimbal_angle_order_;

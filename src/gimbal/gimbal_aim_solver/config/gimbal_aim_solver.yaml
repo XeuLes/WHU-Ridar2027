@@ -29,12 +29,17 @@ gimbal_aim_solver_node:
     # world -> camera, OpenCV 外参
     world_rvec: [1.1965118258991709, -1.2447721431265979, 1.1930272786425775]
     world_tvec: [ 5.4380370388002515, 5.0645066190732093, 7.9561979868420236 ]
+    # 为空时使用下方 camera_to_gimbal_pitch_deg；非空时读取 rotation_rpy_deg[1]
+    # 例如 -13.75 表示相机相对激光雷达/云台前向向下俯视 13.75 deg
+    camera_to_lidar_yaml: ""
 
     # 云台原点在相机坐标系中的坐标，单位米
     # 相机坐标系按 OpenCV:
     # x右, y下, z前
     # 云台在相机左5cm、上20cm => (-0.05, -0.20, 0.0)
     camera_to_gimbal_xyz: [-0.5862, 0.2027, 5.7972]
+    # 手动兜底值：相机前向轴相对云台静止前向轴的安装俯仰角，向上为正，单位 deg
+    camera_to_gimbal_pitch_deg: 0.0
     laser_offset_xyz: [0.0, -0.049, 0.0]
 
     # 零偏补偿

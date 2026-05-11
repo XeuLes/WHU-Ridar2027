@@ -487,7 +487,10 @@ def _build_launch(context):
         output="screen",
         parameters=[
             gimbal_solver_cfg,
-            {"target_side": team["gimbal_target_side"]},
+            {
+                "target_side": team["gimbal_target_side"],
+                "camera_to_lidar_yaml": camera_to_lidar_yaml,
+            },
         ],
     )
 
