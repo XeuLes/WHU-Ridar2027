@@ -38,6 +38,18 @@ class RefereeRosbagRecorder(Node):
         self.start_game_progress = int(
             self.declare_parameter("start_game_progress", 4).value
         )
+        self.record_topics = [
+            str(topic)
+            for topic in self.declare_parameter(
+                "record_topics",
+                [
+                    "/camera0/image",
+                    "/camera0/camera_info",
+                    "/livox/lidar",
+                    "/livox/imu",
+                ],
+            ).value
+        ]
 
         self._record_process = None
         self._record_started = False
@@ -58,12 +70,13 @@ class RefereeRosbagRecorder(Node):
 
         self.get_logger().info(
             "referee rosbag recorder armed: topic=%s start_game_progress=%d "
-            "duration=%.1fs output_dir=%s"
+            "duration=%.1fs output_dir=%s record_topics=%s"
             % (
                 self.game_status_topic,
                 self.start_game_progress,
                 self.record_duration_sec,
                 self.output_dir,
+                ", ".join(self.record_topics),
             )
         )
 
@@ -99,7 +112,12 @@ class RefereeRosbagRecorder(Node):
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         bag_path = os.path.join(self.output_dir, "radar_match_%s" % timestamp)
-        command = [ros2_executable, "bag", "record", "-a", "-o", bag_path]
+        if not self.record_topics:
+            self.get_logger().error("cannot start rosbag recording: record_topics is empty")
+            self._record_started = True
+            return
+
+        command = [ros2_executable, "bag", "record", "-o", bag_path, *self.record_topics]
 
         try:
             self._record_process = subprocess.Popen(

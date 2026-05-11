@@ -204,10 +204,10 @@ def _build_launch(context):
                 "accumulate_time": 30,
                 "grid_size_degrees": 0.05,
                 "downsample_leaf_size": 0.2,
-                "roi_min_x": 5.0,
-                "roi_max_x": 35.0,
-                "roi_min_y": -6.0,
-                "roi_max_y": 12.0,
+                "roi_min_x": 0.0,
+                "roi_max_x": 32.0,
+                "roi_min_y": -8.0,
+                "roi_max_y": 10.0,
                 "roi_max_z": 1.5,
                 "tf_publish_rate_hz": 20.0,
                 "gicp_worker_rate_hz": 20.0,
@@ -628,6 +628,12 @@ def _build_launch(context):
                 ),
                 "game_status_topic": "/radar/referee/game_status",
                 "start_game_progress": 4,
+                "record_topics": [
+                    "/camera0/image",
+                    "/camera0/camera_info",
+                    "/livox/lidar",
+                    "/livox/imu",
+                ],
             }
         ],
     )
@@ -832,8 +838,11 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "record_rosbag",
-                default_value="false",
-                description="record all ROS topics for a match when referee game_progress enters 4",
+                default_value="true",
+                description=(
+                    "arm match-triggered rosbag recording; records Hik camera and "
+                    "Livox lidar driver topics when referee game_progress enters 4"
+                ),
             ),
             DeclareLaunchArgument(
                 "rosbag_output_dir",
