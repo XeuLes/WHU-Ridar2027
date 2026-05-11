@@ -37,6 +37,14 @@ public:
     std::array<int, 4> outer_corner_indices = {0, 4, 7, 3}; // lt, lb, rb, rt from 8 kpts
   };
 
+  enum class OutputFormat
+  {
+    POST_NMS_XYXY = 0,
+    RAW_ULTRALYTICS_POSE = 1,
+    RAW_ULTRALYTICS_DETECT = 2,
+    POST_NMS_DETECT_XYXY = 3
+  };
+
   YoloPoseTrtDetector();
   ~YoloPoseTrtDetector();
 
@@ -64,13 +72,6 @@ private:
   struct Logger : public nvinfer1::ILogger
   {
     void log(Severity severity, const char* msg) noexcept override;
-  };
-
-  enum class OutputFormat
-  {
-    POST_NMS_XYXY = 0,
-    RAW_ULTRALYTICS_POSE = 1,
-    RAW_ULTRALYTICS_DETECT = 2
   };
 
   struct LetterboxMeta

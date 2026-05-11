@@ -109,6 +109,11 @@ bool isLikelyPostNmsStride(int x)
   return x >= kExpectedStride && x <= 256;
 }
 
+bool isLikelyPostNmsDetectStride(int x)
+{
+  return x == 6;
+}
+
 int rawPoseClassCount(int stride)
 {
   return stride - kRawBoxFields - kRawKptFields;
@@ -133,7 +138,23 @@ bool isLikelyRawDetectStride(int x)
 
 bool isLikelyOutputStride(int x)
 {
-  return isLikelyPostNmsStride(x) || isLikelyRawPoseStride(x) || isLikelyRawDetectStride(x);
+  return isLikelyPostNmsDetectStride(x) || isLikelyPostNmsStride(x) ||
+    isLikelyRawPoseStride(x) || isLikelyRawDetectStride(x);
+}
+
+const char * outputFormatToString(YoloPoseTrtDetector::OutputFormat format)
+{
+  switch (format) {
+    case YoloPoseTrtDetector::OutputFormat::RAW_ULTRALYTICS_POSE:
+      return "raw-ultralytics-pose";
+    case YoloPoseTrtDetector::OutputFormat::RAW_ULTRALYTICS_DETECT:
+      return "raw-ultralytics-detect";
+    case YoloPoseTrtDetector::OutputFormat::POST_NMS_DETECT_XYXY:
+      return "post-nms-detect-xyxy";
+    case YoloPoseTrtDetector::OutputFormat::POST_NMS_XYXY:
+    default:
+      return "post-nms-xyxy";
+  }
 }
 
 float boxIou(const std::array<float, 4>& a, const std::array<float, 4>& b)
@@ -349,9 +370,13 @@ bool YoloPoseTrtDetector::loadEngine()
   const bool raw_possible = isLikelyRawPoseStride(det_stride);
   const bool raw_detect_possible = isLikelyRawDetectStride(det_stride);
   const bool post_nms_possible = isLikelyPostNmsStride(det_stride);
+  const bool post_nms_detect_possible = isLikelyPostNmsDetectStride(det_stride);
 
   constexpr int kRawAnchorCountHint = 1024;
-  if (raw_possible && (det_count > std::max(1, params_.max_det) ||
+  if (post_nms_detect_possible && det_count <= std::max(1, params_.max_det)) {
+    output_format_ = OutputFormat::POST_NMS_DETECT_XYXY;
+    output_class_count_ = 1;
+  } else if (raw_possible && (det_count > std::max(1, params_.max_det) ||
                        det_count > kRawAnchorCountHint ||
                        !post_nms_possible)) {
     output_format_ = OutputFormat::RAW_ULTRALYTICS_POSE;
@@ -383,10 +408,7 @@ bool YoloPoseTrtDetector::loadEngine()
   std::fprintf(stderr,
                "[YoloPoseTrtDetector] parsed layout=%s format=%s det_count=%d det_stride=%d classes=%d\n",
                transposed ? "[1,C,N]" : "[1,N,C]",
-               output_format_ == OutputFormat::RAW_ULTRALYTICS_POSE
-                 ? "raw-ultralytics-pose"
-                 : (output_format_ == OutputFormat::RAW_ULTRALYTICS_DETECT
-                   ? "raw-ultralytics-detect" : "post-nms-xyxy"),
+               outputFormatToString(output_format_),
                output_det_count_,
                std::abs(output_det_stride_),
                output_class_count_);
@@ -571,10 +593,7 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::detectDetailed
                  bgr.cols, bgr.rows,
                  meta.scale, meta.pad_x, meta.pad_y,
                  transposed ? "[1,C,N]" : "[1,N,C]",
-                 output_format_ == OutputFormat::RAW_ULTRALYTICS_POSE
-                   ? "raw-ultralytics-pose"
-                   : (output_format_ == OutputFormat::RAW_ULTRALYTICS_DETECT
-                     ? "raw-ultralytics-detect" : "post-nms-xyxy"),
+                 outputFormatToString(output_format_),
                  output_det_count_, stride_abs,
                  dtypeToStr(output_dtype),
                  raw_max);
@@ -604,7 +623,8 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::detectDetailed
                      getDetValDbg(i, 0), getDetValDbg(i, 1),
                      getDetValDbg(i, 2), getDetValDbg(i, 3),
                      getDetValDbg(i, 4));
-      } else {
+      } else if (output_format_ == OutputFormat::POST_NMS_XYXY ||
+                 output_format_ == OutputFormat::POST_NMS_DETECT_XYXY) {
         std::fprintf(stderr,
                      "[YoloPoseTrtDetector][DBG] det[%d] x1=%.3f y1=%.3f x2=%.3f y2=%.3f score=%.6f cls=%.3f\n",
                      i,
@@ -876,9 +896,15 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::parseOutput(
   } else {
     const int kpt_offset = kPerDetBase;
 
-    if (stride_abs < kExpectedStride) {
+    if (output_format_ == OutputFormat::POST_NMS_XYXY && stride_abs < kExpectedStride) {
       std::fprintf(stderr,
                    "[YoloPoseTrtDetector] post-NMS output stride too small for pose: %d\n",
+                   stride_abs);
+      return out;
+    }
+    if (output_format_ == OutputFormat::POST_NMS_DETECT_XYXY && stride_abs < 6) {
+      std::fprintf(stderr,
+                   "[YoloPoseTrtDetector] post-NMS detect output stride too small: %d\n",
                    stride_abs);
       return out;
     }
@@ -905,7 +931,7 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::parseOutput(
       DecodedDetection det;
       det.score = score;
       det.cls = cls;
-      det.has_keypoints = true;
+      det.has_keypoints = (output_format_ == OutputFormat::POST_NMS_XYXY);
       det.box_net = {
         getDetVal(i, 0),
         getDetVal(i, 1),
@@ -915,13 +941,15 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::parseOutput(
 
       if (!passesSizeGate(det, i)) continue;
 
-      for (int k = 0; k < kExpectedKptNum; ++k) {
-        det.kpts_net[static_cast<size_t>(k)] = {
-          getDetVal(i, kpt_offset + k * 3 + 0),
-          getDetVal(i, kpt_offset + k * 3 + 1)
-        };
-        det.kpt_scores[static_cast<size_t>(k)] =
-          getDetVal(i, kpt_offset + k * 3 + 2);
+      if (det.has_keypoints) {
+        for (int k = 0; k < kExpectedKptNum; ++k) {
+          det.kpts_net[static_cast<size_t>(k)] = {
+            getDetVal(i, kpt_offset + k * 3 + 0),
+            getDetVal(i, kpt_offset + k * 3 + 1)
+          };
+          det.kpt_scores[static_cast<size_t>(k)] =
+            getDetVal(i, kpt_offset + k * 3 + 2);
+        }
       }
 
       auto pr = makePair(det, i);
