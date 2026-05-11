@@ -62,6 +62,10 @@ def _build_launch(context):
         LaunchConfiguration("referee_publish_raw_debug"),
         value_type=bool,
     )
+    publish_detect_debug_image = ParameterValue(
+        LaunchConfiguration("publish_detect_debug_image"),
+        value_type=bool,
+    )
     decision_params_file = LaunchConfiguration("decision_params_file").perform(context)
     pdu_poll_period_ms = int(LaunchConfiguration("pdu_poll_period_ms").perform(context))
     enable_calibration = LaunchConfiguration("enable_calibration").perform(context).strip().lower()
@@ -162,7 +166,7 @@ def _build_launch(context):
             {
                 "image_topic": "/camera0_rect/image",
                 "show_debug_window": False,
-                "publish_debug_image": True,
+                "publish_debug_image": publish_detect_debug_image,
                 "debug_image_topic": "/detect/debug_image",
             }
         ],
@@ -381,7 +385,7 @@ def _build_launch(context):
             resolve_component,
             kalman_filter_component,
             kalman_tracks_adapter_component,
-            debug_map_component,
+            # debug_map_component,
         ],
         output="both",
         emulate_tty=True,
@@ -634,6 +638,7 @@ def _build_launch(context):
         name="detect_debug_image_view",
         output="screen",
         remappings=[("image", "/detect/debug_image")],
+        condition=IfCondition(LaunchConfiguration("show_detect_debug_window")),
         parameters=[
             {
                 "window_name": "detect",
@@ -770,7 +775,7 @@ def generate_launch_description():
         calib_tool_share, "config", "reference_points_RM.yaml"
     )
     default_calib_out_matrix = os.path.join(
-        bringup_share, "config", "out_matrix_guanggu.yaml"
+        bringup_share, "config", "out_matrix_RMUC2026.yaml"
     )
 
     return LaunchDescription(
@@ -806,6 +811,16 @@ def generate_launch_description():
                 description="publish raw referee serial RX bytes to /radar/debug/referee_raw_bytes",
             ),
             DeclareLaunchArgument(
+                "publish_detect_debug_image",
+                default_value="false",
+                description="publish detect debug image to /detect/debug_image",
+            ),
+            DeclareLaunchArgument(
+                "show_detect_debug_window",
+                default_value="false",
+                description="open image_view window for /detect/debug_image",
+            ),
+            DeclareLaunchArgument(
                 "decision_params_file",
                 default_value=default_decision_params,
                 description="radar_decision_comm parameter file",
@@ -832,7 +847,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "enable_calibration",
-                default_value="false",
+                default_value="true",
                 description="whether to run pnp_calib_new.launch.py before starting the normal radar flow",
             ),
             DeclareLaunchArgument(
