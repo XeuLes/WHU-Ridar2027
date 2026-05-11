@@ -84,15 +84,28 @@ laser_aim_controller_node:
     camera_cx: 426.297277
     camera_cy: 567.094694
 
-    laser_pixel_uv: [1076.0, 222.0]
-    # Pitch-axis depth compensation from observed laser row:
-    # 13.0 m -> 222 px, slope kept parallel to the previous line (5 px/m).
+    # Laser spot expected pixel uses PnP distance D in meters:
+    # pixel = ref_px + slope * (D - ref_distance) + quadratic * (D - ref_distance)^2.
+    # Fitted from latest measurements:
+    # D/m: 15,18,20,22,25
+    # u/px: 1071.01,1072.39,1072.50,1072.05,1071.42
+    # v/px: 161.54,177.45,186.05,192.51,199.34
+    laser_pixel_uv: [1072.45, 185.93]
+    laser_pixel_u_depth_comp_enable: true
+    laser_pixel_u_ref_distance_m: 20.0
+    laser_pixel_u_ref_px: 1072.4487
+    laser_pixel_u_slope_px_per_m: 0.023621
+    laser_pixel_u_quadratic_px_per_m2: -0.049544
+    laser_pixel_u_min_px: 1068.0
+    laser_pixel_u_max_px: 1076.0
+
     laser_pixel_v_depth_comp_enable: true
-    laser_pixel_v_ref_distance_m: 13.0
-    laser_pixel_v_ref_px: 222.0
-    laser_pixel_v_slope_px_per_m: 5.0
-    laser_pixel_v_min_px: 186.5
-    laser_pixel_v_max_px: 286.5
+    laser_pixel_v_ref_distance_m: 20.0
+    laser_pixel_v_ref_px: 185.9311
+    laser_pixel_v_slope_px_per_m: 3.777931
+    laser_pixel_v_quadratic_px_per_m2: -0.220098
+    laser_pixel_v_min_px: 155.0
+    laser_pixel_v_max_px: 205.0
 
     # ==================== pixel zone ====================
     pixel_far_error_px: 300.0

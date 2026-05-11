@@ -443,11 +443,22 @@ LaserAimControllerNode::LaserAimControllerNode(const rclcpp::NodeOptions & optio
   RCLCPP_INFO(this->get_logger(), "lost_auto_hold_timeout_s: %.3f", lost_auto_hold_timeout_s_);
   RCLCPP_INFO(
     this->get_logger(),
-    "laser pixel v depth compensation: %s ref=(%.3f m, %.2f px) slope=%.3f px/m clamp=[%.1f, %.1f]",
+    "laser pixel u depth compensation: %s ref=(%.3f m, %.2f px) slope=%.6f px/m quad=%.6f px/m^2 clamp=[%.1f, %.1f]",
+    laser_pixel_u_depth_comp_enable_ ? "true" : "false",
+    laser_pixel_u_ref_distance_m_,
+    laser_pixel_u_ref_px_,
+    laser_pixel_u_slope_px_per_m_,
+    laser_pixel_u_quadratic_px_per_m2_,
+    laser_pixel_u_min_px_,
+    laser_pixel_u_max_px_);
+  RCLCPP_INFO(
+    this->get_logger(),
+    "laser pixel v depth compensation: %s ref=(%.3f m, %.2f px) slope=%.6f px/m quad=%.6f px/m^2 clamp=[%.1f, %.1f]",
     laser_pixel_v_depth_comp_enable_ ? "true" : "false",
     laser_pixel_v_ref_distance_m_,
     laser_pixel_v_ref_px_,
     laser_pixel_v_slope_px_per_m_,
+    laser_pixel_v_quadratic_px_per_m2_,
     laser_pixel_v_min_px_,
     laser_pixel_v_max_px_);
   RCLCPP_INFO(this->get_logger(), "scan_window_half_yaw_deg: %.3f", scan_window_half_yaw_deg_);
@@ -600,10 +611,18 @@ void LaserAimControllerNode::declareAndLoadParameters()
   this->declare_parameter<double>("camera_cy", 567.094694);
   this->declare_parameter<std::vector<double>>(
     "laser_pixel_uv", std::vector<double>{923.0, 368.0});
+  this->declare_parameter<bool>("laser_pixel_u_depth_comp_enable", false);
+  this->declare_parameter<double>("laser_pixel_u_ref_distance_m", 20.0);
+  this->declare_parameter<double>("laser_pixel_u_ref_px", 923.0);
+  this->declare_parameter<double>("laser_pixel_u_slope_px_per_m", 0.0);
+  this->declare_parameter<double>("laser_pixel_u_quadratic_px_per_m2", 0.0);
+  this->declare_parameter<double>("laser_pixel_u_min_px", 0.0);
+  this->declare_parameter<double>("laser_pixel_u_max_px", 1920.0);
   this->declare_parameter<bool>("laser_pixel_v_depth_comp_enable", true);
   this->declare_parameter<double>("laser_pixel_v_ref_distance_m", 13.5);
   this->declare_parameter<double>("laser_pixel_v_ref_px", 368.0);
   this->declare_parameter<double>("laser_pixel_v_slope_px_per_m", 5.0);
+  this->declare_parameter<double>("laser_pixel_v_quadratic_px_per_m2", 0.0);
   this->declare_parameter<double>("laser_pixel_v_min_px", 330.0);
   this->declare_parameter<double>("laser_pixel_v_max_px", 430.0);
 
@@ -717,6 +736,20 @@ void LaserAimControllerNode::declareAndLoadParameters()
     laser_pixel_u_ = laser_uv[0];
     laser_pixel_v_ = laser_uv[1];
   }
+  laser_pixel_u_depth_comp_enable_ =
+    this->get_parameter("laser_pixel_u_depth_comp_enable").as_bool();
+  laser_pixel_u_ref_distance_m_ =
+    this->get_parameter("laser_pixel_u_ref_distance_m").as_double();
+  laser_pixel_u_ref_px_ = this->get_parameter("laser_pixel_u_ref_px").as_double();
+  laser_pixel_u_slope_px_per_m_ =
+    this->get_parameter("laser_pixel_u_slope_px_per_m").as_double();
+  laser_pixel_u_quadratic_px_per_m2_ =
+    this->get_parameter("laser_pixel_u_quadratic_px_per_m2").as_double();
+  laser_pixel_u_min_px_ = this->get_parameter("laser_pixel_u_min_px").as_double();
+  laser_pixel_u_max_px_ = this->get_parameter("laser_pixel_u_max_px").as_double();
+  if (laser_pixel_u_min_px_ > laser_pixel_u_max_px_) {
+    std::swap(laser_pixel_u_min_px_, laser_pixel_u_max_px_);
+  }
   laser_pixel_v_depth_comp_enable_ =
     this->get_parameter("laser_pixel_v_depth_comp_enable").as_bool();
   laser_pixel_v_ref_distance_m_ =
@@ -724,6 +757,8 @@ void LaserAimControllerNode::declareAndLoadParameters()
   laser_pixel_v_ref_px_ = this->get_parameter("laser_pixel_v_ref_px").as_double();
   laser_pixel_v_slope_px_per_m_ =
     this->get_parameter("laser_pixel_v_slope_px_per_m").as_double();
+  laser_pixel_v_quadratic_px_per_m2_ =
+    this->get_parameter("laser_pixel_v_quadratic_px_per_m2").as_double();
   laser_pixel_v_min_px_ = this->get_parameter("laser_pixel_v_min_px").as_double();
   laser_pixel_v_max_px_ = this->get_parameter("laser_pixel_v_max_px").as_double();
   if (laser_pixel_v_min_px_ > laser_pixel_v_max_px_) {
@@ -1101,6 +1136,36 @@ bool LaserAimControllerNode::computePixelCorrection(
   return true;
 }
 
+double LaserAimControllerNode::compensationDistanceM(const TargetObservation & obs) const
+{
+  double distance_m = obs.distance;
+  if (!std::isfinite(distance_m) || distance_m <= min_valid_z_m_) {
+    distance_m = obs.tz;
+  }
+  return distance_m;
+}
+
+double LaserAimControllerNode::depthCompensatedLaserPixelU(
+  const TargetObservation & obs,
+  bool pnp_valid) const
+{
+  if (!laser_pixel_u_depth_comp_enable_ || !pnp_valid) {
+    return laser_pixel_u_;
+  }
+
+  const double distance_m = compensationDistanceM(obs);
+  if (!std::isfinite(distance_m) || distance_m <= min_valid_z_m_) {
+    return laser_pixel_u_;
+  }
+
+  const double d = distance_m - laser_pixel_u_ref_distance_m_;
+  const double raw_u =
+    laser_pixel_u_ref_px_ +
+    laser_pixel_u_slope_px_per_m_ * d +
+    laser_pixel_u_quadratic_px_per_m2_ * d * d;
+  return clampValue(raw_u, laser_pixel_u_min_px_, laser_pixel_u_max_px_);
+}
+
 double LaserAimControllerNode::depthCompensatedLaserPixelV(
   const TargetObservation & obs,
   bool pnp_valid) const
@@ -1109,17 +1174,16 @@ double LaserAimControllerNode::depthCompensatedLaserPixelV(
     return laser_pixel_v_;
   }
 
-  double distance_m = obs.distance;
-  if (!std::isfinite(distance_m) || distance_m <= min_valid_z_m_) {
-    distance_m = obs.tz;
-  }
+  const double distance_m = compensationDistanceM(obs);
   if (!std::isfinite(distance_m) || distance_m <= min_valid_z_m_) {
     return laser_pixel_v_;
   }
 
+  const double d = distance_m - laser_pixel_v_ref_distance_m_;
   const double raw_v =
     laser_pixel_v_ref_px_ +
-    laser_pixel_v_slope_px_per_m_ * (distance_m - laser_pixel_v_ref_distance_m_);
+    laser_pixel_v_slope_px_per_m_ * d +
+    laser_pixel_v_quadratic_px_per_m2_ * d * d;
   return clampValue(raw_v, laser_pixel_v_min_px_, laser_pixel_v_max_px_);
 }
 
@@ -1305,7 +1369,7 @@ void LaserAimControllerNode::controlLoop()
     target_fresh && obs.has_target && obs.has_pose &&
     isFinite3(obs.tx, obs.ty, obs.tz) && obs.tz > min_valid_z_m_;
 
-  const double active_laser_pixel_u = laser_pixel_u_;
+  const double active_laser_pixel_u = depthCompensatedLaserPixelU(obs, pnp_valid);
   const double active_laser_pixel_v = depthCompensatedLaserPixelV(obs, pnp_valid);
 
   if (pixel_valid && obs.seq != last_filtered_target_seq_) {

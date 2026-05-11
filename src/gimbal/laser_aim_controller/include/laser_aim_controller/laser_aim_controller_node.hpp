@@ -100,6 +100,8 @@ private:
     double & filter_alpha,
     std::string & zone_name) const;
 
+  double compensationDistanceM(const TargetObservation & obs) const;
+  double depthCompensatedLaserPixelU(const TargetObservation & obs, bool pnp_valid) const;
   double depthCompensatedLaserPixelV(const TargetObservation & obs, bool pnp_valid) const;
 
   void applyManualOffset(double & yaw_deg, double & pitch_deg) const;
@@ -159,10 +161,18 @@ private:
 
   double laser_pixel_u_{923.0};
   double laser_pixel_v_{368.0};
+  bool laser_pixel_u_depth_comp_enable_{false};
+  double laser_pixel_u_ref_distance_m_{20.0};
+  double laser_pixel_u_ref_px_{923.0};
+  double laser_pixel_u_slope_px_per_m_{0.0};
+  double laser_pixel_u_quadratic_px_per_m2_{0.0};
+  double laser_pixel_u_min_px_{0.0};
+  double laser_pixel_u_max_px_{1920.0};
   bool laser_pixel_v_depth_comp_enable_{true};
   double laser_pixel_v_ref_distance_m_{13.5};
   double laser_pixel_v_ref_px_{368.0};
   double laser_pixel_v_slope_px_per_m_{5.0};
+  double laser_pixel_v_quadratic_px_per_m2_{0.0};
   double laser_pixel_v_min_px_{330.0};
   double laser_pixel_v_max_px_{430.0};
 

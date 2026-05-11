@@ -4,14 +4,20 @@
 
 #include <opencv2/opencv.hpp>
 
+#include <atomic>
 #include <chrono>
+#include <cctype>
 #include <cstdio>
+#include <cerrno>
+#include <fcntl.h>
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <sys/stat.h>
 #include <sys/types.h>
-#include <cerrno>
+#include <termios.h>
+#include <unistd.h>
 
 namespace hik_camera_ros2_driver
 {
@@ -28,13 +34,14 @@ public:
     save_dir_ = this->declare_parameter<std::string>("save_dir", "/tmp/camera1_frames");
     image_format_ = this->declare_parameter<std::string>("image_format", "jpg");   // jpg/png
     save_every_n_ = this->declare_parameter<int>("save_every_n", 10);                // 每N帧存1张
+    keyboard_save_enabled_ = this->declare_parameter<bool>("keyboard_save_enabled", false);
     jpeg_quality_ = this->declare_parameter<int>("jpeg_quality", 95);               // jpg质量
     png_compression_ = this->declare_parameter<int>("png_compression", 3);          // png压缩级别 0~9
     use_timestamp_name_ = this->declare_parameter<bool>("use_timestamp_name", false);
 
-    if (save_every_n_ <= 0) {
-      RCLCPP_WARN(this->get_logger(), "save_every_n <= 0, force set to 1");
-      save_every_n_ = 1;
+    if (save_every_n_ < 0) {
+      RCLCPP_WARN(this->get_logger(), "save_every_n < 0, force set to 0");
+      save_every_n_ = 0;
     }
 
     if (!ensureDirectoryExists(save_dir_)) {
@@ -45,13 +52,24 @@ public:
       topic_,
       rclcpp::SensorDataQoS(),
       std::bind(&ImageSaverNode::imageCallback, this, std::placeholders::_1));
+    startKeyboardThread();
 
     RCLCPP_INFO(this->get_logger(), "image_saver_node started");
     RCLCPP_INFO(this->get_logger(), "subscribe topic: %s", topic_.c_str());
     RCLCPP_INFO(this->get_logger(), "save_dir: %s", save_dir_.c_str());
     RCLCPP_INFO(this->get_logger(), "image_format: %s", image_format_.c_str());
-    RCLCPP_INFO(this->get_logger(), "save_every_n: %d", save_every_n_);
+    RCLCPP_INFO(
+      this->get_logger(),
+      "save_every_n: %d%s",
+      save_every_n_,
+      save_every_n_ == 0 ? " (periodic save disabled)" : "");
+    RCLCPP_INFO(this->get_logger(), "keyboard_save_enabled: %s", keyboard_save_enabled_ ? "true" : "false");
     RCLCPP_INFO(this->get_logger(), "use_timestamp_name: %s", use_timestamp_name_ ? "true" : "false");
+  }
+
+  ~ImageSaverNode() override
+  {
+    stopKeyboardThread();
   }
 
 private:
@@ -146,17 +164,86 @@ private:
     }
   }
 
-  void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg)
+  void startKeyboardThread()
   {
-    ++frame_index_;
-
-    if ((frame_index_ % save_every_n_) != 0) {
+    if (!keyboard_save_enabled_) {
       return;
     }
 
+    keyboard_fd_ = STDIN_FILENO;
+    if (!isatty(keyboard_fd_)) {
+      keyboard_fd_ = open("/dev/tty", O_RDONLY | O_NONBLOCK);
+    }
+
+    if (keyboard_fd_ < 0 || !isatty(keyboard_fd_)) {
+      RCLCPP_WARN(this->get_logger(), "keyboard save disabled: no controlling TTY");
+      keyboard_save_enabled_ = false;
+      return;
+    }
+
+    if (tcgetattr(keyboard_fd_, &original_termios_) != 0) {
+      RCLCPP_WARN(this->get_logger(), "keyboard save disabled: tcgetattr failed");
+      closeKeyboardFd();
+      keyboard_save_enabled_ = false;
+      return;
+    }
+
+    has_original_termios_ = true;
+    termios raw = original_termios_;
+    raw.c_lflag &= static_cast<tcflag_t>(~(ICANON | ECHO));
+    raw.c_cc[VMIN] = 0;
+    raw.c_cc[VTIME] = 0;
+    if (tcsetattr(keyboard_fd_, TCSANOW, &raw) != 0) {
+      RCLCPP_WARN(this->get_logger(), "keyboard save disabled: tcsetattr failed");
+      has_original_termios_ = false;
+      closeKeyboardFd();
+      keyboard_save_enabled_ = false;
+      return;
+    }
+
+    keyboard_thread_running_.store(true);
+    keyboard_thread_ = std::thread([this]() {
+      while (keyboard_thread_running_.load()) {
+        unsigned char ch = 0;
+        const ssize_t n = read(keyboard_fd_, &ch, 1);
+        if (n > 0) {
+          if (std::tolower(ch) == 's') {
+            pending_keyboard_saves_.fetch_add(1);
+            RCLCPP_INFO(this->get_logger(), "S pressed: save next image frame");
+          }
+        } else {
+          std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+      }
+    });
+  }
+
+  void stopKeyboardThread()
+  {
+    keyboard_thread_running_.store(false);
+    if (keyboard_thread_.joinable()) {
+      keyboard_thread_.join();
+    }
+    if (has_original_termios_) {
+      tcsetattr(keyboard_fd_, TCSANOW, &original_termios_);
+      has_original_termios_ = false;
+    }
+    closeKeyboardFd();
+  }
+
+  void closeKeyboardFd()
+  {
+    if (keyboard_fd_ >= 0 && keyboard_fd_ != STDIN_FILENO) {
+      close(keyboard_fd_);
+    }
+    keyboard_fd_ = -1;
+  }
+
+  bool saveImage(const sensor_msgs::msg::Image::SharedPtr msg, const char * reason)
+  {
     cv::Mat image = convertToBgr(msg);
     if (image.empty()) {
-      return;
+      return false;
     }
 
     const std::string filename = buildFilename(*msg);
@@ -175,18 +262,38 @@ private:
       ok = cv::imwrite(filename, image, params);
     } catch (const cv::Exception & e) {
       RCLCPP_ERROR(this->get_logger(), "cv::imwrite exception: %s", e.what());
-      return;
+      return false;
     }
 
     if (!ok) {
       RCLCPP_ERROR(this->get_logger(), "failed to save image: %s", filename.c_str());
-      return;
+      return false;
     }
 
     ++saved_count_;
 
-    if ((saved_count_ % 30) == 0) {
-      RCLCPP_INFO(this->get_logger(), "saved %zu images", saved_count_);
+    if (reason != nullptr || (saved_count_ % 30) == 0) {
+      RCLCPP_INFO(this->get_logger(), "saved image: %s (%s, total=%zu)",
+                  filename.c_str(), reason != nullptr ? reason : "periodic", saved_count_);
+    }
+    return true;
+  }
+
+  void imageCallback(const sensor_msgs::msg::Image::SharedPtr msg)
+  {
+    ++frame_index_;
+
+    const bool keyboard_requested = pending_keyboard_saves_.load() > 0;
+    const bool periodic_requested =
+      save_every_n_ > 0 && (frame_index_ % static_cast<size_t>(save_every_n_)) == 0;
+
+    if (!keyboard_requested && !periodic_requested) {
+      return;
+    }
+
+    const char * reason = keyboard_requested ? "keyboard" : nullptr;
+    if (saveImage(msg, reason) && keyboard_requested) {
+      pending_keyboard_saves_.fetch_sub(1);
     }
   }
 
@@ -201,9 +308,17 @@ private:
   int jpeg_quality_;
   int png_compression_;
   bool use_timestamp_name_;
+  bool keyboard_save_enabled_;
 
   size_t frame_index_;
   size_t saved_count_;
+
+  std::atomic<bool> keyboard_thread_running_{false};
+  std::atomic<int> pending_keyboard_saves_{0};
+  std::thread keyboard_thread_;
+  int keyboard_fd_{-1};
+  termios original_termios_ {};
+  bool has_original_termios_{false};
 };
 
 }  // namespace hik_camera_ros2_driver
@@ -223,5 +338,3 @@ int main(int argc, char ** argv)
 // ros2 run hik_camera_ros2_driver image_saver_node --ros-args 
 //   -p save_dir:=/home/user/DATA/jichuzhizao/image1 
 //   -p save_every_n:=1
-
-
