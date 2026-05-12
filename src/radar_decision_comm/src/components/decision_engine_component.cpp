@@ -1208,9 +1208,11 @@ private:
   bool action_send_radar_decision()
   {
     bool double_effect_changed = false;
+    uint8_t outgoing_radar_cmd = radar_cmd_counter_;
     if (enable_radar_double_effect_command_ && current_fsm_output_.should_send_radar_command) {
       if (!double_effect_request_latched_ && radar_cmd_counter_ < 255U) {
         ++radar_cmd_counter_;
+        outgoing_radar_cmd = radar_cmd_counter_;
         double_effect_changed = true;
         save_radar_cmd_counter_state(true);
       }
@@ -1228,10 +1230,10 @@ private:
       !double_effect_changed && !password_changed && can_send_radar_decision_fallback() &&
       enable_interference_key_command_ && can_submit_interference_verify_key())
     {
-      if (enable_radar_double_effect_command_ && radar_cmd_counter_ < 255U) {
-        ++radar_cmd_counter_;
-        double_effect_changed = true;
-        save_radar_cmd_counter_state(true);
+      if (enable_radar_double_effect_command_) {
+        const uint8_t fallback_radar_cmd =
+          (radar_cmd_counter_ == 0U) ? 1U : radar_cmd_counter_;
+        outgoing_radar_cmd = fallback_radar_cmd;
       }
 
       password_cmd = 2U;
@@ -1252,8 +1254,8 @@ private:
     radar_decision_comm::msg::RadarDecisionCommand cmd;
     cmd.header.stamp = this->now();
     cmd.command_type = 1;
-    cmd.command_value = radar_cmd_counter_;
-    cmd.radar_cmd = radar_cmd_counter_;
+    cmd.command_value = outgoing_radar_cmd;
+    cmd.radar_cmd = outgoing_radar_cmd;
     cmd.password_cmd = password_cmd;
     cmd.password = password;
 
@@ -1267,7 +1269,7 @@ private:
       note << "|double_effect=" << static_cast<int>(radar_cmd_counter_) << "|no_target";
     }
     if (fallback_changed) {
-      note << "|fallback=upstream_blocked";
+      note << "|fallback=upstream_blocked|radar_probe=" << static_cast<int>(outgoing_radar_cmd);
     }
     if (password_changed || fallback_changed) {
       note << "|password_cmd=" << static_cast<int>(password_cmd);
