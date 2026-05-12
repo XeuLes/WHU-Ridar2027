@@ -836,7 +836,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "record_rosbag",
-                default_value="false",
+                default_value="true",
                 description=(
                     "arm replay rosbag recording; starts when referee game_progress "
                     "enters 4 or when rosbag_auto_start_after_sec expires"
@@ -849,7 +849,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "rosbag_record_duration_sec",
-                default_value="420.0",
+                default_value="540.0",
                 description="replay rosbag recording duration in seconds",
             ),
             DeclareLaunchArgument(

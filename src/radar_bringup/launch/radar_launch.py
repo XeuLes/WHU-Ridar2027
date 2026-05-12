@@ -988,7 +988,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "rosbag_record_duration_sec",
-                default_value="420.0",
+                default_value="540.0",
                 description="match-triggered rosbag recording duration in seconds",
             ),
             DeclareLaunchArgument(
@@ -1002,7 +1002,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "enable_calibration",
-                default_value="false",
+                default_value="true",
                 description="whether to run pnp_calib_new.launch.py before starting the normal radar flow",
             ),
             DeclareLaunchArgument(
