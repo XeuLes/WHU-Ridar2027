@@ -1,0 +1,26 @@
+#!/usr/bin/env python3
+import sys
+from pathlib import Path
+
+
+def _prepend_package_paths():
+    raw_path = Path(__file__).absolute()
+    real_path = raw_path.resolve()
+    pyver = f"python{sys.version_info.major}.{sys.version_info.minor}"
+    candidates = [
+        real_path.parents[1],
+        raw_path.parents[2] / "lib" / pyver / "site-packages",
+        real_path.parents[2] / "lib" / pyver / "site-packages",
+    ]
+    for path in candidates:
+        if path.exists():
+            sys.path.insert(0, str(path))
+
+
+_prepend_package_paths()
+
+from radar_pdu_bridge.gnuradio_rx_launcher import main
+
+
+if __name__ == '__main__':
+    main()

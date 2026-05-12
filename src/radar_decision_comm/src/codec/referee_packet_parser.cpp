@@ -194,7 +194,7 @@ RefereeParseResult RefereePacketParser::parse(
       out.radar_sync.header.stamp = stamp;
       out.radar_sync.double_effect_chance = static_cast<uint8_t>(radar_info & 0x03U);
       out.radar_sync.is_double_effect_active = ((radar_info >> 2U) & 0x01U) != 0U;
-      out.radar_sync.enemy_key_level = static_cast<uint8_t>((radar_info >> 3U) & 0x03U);
+      out.radar_sync.self_key_level = static_cast<uint8_t>((radar_info >> 3U) & 0x03U);
       out.radar_sync.can_change_key = ((radar_info >> 5U) & 0x01U) != 0U;
       break;
     }

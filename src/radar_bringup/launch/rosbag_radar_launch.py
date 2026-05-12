@@ -444,6 +444,31 @@ def _build_launch(context):
         name="radar_decision_sync_shm_node",
         output="screen",
         condition=IfCondition(LaunchConfiguration("enable_pdu_bridge")),
+        parameters=[
+            {
+                "default_identity": team["decision_my_color"].lower(),
+            }
+        ],
+    )
+
+    gnuradio_rx_launcher_node = Node(
+        package="radar_pdu_bridge",
+        executable="gnuradio_rx_launcher",
+        name="gnuradio_rx_launcher",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("start_gnuradio")),
+        parameters=[
+            {
+                "script_path": LaunchConfiguration("gnuradio_script_path"),
+                "default_identity": team["decision_my_color"].lower(),
+                "allow_direct_13": ParameterValue(
+                    LaunchConfiguration("gnuradio_allow_direct_13"),
+                    value_type=bool,
+                ),
+                "access_code0": LaunchConfiguration("gnuradio_access_code0"),
+                "access_code1": LaunchConfiguration("gnuradio_access_code1"),
+            }
+        ],
     )
 
     referee_link_monitor_node = Node(
@@ -559,8 +584,9 @@ def _build_launch(context):
             condition=IfCondition(LaunchConfiguration("record_rosbag")),
         ),
         replay_container,
-        shm_pdu_broadcast_node,
         radar_decision_sync_shm_node,
+        gnuradio_rx_launcher_node,
+        shm_pdu_broadcast_node,
         referee_link_monitor_node,
         radar_decision_comm_container,
         map_pcd_publisher,
@@ -751,6 +777,31 @@ def generate_launch_description():
                 "pdu_poll_period_ms",
                 default_value="2",
                 description="shared-memory PDU poll period in milliseconds",
+            ),
+            DeclareLaunchArgument(
+                "start_gnuradio",
+                default_value="true",
+                description="start GNU Radio RX flowgraph together with replay launch",
+            ),
+            DeclareLaunchArgument(
+                "gnuradio_script_path",
+                default_value="/home/user/gnuradio_grc/0416/rx_red_gfsk.py",
+                description="GNU Radio generated RX python script path",
+            ),
+            DeclareLaunchArgument(
+                "gnuradio_allow_direct_13",
+                default_value="true",
+                description="allow GNU Radio RX key level to jump directly from 1 to 3",
+            ),
+            DeclareLaunchArgument(
+                "gnuradio_access_code0",
+                default_value="2F6F4C74B914492E",
+                description="GNU Radio info-wave access code",
+            ),
+            DeclareLaunchArgument(
+                "gnuradio_access_code1",
+                default_value="16E8D377151C712D",
+                description="GNU Radio jam-wave access code",
             ),
             DeclareLaunchArgument(
                 "record_rosbag",

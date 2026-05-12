@@ -205,6 +205,9 @@ decision_engine:
     enable_interference_key_command: true
     interference_key_vote_window_ms: 10000
     interference_key_update_period_ms: 1000
+    interference_key_verify_cooldown_ms: 10000
+    default_interference_verify_key: "RM2026"
+    default_interference_key_repeat_threshold: 3
 
     output_map_request_topic: "/radar/decision/map_publish_request"
     output_robot_interaction_topic: "/radar/decision/robot_interaction_request"

@@ -17,12 +17,14 @@ class RadarDecisionSyncShmNode(Node):
         self.declare_parameter('identity_topic', '/radar/referee/robot_identity')
         self.declare_parameter('shm_name', 'radar_info_shm')
         self.declare_parameter('zero_on_startup', True)
+        self.declare_parameter('default_identity', '')
         self.declare_parameter('verbose', False)
 
         self.input_topic = self.get_parameter('input_topic').get_parameter_value().string_value
         self.identity_topic = self.get_parameter('identity_topic').get_parameter_value().string_value
         self.shm_name = self.get_parameter('shm_name').get_parameter_value().string_value
         self.zero_on_startup = self.get_parameter('zero_on_startup').get_parameter_value().bool_value
+        self.default_identity = self.get_parameter('default_identity').get_parameter_value().string_value
         self.verbose = self.get_parameter('verbose').get_parameter_value().bool_value
 
         self.shm = self._open_or_create_shm(self.shm_name, 1)
@@ -33,7 +35,7 @@ class RadarDecisionSyncShmNode(Node):
 
         if self.zero_on_startup:
             self.sync_bits = 0
-            self.identity_bits = 0
+            self.identity_bits = self._encode_default_identity_bits(self.default_identity)
             self._write_current_radar_info()
 
         self.sub = self.create_subscription(
@@ -52,7 +54,7 @@ class RadarDecisionSyncShmNode(Node):
         self.get_logger().info(
             'RadarDecisionSync SHM bridge started. '
             f'sync_topic={self.input_topic}, identity_topic={self.identity_topic}, '
-            f'shm={self.shm_name}'
+            f'shm={self.shm_name}, default_identity={self.default_identity or "unset"}'
         )
 
     def _open_or_create_shm(self, shm_name: str, size: int) -> shared_memory.SharedMemory:
@@ -69,7 +71,7 @@ class RadarDecisionSyncShmNode(Node):
         sync_bits = 0
         sync_bits |= int(msg.double_effect_chance) & 0x03
         sync_bits |= (1 if msg.is_double_effect_active else 0) << 2
-        sync_bits |= (int(msg.enemy_key_level) & 0x03) << 3
+        sync_bits |= (int(msg.self_key_level) & 0x03) << 3
         sync_bits |= (1 if msg.can_change_key else 0) << 5
         return sync_bits & 0x3F
 
@@ -87,6 +89,14 @@ class RadarDecisionSyncShmNode(Node):
         # Store RefereeRobotIdentity.self_color in bit6-bit7: 0=Blue, 2=Red.
         return (self_color & 0x03) << 6
 
+    def _encode_default_identity_bits(self, identity: str) -> int:
+        value = str(identity).strip().lower()
+        if value in ('red', 'r', '2'):
+            return (2 & 0x03) << 6
+        if value in ('blue', 'b', '0'):
+            return 0
+        return 0
+
     def _write_radar_info(self, radar_info: int):
         self.buf[0] = radar_info & 0xFF
 
@@ -100,13 +110,13 @@ class RadarDecisionSyncShmNode(Node):
 
         if self.verbose:
             self.get_logger().info(
-                'Write radar_info=0x%02X chance=%u active=%s key_level=%u can_change=%s '
+                'Write radar_info=0x%02X chance=%u active=%s self_key_level=%u can_change=%s '
                 'identity_bits=0x%02X'
                 % (
                     radar_info,
                     int(msg.double_effect_chance),
                     str(bool(msg.is_double_effect_active)).lower(),
-                    int(msg.enemy_key_level),
+                    int(msg.self_key_level),
                     str(bool(msg.can_change_key)).lower(),
                     self.identity_bits,
                 )

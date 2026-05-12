@@ -128,6 +128,14 @@ public:
       this->declare_parameter<int>("interference_key_vote_window_ms", 10000);
     interference_key_update_period_ms_ =
       this->declare_parameter<int>("interference_key_update_period_ms", 1000);
+    interference_key_verify_cooldown_ms_ =
+      this->declare_parameter<int>("interference_key_verify_cooldown_ms", 10000);
+    default_interference_verify_key_text_ =
+      this->declare_parameter<std::string>("default_interference_verify_key", "RM2026");
+    default_interference_key_repeat_threshold_ =
+      this->declare_parameter<int>("default_interference_key_repeat_threshold", 3);
+    default_interference_verify_key_ =
+      ascii_key_from_string(default_interference_verify_key_text_, make_ascii_key("RM2026"));
     radar_cmd_counter_state_path_ =
       this->declare_parameter<std::string>(
         "radar_cmd_counter_state_path", "/tmp/radar_decision_0121_counter.txt");
@@ -334,6 +342,28 @@ private:
     return std::string(key.begin(), key.end());
   }
 
+  static std::array<uint8_t, 6> make_ascii_key(const std::string & text)
+  {
+    std::array<uint8_t, 6> key{};
+    const auto count = std::min<std::size_t>(key.size(), text.size());
+    for (std::size_t i = 0; i < count; ++i) {
+      key[i] = static_cast<uint8_t>(text[i]);
+    }
+    return key;
+  }
+
+  static std::array<uint8_t, 6> ascii_key_from_string(
+    const std::string & text,
+    const std::array<uint8_t, 6> & fallback)
+  {
+    if (text.size() != 6) {
+      return fallback;
+    }
+
+    const auto key = make_ascii_key(text);
+    return is_alnum_ascii_key(key) ? key : fallback;
+  }
+
   std::array<uint8_t, 6> random_ascii_key()
   {
     static constexpr char kAlphabet[] =
@@ -408,6 +438,9 @@ private:
     if (last_game_progress_ != 4 && progress == 4) {
       radar_cmd_counter_ = 0U;
       double_effect_request_latched_ = false;
+      default_interference_verify_key_pending_ = false;
+      last_submitted_interference_verify_key_.reset();
+      repeated_interference_verify_key_count_ = 0;
       save_radar_cmd_counter_state(true);
       RCLCPP_INFO(
         this->get_logger(),
@@ -714,9 +747,64 @@ private:
     return true;
   }
 
+  bool can_submit_interference_verify_key() const
+  {
+    return (
+      !have_last_interference_verify_tp_ ||
+      due(current_tick_now_, last_interference_verify_tp_, interference_key_verify_cooldown_ms_));
+  }
+
+  bool can_update_own_interference_key() const
+  {
+    return !last_blackboard_.referee_stale && last_blackboard_.radar_sync.can_change_key;
+  }
+
+  void note_interference_verify_key_submitted(const std::array<uint8_t, 6> & key)
+  {
+    last_interference_verify_tp_ = current_tick_now_;
+    have_last_interference_verify_tp_ = true;
+
+    if (last_submitted_interference_verify_key_ && *last_submitted_interference_verify_key_ == key) {
+      ++repeated_interference_verify_key_count_;
+    } else {
+      last_submitted_interference_verify_key_ = key;
+      repeated_interference_verify_key_count_ = 1;
+    }
+
+    if (
+      key != default_interference_verify_key_ &&
+      default_interference_key_repeat_threshold_ > 0 &&
+      repeated_interference_verify_key_count_ >= default_interference_key_repeat_threshold_)
+    {
+      default_interference_verify_key_pending_ = true;
+      RCLCPP_WARN(
+        this->get_logger(),
+        "%sInterference key %s has been submitted %d consecutive times; "
+        "next verify submit will use default key %s.%s",
+        kRedBold,
+        key_to_string(key).c_str(),
+        repeated_interference_verify_key_count_,
+        key_to_string(default_interference_verify_key_).c_str(),
+        kColorReset);
+    }
+  }
+
   bool take_password_action(uint8_t * password_cmd, std::array<uint8_t, 6> * password)
   {
     if (!enable_interference_key_command_ || password_cmd == nullptr || password == nullptr) {
+      return false;
+    }
+
+    if (default_interference_verify_key_pending_ && can_submit_interference_verify_key()) {
+      *password_cmd = 2U;
+      *password = default_interference_verify_key_;
+      default_interference_verify_key_pending_ = false;
+      last_submitted_interference_verify_key_.reset();
+      repeated_interference_verify_key_count_ = 0;
+      note_interference_verify_key_submitted(*password);
+      return true;
+    }
+    if (default_interference_verify_key_pending_) {
       return false;
     }
 
@@ -726,10 +814,13 @@ private:
     {
       std::array<uint8_t, 6> voted_key{};
       if (select_voted_interference_key(&voted_key)) {
+        if (!can_submit_interference_verify_key()) {
+          return false;
+        }
+
         *password_cmd = 2U;
         *password = voted_key;
-        last_interference_verify_tp_ = current_tick_now_;
-        have_last_interference_verify_tp_ = true;
+        note_interference_verify_key_submitted(*password);
         interference_key_samples_.clear();
         interference_key_window_active_ = false;
         return true;
@@ -738,8 +829,9 @@ private:
     }
 
     if (
-      !have_last_interference_update_tp_ ||
-      due(current_tick_now_, last_interference_update_tp_, interference_key_update_period_ms_))
+      can_update_own_interference_key() &&
+      (!have_last_interference_update_tp_ ||
+        due(current_tick_now_, last_interference_update_tp_, interference_key_update_period_ms_)))
     {
       *password_cmd = 1U;
       *password = random_ascii_key();
@@ -1343,6 +1435,8 @@ private:
   int radar_double_effect_keepalive_ms_{1500};
   int interference_key_vote_window_ms_{10000};
   int interference_key_update_period_ms_{1000};
+  int interference_key_verify_cooldown_ms_{10000};
+  int default_interference_key_repeat_threshold_{3};
   int radar_cmd_counter_save_period_ms_{1000};
   int hero_lob_min_samples_{10};
 
@@ -1389,6 +1483,7 @@ private:
   std::string output_hero_lob_status_topic_;
   std::string output_hero_lob_debug_topic_;
   std::string radar_cmd_counter_state_path_{"/tmp/radar_decision_0121_counter.txt"};
+  std::string default_interference_verify_key_text_{"RM2026"};
   std::vector<double> hero_lob_target_xyz_when_red_;
   std::vector<double> hero_lob_target_xyz_when_blue_;
 
@@ -1428,6 +1523,16 @@ private:
   bool have_last_interference_update_tp_{false};
   TimePoint last_interference_verify_tp_{};
   bool have_last_interference_verify_tp_{false};
+  std::array<uint8_t, 6> default_interference_verify_key_{
+    static_cast<uint8_t>('R'),
+    static_cast<uint8_t>('M'),
+    static_cast<uint8_t>('2'),
+    static_cast<uint8_t>('0'),
+    static_cast<uint8_t>('2'),
+    static_cast<uint8_t>('6')};
+  std::optional<std::array<uint8_t, 6>> last_submitted_interference_verify_key_;
+  int repeated_interference_verify_key_count_{0};
+  bool default_interference_verify_key_pending_{false};
   int64_t last_interference_key_stamp_ns_{0};
   std::mt19937 rng_{std::random_device{}()};
 

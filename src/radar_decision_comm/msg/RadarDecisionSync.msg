@@ -1,5 +1,5 @@
 std_msgs/Header header
 uint8 double_effect_chance
 bool is_double_effect_active
-uint8 enemy_key_level
+uint8 self_key_level
 bool can_change_key

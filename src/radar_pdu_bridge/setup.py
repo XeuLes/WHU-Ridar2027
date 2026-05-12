@@ -11,6 +11,7 @@ setup(
          ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         ('lib/' + package_name, [
+            'executables/gnuradio_rx_launcher',
             'executables/pdu_subscriber_node',
             'executables/shm_pdu_broadcast_node',
             'executables/radar_decision_sync_shm_node',

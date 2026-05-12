@@ -7,6 +7,7 @@ find_package(ament_cmake_python REQUIRED)
 ament_python_install_package(${PROJECT_NAME})
 
 install(PROGRAMS
+  executables/gnuradio_rx_launcher
   executables/pdu_subscriber_node
   executables/shm_pdu_broadcast_node
   executables/radar_decision_sync_shm_node
