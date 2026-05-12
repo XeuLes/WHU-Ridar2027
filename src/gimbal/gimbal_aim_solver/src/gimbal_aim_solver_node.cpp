@@ -10,6 +10,14 @@
 namespace gimbal_aim_solver
 {
 
+namespace
+{
+
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+
+}  // namespace
+
 GimbalAimSolverNode::GimbalAimSolverNode(const rclcpp::NodeOptions& options)
 : Node("gimbal_aim_solver_node", options)
 {
@@ -113,13 +121,17 @@ void GimbalAimSolverNode::declareAndLoadParameters()
     std::vector<double>(world_tvec.begin(), world_tvec.end()));
 
   if (!ok) {
-    RCLCPP_FATAL(this->get_logger(), "Failed to initialize extrinsic transformer.");
+    RCLCPP_FATAL(
+      this->get_logger(),
+      "%sFailed to initialize extrinsic transformer.%s",
+      kRedBold, kColorReset);
     throw std::runtime_error("Failed to initialize extrinsic transformer");
   }
 
   const auto camera_to_gimbal_xyz = this->get_parameter("camera_to_gimbal_xyz").as_double_array();
   if (camera_to_gimbal_xyz.size() != 3) {
-    RCLCPP_FATAL(this->get_logger(), "camera_to_gimbal_xyz must have size 3.");
+    RCLCPP_FATAL(this->get_logger(), "%scamera_to_gimbal_xyz must have size 3.%s",
+                 kRedBold, kColorReset);
     throw std::runtime_error("camera_to_gimbal_xyz size error");
   }
 
@@ -152,7 +164,8 @@ void GimbalAimSolverNode::declareAndLoadParameters()
 
   const auto laser_offset_xyz = this->get_parameter("laser_offset_xyz").as_double_array();
   if (laser_offset_xyz.size() != 3) {
-    RCLCPP_FATAL(this->get_logger(), "laser_offset_xyz must have size 3.");
+    RCLCPP_FATAL(this->get_logger(), "%slaser_offset_xyz must have size 3.%s",
+                 kRedBold, kColorReset);
     throw std::runtime_error("laser_offset_xyz size error");
   }
 

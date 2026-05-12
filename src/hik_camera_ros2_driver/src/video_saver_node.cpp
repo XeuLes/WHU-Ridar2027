@@ -19,6 +19,14 @@
 namespace hik_camera_ros2_driver
 {
 
+namespace
+{
+
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+
+}  // namespace
+
 class VideoSaverNode : public rclcpp::Node
 {
 public:
@@ -185,8 +193,10 @@ private:
 
       return cv_bridge::toCvCopy(msg, "bgr8")->image;
     } catch (const cv_bridge::Exception & e) {
-      RCLCPP_ERROR(this->get_logger(), "cv_bridge conversion failed, encoding=%s, error=%s",
-                   msg->encoding.c_str(), e.what());
+      RCLCPP_ERROR(
+        this->get_logger(),
+        "%scv_bridge conversion failed, encoding=%s, error=%s%s",
+        kRedBold, msg->encoding.c_str(), e.what(), kColorReset);
       return cv::Mat();
     }
   }
@@ -199,12 +209,18 @@ private:
     try {
       writer_.open(output_file_, fourcc, fps_, frame_size_, true);
     } catch (const cv::Exception & e) {
-      RCLCPP_ERROR(this->get_logger(), "cv::VideoWriter open exception: %s", e.what());
+      RCLCPP_ERROR(
+        this->get_logger(),
+        "%scv::VideoWriter open exception: %s%s",
+        kRedBold, e.what(), kColorReset);
       return false;
     }
 
     if (!writer_.isOpened()) {
-      RCLCPP_ERROR(this->get_logger(), "failed to open video writer: %s", output_file_.c_str());
+      RCLCPP_ERROR(
+        this->get_logger(),
+        "%sfailed to open video writer: %s%s",
+        kRedBold, output_file_.c_str(), kColorReset);
       return false;
     }
 
@@ -247,7 +263,8 @@ private:
     try {
       writer_.write(image);
     } catch (const cv::Exception & e) {
-      RCLCPP_ERROR(this->get_logger(), "cv::VideoWriter write exception: %s", e.what());
+      RCLCPP_ERROR(this->get_logger(), "%scv::VideoWriter write exception: %s%s",
+                   kRedBold, e.what(), kColorReset);
       return;
     }
 

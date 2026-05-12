@@ -36,6 +36,9 @@ namespace radar_decision_comm
 namespace
 {
 
+constexpr const char * kRedBold = "\033[1;31m";
+constexpr const char * kColorReset = "\033[0m";
+
 std::chrono::milliseconds hz_to_period_ms(double hz)
 {
   if (hz <= 0.0) {
@@ -312,9 +315,11 @@ private:
             this->get_logger(),
             *this->get_clock(),
             3000,
-            "Failed to open referee serial port %s @ %d",
+            "%sFailed to open referee serial port %s @ %d%s",
+            kRedBold,
             device_.c_str(),
-            baudrate_);
+            baudrate_,
+            kColorReset);
           std::this_thread::sleep_for(std::chrono::milliseconds(reconnect_interval_ms_));
           continue;
         }
@@ -466,9 +471,11 @@ private:
             this->get_logger(),
             *this->get_clock(),
             3000,
-            "Failed to open tx serial port %s @ %d",
+            "%sFailed to open tx serial port %s @ %d%s",
+            kRedBold,
             device_.c_str(),
-            baudrate_);
+            baudrate_,
+            kColorReset);
           return false;
         }
       }
@@ -491,16 +498,18 @@ private:
       return false;
     }
 
-    static int log_count = 0;
-    if ((log_count++ % 10) == 0) {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "TX %s cmd=0x%04x frame_bytes=%zu ok=%s",
-        reason,
-        cmd_id,
-        frame.size(),
-        ok ? "true" : "false");
-    }
+    (void)reason;
+    // High-frequency TX success telemetry kept disabled by default.
+    // static int log_count = 0;
+    // if ((log_count++ % 10) == 0) {
+    //   RCLCPP_INFO(
+    //     this->get_logger(),
+    //     "TX %s cmd=0x%04x frame_bytes=%zu ok=%s",
+    //     reason,
+    //     cmd_id,
+    //     frame.size(),
+    //     ok ? "true" : "false");
+    // }
 
     last_cmd_id_ = cmd_id;
     return ok;
@@ -525,7 +534,13 @@ private:
 
     const bool ok = emit_frame(frame, referee_cmd_ids::kMapRadarData, "map_0305");
     if (!ok) {
-      RCLCPP_WARN(this->get_logger(), "Failed to transmit 0x0305 frame.");
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        5000,
+        "%sFailed to transmit 0x0305 frame.%s",
+        kRedBold,
+        kColorReset);
     }
   }
 
@@ -551,7 +566,13 @@ private:
 
     const bool ok = emit_frame(frame, referee_cmd_ids::kRobotInteraction, "robot_interaction_0301");
     if (!ok) {
-      RCLCPP_WARN(this->get_logger(), "Failed to transmit 0x0301 frame.");
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        5000,
+        "%sFailed to transmit 0x0301 frame.%s",
+        kRedBold,
+        kColorReset);
     }
   }
 
@@ -587,7 +608,13 @@ private:
 
     const bool ok = emit_frame(frame, referee_cmd_ids::kRobotInteraction, "radar_decision_0121");
     if (!ok) {
-      RCLCPP_WARN(this->get_logger(), "Failed to transmit radar decision 0x0121 frame.");
+      RCLCPP_WARN_THROTTLE(
+        this->get_logger(),
+        *this->get_clock(),
+        5000,
+        "%sFailed to transmit radar decision 0x0121 frame.%s",
+        kRedBold,
+        kColorReset);
     }
   }
 

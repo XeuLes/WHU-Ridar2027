@@ -2026,7 +2026,8 @@ void LaserAimControllerNode::controlLoop()
   publishCommand(final_yaw, final_pitch);
   last_mode_ = mode_;
 
-  if (publish_debug_) {
+  // Noisy per-cycle debug output. Re-enable locally when tuning laser aim behavior.
+  if (false && publish_debug_) {
     RCLCPP_INFO_THROTTLE(
       this->get_logger(), *this->get_clock(), 100,
       "[PIXEL_RAW] valid=%s raw_uv=(%.2f, %.2f) filt_uv=(%.2f, %.2f) laser_uv=(%.2f, %.2f) "

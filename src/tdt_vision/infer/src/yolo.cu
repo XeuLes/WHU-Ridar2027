@@ -709,7 +709,8 @@ public:
     {
         trt_ = trt::load(engine_file);
         if (trt_ == nullptr) return false;
-        trt_->print();
+        // Noisy TensorRT tensor dump; re-enable only when debugging engine bindings.
+        // trt_->print();
 
         this->type_ = type;
         this->confidence_threshold_ = confidence_threshold;
@@ -727,14 +728,13 @@ public:
             bbox_head_dims_ = trt_->static_dims(1);
         }
 
-        // [DEBUG] 打印维度信息，辅助判断 Binding 是否错位
-        // 如果 static_dims(0) 不是输入（如4维NCHW），而是3维（输出），则说明 Binding 顺序反了
-        int d0 = input_dim.size() > 0 ? input_dim[0] : -1;
-        int d1 = input_dim.size() > 1 ? input_dim[1] : -1;
-        int d2 = input_dim.size() > 2 ? input_dim[2] : -1;
-        int d3 = input_dim.size() > 3 ? input_dim[3] : -1;
-        printf("\n[DEBUG] TRT Bindings Check:\n");
-        printf("Binding 0 Dims: [%d, %d, %d, %d] (Expected Input NCHW)\n", d0, d1, d2, d3);
+        // Noisy TensorRT binding debug; re-enable only when diagnosing engine layout.
+        // int d0 = input_dim.size() > 0 ? input_dim[0] : -1;
+        // int d1 = input_dim.size() > 1 ? input_dim[1] : -1;
+        // int d2 = input_dim.size() > 2 ? input_dim[2] : -1;
+        // int d3 = input_dim.size() > 3 ? input_dim[3] : -1;
+        // printf("\n[DEBUG] TRT Bindings Check:\n");
+        // printf("Binding 0 Dims: [%d, %d, %d, %d] (Expected Input NCHW)\n", d0, d1, d2, d3);
 
         auto dim0 = trt_->static_dims(0);
         auto dim1 = trt_->static_dims(1);
@@ -758,10 +758,10 @@ public:
             printf("[WARN] Cannot uniquely identify input/output bindings by dims.\n");
         }
 
-        printf("[DEBUG] binding decision: input_binding=%d bbox_binding=%d\n", input_binding_, bbox_binding_);
-        printf("[DEBUG] dims(input)=[%d,%d,%d,%d]\n",
-            trt_->static_dims(input_binding_)[0], trt_->static_dims(input_binding_)[1],
-            trt_->static_dims(input_binding_)[2], trt_->static_dims(input_binding_)[3]);
+        // printf("[DEBUG] binding decision: input_binding=%d bbox_binding=%d\n", input_binding_, bbox_binding_);
+        // printf("[DEBUG] dims(input)=[%d,%d,%d,%d]\n",
+        //     trt_->static_dims(input_binding_)[0], trt_->static_dims(input_binding_)[1],
+        //     trt_->static_dims(input_binding_)[2], trt_->static_dims(input_binding_)[3]);
 
         
         auto input_dim_bind = trt_->static_dims(input_binding_);

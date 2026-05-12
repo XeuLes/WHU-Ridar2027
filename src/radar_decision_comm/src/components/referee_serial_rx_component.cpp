@@ -25,6 +25,14 @@
 namespace radar_decision_comm
 {
 
+namespace
+{
+
+constexpr const char * kRedBold = "\033[1;31m";
+constexpr const char * kColorReset = "\033[0m";
+
+}  // namespace
+
 static std::chrono::milliseconds hz_to_period_ms(double hz)
 {
   if (hz <= 0.0) {
@@ -174,9 +182,11 @@ private:
             this->get_logger(),
             *this->get_clock(),
             3000,
-            "Failed to open serial port %s @ %d",
+            "%sFailed to open serial port %s @ %d%s",
+            kRedBold,
             device_.c_str(),
-            baudrate_);
+            baudrate_,
+            kColorReset);
           std::this_thread::sleep_for(std::chrono::milliseconds(reconnect_interval_ms_));
           continue;
         }

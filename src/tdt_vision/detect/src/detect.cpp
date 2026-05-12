@@ -21,6 +21,9 @@ namespace tdt_radar {
 
 namespace {
 
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+
 std::string shellQuote(const std::string& value)
 {
     std::string quoted = "'";
@@ -352,10 +355,11 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     }
 
     // 2. 检查CUDA环境
-    if (system("nvidia-smi") == 0) {
-        RCLCPP_INFO(this->get_logger(), "CUDA is available.");
+    if (system("nvidia-smi > /dev/null 2>&1") == 0) {
+        // Noisy environment info; CUDA failures are still logged below.
+        // RCLCPP_INFO(this->get_logger(), "CUDA is available.");
     } else {
-        RCLCPP_ERROR(this->get_logger(), "CUDA is not available. Exiting.");
+        RCLCPP_ERROR(this->get_logger(), "%sCUDA is not available. Exiting.%s", kRedBold, kColorReset);
         rclcpp::shutdown();
     }
 
@@ -363,7 +367,10 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     cv::FileStorage fs;
     fs.open("/home/user/code/T-DT_Radar-main/config/detect_params.yaml", cv::FileStorage::READ);
     if (!fs.isOpened()) {
-        RCLCPP_ERROR(this->get_logger(), "[INIT] ❌ Failed to open config file: ./config/detect_params.yaml");
+        RCLCPP_ERROR(
+            this->get_logger(),
+            "%s[INIT] ❌ Failed to open config file: ./config/detect_params.yaml%s",
+            kRedBold, kColorReset);
     }
     fs["yolo_path"] >> yolo_path;
     fs["armor_path"] >> armor_path;
@@ -375,9 +382,10 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     }
     fs.release();
     
-    RCLCPP_INFO(this->get_logger(), "[INIT] Config loaded: yolo=%s, armor=%s, classify=%s, uav=%s, uav_conf=%.2f",
-                yolo_path.c_str(), armor_path.c_str(), classify_path.c_str(), uav_path.c_str(),
-                uav_conf_threshold);
+    // Noisy path dump; re-enable when debugging model config resolution.
+    // RCLCPP_INFO(this->get_logger(), "[INIT] Config loaded: yolo=%s, armor=%s, classify=%s, uav=%s, uav_conf=%.2f",
+    //             yolo_path.c_str(), armor_path.c_str(), classify_path.c_str(), uav_path.c_str(),
+    //             uav_conf_threshold);
 
     // 4. 自动转换ONNX为TensorRT引擎（如不存在）
     std::ifstream file1(yolo_path.c_str());
@@ -409,8 +417,9 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     RCLCPP_INFO(this->get_logger(), "[INIT] ✓ Main YOLO loaded");
 
 
-    RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo_path = %s", yolo_path.c_str());
-    RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
+    // Noisy model internals; re-enable when debugging detector startup.
+    // RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo_path = %s", yolo_path.c_str());
+    // RCLCPP_INFO(this->get_logger(), "[CAR-MODEL] yolo ptr = %p", (void*)yolo.get());
 
 
     // 6. 加载UAV检测器
@@ -424,8 +433,8 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
         if (!fileExists(uav_onnx_path)) {
             RCLCPP_ERROR(
                 this->get_logger(),
-                "[INIT] ❌ UAV engine missing and ONNX not found. engine=%s onnx=%s",
-                uav_path.c_str(), uav_onnx_path.c_str());
+                "%s[INIT] ❌ UAV engine missing and ONNX not found. engine=%s onnx=%s%s",
+                kRedBold, uav_path.c_str(), uav_onnx_path.c_str(), kColorReset);
         } else {
             RCLCPP_WARN(
                 this->get_logger(),
@@ -445,8 +454,8 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
             if (build_ret != 0 || !fileExists(uav_path)) {
                 RCLCPP_ERROR(
                     this->get_logger(),
-                    "[INIT] ❌ Failed to build UAV engine. return=%d target=%s",
-                    build_ret, uav_path.c_str());
+                    "%s[INIT] ❌ Failed to build UAV engine. return=%d target=%s%s",
+                    kRedBold, build_ret, uav_path.c_str(), kColorReset);
             }
         }
     }
@@ -460,14 +469,21 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
             "[INIT] ✓ UAV detector loaded successfully! conf=%.2f, nms=%.2f",
             kUavConfThreshold, kUavNmsThreshold);
     } else {
-        RCLCPP_ERROR(this->get_logger(), "[INIT] ❌ FAILED to load UAV detector from: %s", uav_path.c_str());
-        RCLCPP_ERROR(this->get_logger(), "[INIT] Check if file exists, has correct format, or is corrupted");
+        RCLCPP_ERROR(
+            this->get_logger(),
+            "%s[INIT] ❌ FAILED to load UAV detector from: %s%s",
+            kRedBold, uav_path.c_str(), kColorReset);
+        RCLCPP_ERROR(
+            this->get_logger(),
+            "%s[INIT] Check if file exists, has correct format, or is corrupted%s",
+            kRedBold, kColorReset);
     }
 
     // UAV 老版本灯条/DeepSORT 逻辑不再接入当前定位链路
     this->light_bar_detector_.reset();
     this->uav_tracker_.reset();
-    RCLCPP_INFO(this->get_logger(), "[INIT] UAV pipeline uses raw YOLO boxes only (DeepSORT/light detector disabled)");
+    // Noisy static pipeline note; re-enable when debugging UAV detector setup.
+    // RCLCPP_INFO(this->get_logger(), "[INIT] UAV pipeline uses raw YOLO boxes only (DeepSORT/light detector disabled)");
 
     image_topic_ = this->declare_parameter<std::string>("image_topic", "/camera_image");
 
@@ -616,7 +632,8 @@ void Detect::callback(sensor_msgs::msg::Image::UniquePtr msg)
             cv::imwrite("/tmp/cam_raw.jpg", raw);
         }
     } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "[IMG] cv_bridge exception: %s", e.what());
+        RCLCPP_ERROR(this->get_logger(), "%s[IMG] cv_bridge exception: %s%s",
+                     kRedBold, e.what(), kColorReset);
         return;
     }
 
@@ -635,8 +652,8 @@ void Detect::callback(sensor_msgs::msg::Image::UniquePtr msg)
             auto shared_msg = std::make_shared<sensor_msgs::msg::Image>(*msg);
             img = cv_bridge::toCvCopy(shared_msg, "bgr8")->image;
         } catch (const std::exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "[IMG] unsupported encoding %s: %s",
-                         msg->encoding.c_str(), e.what());
+            RCLCPP_ERROR(this->get_logger(), "%s[IMG] unsupported encoding %s: %s%s",
+                         kRedBold, msg->encoding.c_str(), e.what(), kColorReset);
             return;
         }
     }
@@ -675,11 +692,13 @@ void Detect::callback(sensor_msgs::msg::Image::UniquePtr msg)
             return std::vector<yolo::Box>();
         #endif
         if (uav_detector == nullptr) {
-            RCLCPP_ERROR(this->get_logger(), "❌ [UAV] uav_detector is nullptr!");
+            RCLCPP_ERROR(this->get_logger(), "%s❌ [UAV] uav_detector is nullptr!%s",
+                         kRedBold, kColorReset);
             return std::vector<yolo::Box>();
         }
         if (uav_input_copy.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "❌ [UAV] UAV input image is empty!");
+            RCLCPP_ERROR(this->get_logger(), "%s❌ [UAV] UAV input image is empty!%s",
+                         kRedBold, kColorReset);
             return std::vector<yolo::Box>();
         }
         RCLCPP_DEBUG(this->get_logger(), "✓ [UAV] Calling uav_detector->forward with image %dx%d, channels=%d", 
@@ -1337,7 +1356,7 @@ for (const auto& b : result) {
     // 5.2 计算检测耗时
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::chrono::duration<double> time_used = std::chrono::duration_cast<std::chrono::duration<double>>(end - begin);
-    std::cout << "Detect Time: " << time_used.count() * 1000 << "ms" << std::endl;
+    std::cout << "\033[1;34mDetect Time: " << time_used.count() * 1000 << "ms\033[0m" << std::endl;
 
     // 5.3 可视化调试输出
     cv::Mat final_img;

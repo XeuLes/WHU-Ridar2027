@@ -17,6 +17,12 @@
 
 namespace tdt_radar {
 
+namespace {
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+constexpr bool kVerboseUavResolveLog = false;
+}
+
 static inline bool is_stamp_zero(const builtin_interfaces::msg::Time& t)
 {
     return (t.sec == 0 && t.nanosec == 0);
@@ -206,15 +212,18 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
                     camera_params_path.c_str(),
                     region_points_path.c_str());
     } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造异常: %s", e.what());
+        RCLCPP_ERROR(this->get_logger(), "%s[FATAL] parser构造异常: %s%s",
+                     kRedBold, e.what(), kColorReset);
     } catch (...) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造未知异常");
+        RCLCPP_ERROR(this->get_logger(), "%s[FATAL] parser构造未知异常%s",
+                     kRedBold, kColorReset);
     }
 
     // -------------------- load minimap --------------------
     minimap = cv::imread(minimap_path);
     if (minimap.empty()) {
-        RCLCPP_WARN(this->get_logger(), "minimap图片加载失败: %s", minimap_path.c_str());
+        RCLCPP_WARN(this->get_logger(), "%sminimap图片加载失败: %s%s",
+                    kRedBold, minimap_path.c_str(), kColorReset);
     }
 
     
@@ -1645,7 +1654,7 @@ void Resolve::DetectCallback(
     const bool has_red_uav =
         has_red_bbox || (msg->red_x[6] != 0.0f && msg->red_y[6] != 0.0f);
     
-    if (has_blue_uav || has_red_uav) {
+    if (kVerboseUavResolveLog && (has_blue_uav || has_red_uav)) {
         RCLCPP_INFO(this->get_logger(), "========== [阶段一：接收检测消息] ==========");
         if (has_blue_uav) {
             RCLCPP_INFO(this->get_logger(),
@@ -1688,7 +1697,7 @@ void Resolve::DetectCallback(
         }
         other_fresh = has_other_stamp && (dt_ms <= uav_other_timeout_ms_);
 
-        if (has_blue_uav || has_red_uav) {
+        if (kVerboseUavResolveLog && (has_blue_uav || has_red_uav)) {
             RCLCPP_INFO(this->get_logger(), "========== [阶段二：读取 lidar_other 原始点云] ==========");
             if (has_other_stamp) {
                 RCLCPP_INFO(this->get_logger(),
@@ -1779,7 +1788,7 @@ void Resolve::DetectCallback(
         const int current_priority = UavSourcePriority(current);
 
         if (best_priority <= current_priority) {
-            if (best.source != current) {
+            if (kVerboseUavResolveLog && best.source != current) {
                 RCLCPP_INFO(this->get_logger(),
                             "  %s: UAV源升级 %s -> %s",
                             side_name,
@@ -1804,24 +1813,28 @@ void Resolve::DetectCallback(
             hold.valid = true;
             hold.source = current;
             source_holding[idx] = true;
-            RCLCPP_INFO_THROTTLE(
-                this->get_logger(), *this->get_clock(), 300,
-                "  %s: %s 暂缺 %.1f/%dms，保持KF预测，暂不退化到 %s",
-                side_name,
-                UavSourceName(current),
-                missing_ms,
-                hold_ms,
-                UavSourceName(best.source));
+            if (kVerboseUavResolveLog) {
+                RCLCPP_INFO_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 300,
+                    "  %s: %s 暂缺 %.1f/%dms，保持KF预测，暂不退化到 %s",
+                    side_name,
+                    UavSourceName(current),
+                    missing_ms,
+                    hold_ms,
+                    UavSourceName(best.source));
+            }
             return hold;
         }
 
-        RCLCPP_WARN(this->get_logger(),
-                    "  %s: UAV源退化 %s -> %s (missing=%.1fms, hold=%dms)",
-                    side_name,
-                    UavSourceName(current),
-                    UavSourceName(best.source),
-                    missing_ms,
-                    hold_ms);
+        if (kVerboseUavResolveLog) {
+            RCLCPP_WARN(this->get_logger(),
+                        "  %s: UAV源退化 %s -> %s (missing=%.1fms, hold=%dms)",
+                        side_name,
+                        UavSourceName(current),
+                        UavSourceName(best.source),
+                        missing_ms,
+                        hold_ms);
+        }
         uav_active_source_[idx] = best.source;
         uav_source_last_update_[idx] = t_now;
         return best;
@@ -1901,35 +1914,39 @@ void Resolve::DetectCallback(
                                                 UavMeasurementSource::Frustum)].z),
                                         pv);
 
-                    RCLCPP_INFO(
-                        this->get_logger(),
-                        "  %s: 视锥求交成功 roi=(%.1f, %.1f, %.1f, %.1f) -> lidar=(%.3f, %.3f, %.3f), q=%.3f, ray_med=%.3f, ray_spread=%.3f, n=%d, z_prior=%.3f, vision@z=(%.3f, %.3f)",
-                        side_name,
-                        roi.x, roi.y, roi.width, roi.height,
-                        candidates[UavSourcePriority(UavMeasurementSource::Frustum)].x,
-                        candidates[UavSourcePriority(UavMeasurementSource::Frustum)].y,
-                        candidates[UavSourcePriority(UavMeasurementSource::Frustum)].z,
-                        quality,
-                        frustum_meas.ray_dist_median,
-                        frustum_meas.ray_dist_spread,
-                        frustum_meas.cluster_size,
-                        GetUavFallbackZ(idx),
-                        pv[0], pv[1]);
+                    if (kVerboseUavResolveLog) {
+                        RCLCPP_INFO(
+                            this->get_logger(),
+                            "  %s: 视锥求交成功 roi=(%.1f, %.1f, %.1f, %.1f) -> lidar=(%.3f, %.3f, %.3f), q=%.3f, ray_med=%.3f, ray_spread=%.3f, n=%d, z_prior=%.3f, vision@z=(%.3f, %.3f)",
+                            side_name,
+                            roi.x, roi.y, roi.width, roi.height,
+                            candidates[UavSourcePriority(UavMeasurementSource::Frustum)].x,
+                            candidates[UavSourcePriority(UavMeasurementSource::Frustum)].y,
+                            candidates[UavSourcePriority(UavMeasurementSource::Frustum)].z,
+                            quality,
+                            frustum_meas.ray_dist_median,
+                            frustum_meas.ray_dist_spread,
+                            frustum_meas.cluster_size,
+                            GetUavFallbackZ(idx),
+                            pv[0], pv[1]);
+                    }
                 } else {
-                    RCLCPP_WARN(
-                        this->get_logger(),
-                        "  %s: 视锥求交得到点簇但质量不足 q=%.3f < %.3f (ray_med=%.3f, ray_spread=%.3f, n=%d, conf=%.2f)，尝试低层候选",
-                        side_name,
-                        quality,
-                        uav_quality_measurement_threshold_,
-                        frustum_meas.ray_dist_median,
-                        frustum_meas.ray_dist_spread,
-                        frustum_meas.cluster_size,
-                        bbox_conf);
+                    if (kVerboseUavResolveLog) {
+                        RCLCPP_WARN(
+                            this->get_logger(),
+                            "  %s: 视锥求交得到点簇但质量不足 q=%.3f < %.3f (ray_med=%.3f, ray_spread=%.3f, n=%d, conf=%.2f)，尝试低层候选",
+                            side_name,
+                            quality,
+                            uav_quality_measurement_threshold_,
+                            frustum_meas.ray_dist_median,
+                            frustum_meas.ray_dist_spread,
+                            frustum_meas.cluster_size,
+                            bbox_conf);
+                    }
                 }
             }
 
-            if (!has_cluster_candidate) {
+            if (kVerboseUavResolveLog && !has_cluster_candidate) {
                 RCLCPP_WARN(this->get_logger(),
                             "  %s: ROI 视锥求交未得到有效聚类 input=%d, z_ok=%d, roi_ok=%d, clusters=%d, min_cluster=%d，尝试低层候选",
                             side_name,
@@ -1957,16 +1974,18 @@ void Resolve::DetectCallback(
                     lidar_only_meas.y;
                 candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].z =
                     GetFilteredZPlane(idx, lidar_only_meas.z);
-                RCLCPP_INFO(
-                    this->get_logger(),
-                    "  %s: 无框点云候选 -> (%.3f, %.3f, %.3f), seed_dist=%.3f, spread=%.3f, n=%d",
-                    side_name,
-                    candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].x,
-                    candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].y,
-                    candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].z,
-                    lidar_only_meas.seed_distance,
-                    lidar_only_meas.cluster_spread,
-                    lidar_only_meas.cluster_size);
+                if (kVerboseUavResolveLog) {
+                    RCLCPP_INFO(
+                        this->get_logger(),
+                        "  %s: 无框点云候选 -> (%.3f, %.3f, %.3f), seed_dist=%.3f, spread=%.3f, n=%d",
+                        side_name,
+                        candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].x,
+                        candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].y,
+                        candidates[UavSourcePriority(UavMeasurementSource::LidarOnly)].z,
+                        lidar_only_meas.seed_distance,
+                        lidar_only_meas.cluster_spread,
+                        lidar_only_meas.cluster_size);
+                }
             }
         }
 
@@ -1986,9 +2005,11 @@ void Resolve::DetectCallback(
             const float z_plane = static_cast<float>(GetUavFallbackZ(idx));
             cv::Vec3d pv;
             if (!solve_xy_on_z(vision_px, vision_py, z_plane, pv)) {
-                RCLCPP_WARN(this->get_logger(),
-                            "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f 射线无法与高度平面求交",
-                            side_name, vision_px, vision_py, z_plane);
+                if (kVerboseUavResolveLog) {
+                    RCLCPP_WARN(this->get_logger(),
+                                "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f 射线无法与高度平面求交",
+                                side_name, vision_px, vision_py, z_plane);
+                }
             } else {
                 vision_coord_valid[idx] = true;
                 vision_inside_field[idx] = IsUavFieldPointInside(pv[0], pv[1]);
@@ -1996,11 +2017,13 @@ void Resolve::DetectCallback(
                 vision_y[idx] = pv[1];
                 vision_z[idx] = z_plane;
                 if (!vision_inside_field[idx]) {
-                    RCLCPP_WARN(
-                        this->get_logger(),
-                        "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f -> raw=(%.3f, %.3f, %.3f) 场外，丢弃该视觉测量",
-                        side_name, vision_px, vision_py, z_plane,
-                        pv[0], pv[1], pv[2]);
+                    if (kVerboseUavResolveLog) {
+                        RCLCPP_WARN(
+                            this->get_logger(),
+                            "  %s: 纯视觉 fallback center=(%.1f, %.1f) z_prior=%.2f -> raw=(%.3f, %.3f, %.3f) 场外，丢弃该视觉测量",
+                            side_name, vision_px, vision_py, z_plane,
+                            pv[0], pv[1], pv[2]);
+                    }
                 } else {
                     candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].valid = true;
                     candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].updates_kf = true;
@@ -2012,10 +2035,12 @@ void Resolve::DetectCallback(
                     candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].y = pv[1];
                     candidates[UavSourcePriority(UavMeasurementSource::VisionZ)].z = z_plane;
 
-                    RCLCPP_WARN(this->get_logger(),
-                                "  %s: 纯视觉候选 center=(%.1f, %.1f) z_prior=%.2f -> (%.3f, %.3f, %.3f)",
-                                side_name, vision_px, vision_py, z_plane,
-                                pv[0], pv[1], z_plane);
+                    if (kVerboseUavResolveLog) {
+                        RCLCPP_WARN(this->get_logger(),
+                                    "  %s: 纯视觉候选 center=(%.1f, %.1f) z_prior=%.2f -> (%.3f, %.3f, %.3f)",
+                                    side_name, vision_px, vision_py, z_plane,
+                                    pv[0], pv[1], z_plane);
+                    }
                 }
             }
         }
@@ -2045,7 +2070,7 @@ void Resolve::DetectCallback(
         }
     };
 
-    if (has_blue_uav || has_red_uav || (other_fresh && !other_points.empty())) {
+    if (kVerboseUavResolveLog && (has_blue_uav || has_red_uav || (other_fresh && !other_points.empty()))) {
         RCLCPP_INFO(this->get_logger(), "========== [阶段三：UAV分层候选测量] ==========");
     }
     compute_meas(0, has_blue_uav, has_blue_bbox,
@@ -2115,7 +2140,7 @@ void Resolve::DetectCallback(
         }
     }
     
-    if (any_kf_activity) {
+    if (kVerboseUavResolveLog && any_kf_activity) {
         RCLCPP_INFO(this->get_logger(), "========== [阶段五：卡尔曼滤波] ==========");
     }
     
@@ -2135,11 +2160,13 @@ void Resolve::DetectCallback(
             if (meas_ok[idx]) {
                 UavKalmanUpdate(idx, meas_x[idx], meas_y[idx], meas_z[idx]);
                 uav_kf_last_update_[idx] = t_now;
-                RCLCPP_INFO(this->get_logger(),
-                            "  %s: KF更新[%s] -> (%.3f, %.3f, %.3f)",
-                            side_name,
-                            UavSourceName(meas_source[idx]),
-                            uav_x_[idx], uav_y_[idx], uav_z_[idx]);
+                if (kVerboseUavResolveLog) {
+                    RCLCPP_INFO(this->get_logger(),
+                                "  %s: KF更新[%s] -> (%.3f, %.3f, %.3f)",
+                                side_name,
+                                UavSourceName(meas_source[idx]),
+                                uav_x_[idx], uav_y_[idx], uav_z_[idx]);
+                }
             } else if (source_holding[idx]) {
                 RCLCPP_INFO_THROTTLE(
                     this->get_logger(), *this->get_clock(), 300,
@@ -2151,11 +2178,13 @@ void Resolve::DetectCallback(
         } else {
             if (meas_ok[idx]) {
                 UavKalmanInit(idx, meas_x[idx], meas_y[idx], meas_z[idx], t_now);
-                RCLCPP_INFO(this->get_logger(),
-                            "  %s: ✓ KF初始化[%s] at (%.3f, %.3f, %.3f)",
-                            side_name,
-                            UavSourceName(meas_source[idx]),
-                            uav_x_[idx], uav_y_[idx], uav_z_[idx]);
+                if (kVerboseUavResolveLog) {
+                    RCLCPP_INFO(this->get_logger(),
+                                "  %s: ✓ KF初始化[%s] at (%.3f, %.3f, %.3f)",
+                                side_name,
+                                UavSourceName(meas_source[idx]),
+                                uav_x_[idx], uav_y_[idx], uav_z_[idx]);
+                }
             }
         }
 
@@ -2237,7 +2266,7 @@ void Resolve::DetectCallback(
         }
     }
     
-    if (has_output) {
+    if (kVerboseUavResolveLog && has_output) {
         RCLCPP_INFO(this->get_logger(), "========== [阶段六：最终输出] ==========");
         if (uav_final_valid[0]) {
             RCLCPP_INFO(this->get_logger(),

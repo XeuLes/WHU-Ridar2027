@@ -173,7 +173,8 @@ public:
         }
 
         // 2. 打印引擎信息（如输入输出维度、层信息，调试用）
-        trt_->print();
+        // Noisy TensorRT tensor dump; re-enable only when debugging classifier bindings.
+        // trt_->print();
 
         // 3. 记录模型类型和引擎文件路径
         this->type_ = type;
@@ -183,11 +184,11 @@ public:
         auto input_dim = trt_->static_dims(0);    // 输入维度：[batch, channel, height, width]（TensorRT默认NCHW）
         auto output_dims_ = trt_->static_dims(1); // 输出维度：[batch, num_class]
 
-        // 调试打印输入维度（验证是否符合预期）
-        puts("input_dim");
-        for (int i = 0; i < 4; i++) {
-            std::cout << input_dim[i] << std::endl;
-        }
+        // Noisy input-dimension dump; re-enable only when debugging classifier bindings.
+        // puts("input_dim");
+        // for (int i = 0; i < 4; i++) {
+        //     std::cout << input_dim[i] << std::endl;
+        // }
 
         // 5. 提取模型输入尺寸（height=input_dim[2]，width=input_dim[3]，NCHW格式）
         network_input_width_ = input_dim[3];
@@ -305,7 +306,8 @@ public:
 
         // 打印前向+解码耗时（调试性能用）
         auto time_used4 = std::chrono::duration_cast<std::chrono::duration<double>>(a4 - a3);
-        INFO("forward and decode_kernel_invoker time: %f", time_used4.count() * 1000);
+        (void)time_used4;
+        // INFO("forward and decode_kernel_invoker time: %f", time_used4.count() * 1000);
 
         // 7. 批量后处理：为每张图像计算预测类别
         std::chrono ::high_resolution_clock::time_point a5 = std::chrono::high_resolution_clock::now();

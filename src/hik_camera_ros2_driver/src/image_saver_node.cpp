@@ -22,6 +22,14 @@
 namespace hik_camera_ros2_driver
 {
 
+namespace
+{
+
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+
+}  // namespace
+
 class ImageSaverNode : public rclcpp::Node
 {
 public:
@@ -158,8 +166,10 @@ private:
 
       return cv_bridge::toCvCopy(msg, "bgr8")->image;
     } catch (const cv_bridge::Exception & e) {
-      RCLCPP_ERROR(this->get_logger(), "cv_bridge conversion failed, encoding=%s, error=%s",
-                   msg->encoding.c_str(), e.what());
+      RCLCPP_ERROR(
+        this->get_logger(),
+        "%scv_bridge conversion failed, encoding=%s, error=%s%s",
+        kRedBold, msg->encoding.c_str(), e.what(), kColorReset);
       return cv::Mat();
     }
   }
@@ -182,7 +192,7 @@ private:
     }
 
     if (tcgetattr(keyboard_fd_, &original_termios_) != 0) {
-      RCLCPP_WARN(this->get_logger(), "keyboard save disabled: tcgetattr failed");
+      RCLCPP_WARN(this->get_logger(), "%skeyboard save disabled: tcgetattr failed%s", kRedBold, kColorReset);
       closeKeyboardFd();
       keyboard_save_enabled_ = false;
       return;
@@ -194,7 +204,7 @@ private:
     raw.c_cc[VMIN] = 0;
     raw.c_cc[VTIME] = 0;
     if (tcsetattr(keyboard_fd_, TCSANOW, &raw) != 0) {
-      RCLCPP_WARN(this->get_logger(), "keyboard save disabled: tcsetattr failed");
+      RCLCPP_WARN(this->get_logger(), "%skeyboard save disabled: tcsetattr failed%s", kRedBold, kColorReset);
       has_original_termios_ = false;
       closeKeyboardFd();
       keyboard_save_enabled_ = false;
@@ -261,12 +271,12 @@ private:
     try {
       ok = cv::imwrite(filename, image, params);
     } catch (const cv::Exception & e) {
-      RCLCPP_ERROR(this->get_logger(), "cv::imwrite exception: %s", e.what());
+      RCLCPP_ERROR(this->get_logger(), "%scv::imwrite exception: %s%s", kRedBold, e.what(), kColorReset);
       return false;
     }
 
     if (!ok) {
-      RCLCPP_ERROR(this->get_logger(), "failed to save image: %s", filename.c_str());
+      RCLCPP_ERROR(this->get_logger(), "%sfailed to save image: %s%s", kRedBold, filename.c_str(), kColorReset);
       return false;
     }
 

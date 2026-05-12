@@ -327,7 +327,7 @@ def main(argv=None):
             end_sec=args.end_sec,
         )
     except Exception as exc:
-        print(f"camera_lidar_bag_extract failed: {exc}", file=sys.stderr)
+        print(f"\033[1;31mcamera_lidar_bag_extract failed: {exc}\033[0m", file=sys.stderr)
         return 1
 
 

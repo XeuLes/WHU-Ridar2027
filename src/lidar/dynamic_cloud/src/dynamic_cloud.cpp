@@ -10,6 +10,14 @@
 
 namespace tdt_radar {  // 自定义命名空间
 
+namespace
+{
+
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+
+}  // namespace
+
 
 DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     : rclcpp::Node("dynamic_cloud_node", node_options),
@@ -51,7 +59,10 @@ DynamicCloud::DynamicCloud(const rclcpp::NodeOptions& node_options)
     // === 加载地图点云 ===
     pcl::PointCloud<pcl::PointXYZ>::Ptr temp_cloud(new pcl::PointCloud<pcl::PointXYZ>);
     if (pcl::io::loadPCDFile<pcl::PointXYZ>(map_pcd_path, *temp_cloud) == -1) {
-        RCLCPP_ERROR(this->get_logger(), "Failed to load map pcd: %s", map_pcd_path.c_str());
+        RCLCPP_ERROR(
+            this->get_logger(),
+            "%sFailed to load map pcd: %s%s",
+            kRedBold, map_pcd_path.c_str(), kColorReset);
         return;
     }
 
@@ -590,14 +601,15 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
         GetDynamicCloud(filtered_cloud, dynamic_pointcloud, 0.08, 12);
     }
 
-    RCLCPP_INFO_THROTTLE(
-        this->get_logger(), *this->get_clock(), 1000,
-        "dynamic_cloud 点数: raw=%zu, roi=%zu, dynamic=%zu, lidar_other候选=%zu, map_mode=%s",
-        receive_cloud.size(),
-        filtered_cloud.size(),
-        dynamic_pointcloud.size(),
-        other_filtered_cloud.size(),
-        mapModeToString(current_mode));
+    // High-frequency point-count telemetry kept disabled by default.
+    // RCLCPP_INFO_THROTTLE(
+    //     this->get_logger(), *this->get_clock(), 1000,
+    //     "dynamic_cloud 点数: raw=%zu, roi=%zu, dynamic=%zu, lidar_other候选=%zu, map_mode=%s",
+    //     receive_cloud.size(),
+    //     filtered_cloud.size(),
+    //     dynamic_pointcloud.size(),
+    //     other_filtered_cloud.size(),
+    //     mapModeToString(current_mode));
     
     // RCLCPP_INFO_THROTTLE(this->get_logger(), *this->get_clock(), 1000,
     //                      "【阶段5】动态检测后点数：%zu",

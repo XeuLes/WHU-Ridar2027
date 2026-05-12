@@ -8,6 +8,9 @@ namespace tdt_radar {
 
 namespace {
 
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+
 bool readMatrixFromNode(const cv::FileNode& node, cv::Mat& out)
 {
     if (node.empty()) {
@@ -109,13 +112,14 @@ Calibrate::Calibrate(const rclcpp::NodeOptions& options)
     cv::FileStorage fs;
     fs.open(camera_params_path, cv::FileStorage::READ);
     if (!fs.isOpened()) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] 无法打开 camera_params: %s", camera_params_path.c_str());
+        RCLCPP_ERROR(this->get_logger(), "%s[FATAL] 无法打开 camera_params: %s%s",
+                     kRedBold, camera_params_path.c_str(), kColorReset);
     } else {
         if (!readFirstAvailableMatrix(fs, camera_matrix,
                                       {"camera_matrix", "K"})) {
             RCLCPP_ERROR(this->get_logger(),
-                         "[FATAL] camera_params 缺少 camera_matrix/K: %s",
-                         camera_params_path.c_str());
+                         "%s[FATAL] camera_params 缺少 camera_matrix/K: %s%s",
+                         kRedBold, camera_params_path.c_str(), kColorReset);
         }
         if (!readFirstAvailableMatrix(fs, dist_coeffs,
                                       {"dist_coeffs", "dist_coeff",
@@ -135,9 +139,11 @@ Calibrate::Calibrate(const rclcpp::NodeOptions& options)
                     camera_params_path.c_str(),
                     region_points_path.c_str());
     } catch (const std::exception& e) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造异常: %s", e.what());
+        RCLCPP_ERROR(this->get_logger(), "%s[FATAL] parser构造异常: %s%s",
+                     kRedBold, e.what(), kColorReset);
     } catch (...) {
-        RCLCPP_ERROR(this->get_logger(), "[FATAL] parser构造未知异常");
+        RCLCPP_ERROR(this->get_logger(), "%s[FATAL] parser构造未知异常%s",
+                     kRedBold, kColorReset);
     }
 
     // 打印初始化成功的日志信息（ASCII艺术字）

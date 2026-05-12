@@ -48,6 +48,8 @@ constexpr int kPerDetBase = 6;
 constexpr int kExpectedStride = kPerDetBase + kExpectedKptNum * kExpectedKptDim;  // 30
 constexpr int kRawBoxFields = 4;
 constexpr int kRawKptFields = kExpectedKptNum * kExpectedKptDim;
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
 
 float clampf(float v, float lo, float hi)
 {
@@ -196,7 +198,8 @@ bool YoloPoseTrtDetector::init(const Params& params)
   params_ = params;
 
   if (params_.engine_path.empty()) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] engine_path is empty\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] engine_path is empty%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
@@ -231,31 +234,36 @@ bool YoloPoseTrtDetector::loadEngine()
 {
   std::ifstream ifs(params_.engine_path, std::ios::binary);
   if (!ifs) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] failed to open engine: %s\n", params_.engine_path.c_str());
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] failed to open engine: %s%s\n",
+                 kRedBold, params_.engine_path.c_str(), kColorReset);
     return false;
   }
 
   std::vector<char> engine_data((std::istreambuf_iterator<char>(ifs)), std::istreambuf_iterator<char>());
   if (engine_data.empty()) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] engine file is empty\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] engine file is empty%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
   runtime_.reset(nvinfer1::createInferRuntime(logger_));
   if (!runtime_) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] createInferRuntime failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] createInferRuntime failed%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
   engine_.reset(runtime_->deserializeCudaEngine(engine_data.data(), engine_data.size()));
   if (!engine_) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] deserializeCudaEngine failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] deserializeCudaEngine failed%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
   context_.reset(engine_->createExecutionContext());
   if (!context_) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] createExecutionContext failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] createExecutionContext failed%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
@@ -283,7 +291,8 @@ bool YoloPoseTrtDetector::loadEngine()
   }
 
   if (input_name_.empty() || output_name_.empty()) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] failed to resolve input/output tensor names\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] failed to resolve input/output tensor names%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
@@ -303,8 +312,8 @@ bool YoloPoseTrtDetector::loadEngine()
     std::fprintf(stderr, "[YoloPoseTrtDetector] preprocess path: BGR8 -> FLOAT CHW\n");
   } else {
     std::fprintf(stderr,
-                 "[YoloPoseTrtDetector] unsupported input dtype=%s\n",
-                 dtypeToStr(input_dtype));
+                 "%s[YoloPoseTrtDetector] unsupported input dtype=%s%s\n",
+                 kRedBold, dtypeToStr(input_dtype), kColorReset);
     return false;
   }
 
@@ -315,7 +324,8 @@ bool YoloPoseTrtDetector::loadEngine()
     input_dims.d[2] = params_.input_h;
     input_dims.d[3] = params_.input_w;
     if (!context_->setInputShape(input_name_.c_str(), input_dims)) {
-      std::fprintf(stderr, "[YoloPoseTrtDetector] setInputShape failed for %s\n", input_name_.c_str());
+      std::fprintf(stderr, "%s[YoloPoseTrtDetector] setInputShape failed for %s%s\n",
+                   kRedBold, input_name_.c_str(), kColorReset);
       return false;
     }
     std::fprintf(stderr,
@@ -329,7 +339,8 @@ bool YoloPoseTrtDetector::loadEngine()
                dimsToString(out_dims).c_str());
 
   if (out_dims.nbDims != 3) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] expect output dims=3, got %d\n", out_dims.nbDims);
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] expect output dims=3, got %d%s\n",
+                 kRedBold, out_dims.nbDims, kColorReset);
     return false;
   }
 
@@ -361,7 +372,8 @@ bool YoloPoseTrtDetector::loadEngine()
   if (det_stride <= 0) det_stride = kExpectedStride;
 
   if (det_stride < kRawBoxFields) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] invalid output stride=%d\n", det_stride);
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] invalid output stride=%d%s\n",
+                 kRedBold, det_stride, kColorReset);
     return false;
   }
 
@@ -397,8 +409,8 @@ bool YoloPoseTrtDetector::loadEngine()
     output_class_count_ = raw_detect_class_count;
   } else {
     std::fprintf(stderr,
-                 "[YoloPoseTrtDetector] unsupported output stride=%d for YOLO model\n",
-                 det_stride);
+                 "%s[YoloPoseTrtDetector] unsupported output stride=%d for YOLO model%s\n",
+                 kRedBold, det_stride, kColorReset);
     return false;
   }
 
@@ -419,7 +431,8 @@ bool YoloPoseTrtDetector::loadEngine()
 bool YoloPoseTrtDetector::allocateBuffers()
 {
   if (cudaStreamCreate(&stream_) != cudaSuccess) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] cudaStreamCreate failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] cudaStreamCreate failed%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
@@ -431,8 +444,8 @@ bool YoloPoseTrtDetector::allocateBuffers()
 
   if (in_elem_size == 0 || out_elem_size == 0) {
     std::fprintf(stderr,
-                 "[YoloPoseTrtDetector] unsupported tensor dtype input=%s output=%s\n",
-                 dtypeToStr(input_dtype), dtypeToStr(output_dtype));
+                 "%s[YoloPoseTrtDetector] unsupported tensor dtype input=%s output=%s%s\n",
+                 kRedBold, dtypeToStr(input_dtype), dtypeToStr(output_dtype), kColorReset);
     return false;
   }
 
@@ -447,20 +460,24 @@ bool YoloPoseTrtDetector::allocateBuffers()
                input_bytes_, output_bytes_);
 
   if (cudaMalloc(&d_input_, input_bytes_) != cudaSuccess) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] cudaMalloc d_input failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] cudaMalloc d_input failed%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
   if (cudaMalloc(&d_output_, output_bytes_) != cudaSuccess) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] cudaMalloc d_output failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] cudaMalloc d_output failed%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
   if (!context_->setTensorAddress(input_name_.c_str(), d_input_)) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] setTensorAddress input failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] setTensorAddress input failed%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
   if (!context_->setTensorAddress(output_name_.c_str(), d_output_)) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] setTensorAddress output failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] setTensorAddress output failed%s\n",
+                 kRedBold, kColorReset);
     return false;
   }
 
@@ -535,17 +552,20 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::detectDetailed
       d_bgr_, d_input_, params_.input_w, params_.input_h,
       meta.scale, meta.pad_x, meta.pad_y, params_.swap_rb_input, stream_);
   } else {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] unsupported input dtype for preprocess\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] unsupported input dtype for preprocess%s\n",
+                 kRedBold, kColorReset);
     return out;
   }
 
   if (!preprocess_ok) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] preprocess kernel failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] preprocess kernel failed%s\n",
+                 kRedBold, kColorReset);
     return out;
   }
 
   if (!context_->enqueueV3(stream_)) {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] enqueueV3 failed\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] enqueueV3 failed%s\n",
+                 kRedBold, kColorReset);
     return out;
   }
 
@@ -555,28 +575,33 @@ std::vector<SimpleLightDetector::PairResult> YoloPoseTrtDetector::detectDetailed
 
   if (output_dtype == nvinfer1::DataType::kFLOAT) {
     if (cudaMemcpyAsync(host_output.data(), d_output_, output_bytes_, cudaMemcpyDeviceToHost, stream_) != cudaSuccess) {
-      std::fprintf(stderr, "[YoloPoseTrtDetector] cudaMemcpyAsync FLOAT output failed\n");
+      std::fprintf(stderr, "%s[YoloPoseTrtDetector] cudaMemcpyAsync FLOAT output failed%s\n",
+                   kRedBold, kColorReset);
       return out;
     }
     if (cudaStreamSynchronize(stream_) != cudaSuccess) {
-      std::fprintf(stderr, "[YoloPoseTrtDetector] cudaStreamSynchronize failed\n");
+      std::fprintf(stderr, "%s[YoloPoseTrtDetector] cudaStreamSynchronize failed%s\n",
+                   kRedBold, kColorReset);
       return out;
     }
   } else if (output_dtype == nvinfer1::DataType::kHALF) {
     std::vector<__half> host_half(elem_count);
     if (cudaMemcpyAsync(host_half.data(), d_output_, output_bytes_, cudaMemcpyDeviceToHost, stream_) != cudaSuccess) {
-      std::fprintf(stderr, "[YoloPoseTrtDetector] cudaMemcpyAsync HALF output failed\n");
+      std::fprintf(stderr, "%s[YoloPoseTrtDetector] cudaMemcpyAsync HALF output failed%s\n",
+                   kRedBold, kColorReset);
       return out;
     }
     if (cudaStreamSynchronize(stream_) != cudaSuccess) {
-      std::fprintf(stderr, "[YoloPoseTrtDetector] cudaStreamSynchronize failed\n");
+      std::fprintf(stderr, "%s[YoloPoseTrtDetector] cudaStreamSynchronize failed%s\n",
+                   kRedBold, kColorReset);
       return out;
     }
     for (size_t i = 0; i < elem_count; ++i) {
       host_output[i] = __half2float(host_half[i]);
     }
   } else {
-    std::fprintf(stderr, "[YoloPoseTrtDetector] unsupported output dtype\n");
+    std::fprintf(stderr, "%s[YoloPoseTrtDetector] unsupported output dtype%s\n",
+                 kRedBold, kColorReset);
     return out;
   }
 

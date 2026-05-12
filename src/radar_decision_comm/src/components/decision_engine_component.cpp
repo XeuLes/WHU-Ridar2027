@@ -42,6 +42,14 @@
 namespace radar_decision_comm
 {
 
+namespace
+{
+
+constexpr const char * kRedBold = "\033[1;31m";
+constexpr const char * kColorReset = "\033[0m";
+
+}  // namespace
+
 static std::chrono::milliseconds hz_to_period_ms(double hz)
 {
   if (hz <= 0.0) {
@@ -377,8 +385,10 @@ private:
         this->get_logger(),
         *this->get_clock(),
         3000,
-        "Failed to open 0x0121 counter state file: %s",
-        radar_cmd_counter_state_path_.c_str());
+        "%sFailed to open 0x0121 counter state file: %s%s",
+        kRedBold,
+        radar_cmd_counter_state_path_.c_str(),
+        kColorReset);
       return;
     }
 

@@ -20,6 +20,14 @@
 
 using namespace std::chrono_literals;
 
+namespace
+{
+
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+
+}  // namespace
+
 class ManualAngleCmdNode final : public rclcpp::Node
 {
 public:
@@ -249,7 +257,10 @@ private:
             if (close_kb_fd) {
                 ::close(kb_fd);
             }
-            RCLCPP_WARN(get_logger(), "tcgetattr failed, keyboard control disabled.");
+            RCLCPP_WARN(
+                get_logger(),
+                "%stcgetattr failed, keyboard control disabled.%s",
+                kRedBold, kColorReset);
             return;
         }
 
@@ -262,7 +273,10 @@ private:
             if (close_kb_fd) {
                 ::close(kb_fd);
             }
-            RCLCPP_WARN(get_logger(), "tcsetattr failed, keyboard control disabled.");
+            RCLCPP_WARN(
+                get_logger(),
+                "%stcsetattr failed, keyboard control disabled.%s",
+                kRedBold, kColorReset);
             return;
         }
 

@@ -53,6 +53,7 @@ def _build_launch(context):
     referee_tx_mode = LaunchConfiguration("referee_tx_mode").perform(context)
     referee_serial_device = LaunchConfiguration("referee_serial_device").perform(context)
     referee_serial_baudrate = int(LaunchConfiguration("referee_serial_baudrate").perform(context))
+    gimbal_serial_device = LaunchConfiguration("gimbal_serial_device").perform(context)
     referee_publish_raw_debug = ParameterValue(
         LaunchConfiguration("referee_publish_raw_debug"),
         value_type=bool,
@@ -290,6 +291,9 @@ def _build_launch(context):
             {
                 "our_color": team["decision_my_color"],
                 "use_referee_identity_color": True,
+                "input_detect_topic": "/kalman_detect",
+                "output_our_tracks_topic": "/radar/perception/our_tracks",
+                "output_enemy_tracks_topic": "/radar/perception/enemy_tracks",
             }
         ],
         extra_arguments=intra,
@@ -434,6 +438,35 @@ def _build_launch(context):
         ],
     )
 
+    radar_decision_sync_shm_node = Node(
+        package="radar_pdu_bridge",
+        executable="radar_decision_sync_shm_node",
+        name="radar_decision_sync_shm_node",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_pdu_bridge")),
+    )
+
+    referee_link_monitor_node = Node(
+        package="radar_bringup",
+        executable="referee_link_monitor.py",
+        name="referee_link_monitor",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_referee_link_monitor")),
+        parameters=[
+            {
+                "enabled": ParameterValue(
+                    LaunchConfiguration("enable_referee_link_monitor"),
+                    value_type=bool,
+                ),
+                "game_status_topic": "/radar/referee/game_status",
+                "warn_after_sec": ParameterValue(
+                    LaunchConfiguration("referee_link_warn_after_sec"),
+                    value_type=float,
+                ),
+            }
+        ],
+    )
+
     map_pcd_publisher = Node(
         package="pcl_ros",
         executable="pcd_to_pointcloud",
@@ -481,13 +514,57 @@ def _build_launch(context):
         ],
     )
 
+    referee_rosbag_recorder_node = Node(
+        package="radar_bringup",
+        executable="referee_rosbag_recorder.py",
+        name="referee_rosbag_recorder",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("record_rosbag")),
+        parameters=[
+            {
+                "enabled": ParameterValue(LaunchConfiguration("record_rosbag"), value_type=bool),
+                "output_dir": LaunchConfiguration("rosbag_output_dir"),
+                "record_duration_sec": ParameterValue(
+                    LaunchConfiguration("rosbag_record_duration_sec"),
+                    value_type=float,
+                ),
+                "game_status_topic": "/radar/referee/game_status",
+                "start_game_progress": 4,
+                "auto_start_after_sec": ParameterValue(
+                    LaunchConfiguration("rosbag_auto_start_after_sec"),
+                    value_type=float,
+                ),
+                "record_topics": [
+                    "/camera_image",
+                    "/livox/lidar",
+                    "/radar/referee/game_status",
+                    "/radar/referee/robot_identity",
+                    "/radar/referee/enemy_hp",
+                    "/radar/referee/mark_progress",
+                    "/radar/referee/radar_decision_sync",
+                ],
+            }
+        ],
+    )
+
     normal_flow_actions = [
         LogInfo(msg=f"rosbag_radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"rosbag file: {rosbag_file}"),
+        LogInfo(msg=f"decision params file: {decision_params_file}"),
+        LogInfo(msg=f"referee rx_mode={referee_rx_mode} tx_mode={referee_tx_mode}"),
+        LogInfo(msg=f"referee serial device={referee_serial_device} baudrate={referee_serial_baudrate}"),
+        LogInfo(msg=f"gimbal serial device={gimbal_serial_device} (not used unless gimbal bridge is enabled in this launch)"),
+        LogInfo(
+            msg=["replay rosbag recorder enabled, output_dir=", LaunchConfiguration("rosbag_output_dir")],
+            condition=IfCondition(LaunchConfiguration("record_rosbag")),
+        ),
         replay_container,
         shm_pdu_broadcast_node,
+        radar_decision_sync_shm_node,
+        referee_link_monitor_node,
         radar_decision_comm_container,
         map_pcd_publisher,
+        referee_rosbag_recorder_node,
         track_status_window_node,
         rviz_node,
     ]
@@ -590,11 +667,26 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            # ==================== MOST IMPORTANT MANUAL PARAMETERS ====================
+            # 1) our_color: fallback team color when referee identity is unavailable.
+            # 2) referee_serial_device: referee system serial port.
+            # 3) gimbal_serial_device: gimbal serial port, kept here for consistent launch CLI.
             DeclareLaunchArgument(
                 "our_color",
                 default_value="blue",
-                description="our team color: red or blue",
+                description="IMPORTANT: fallback team color when referee identity is unavailable: red or blue",
             ),
+            DeclareLaunchArgument(
+                "referee_serial_device",
+                default_value="/dev/ttyUSB0",
+                description="IMPORTANT: referee system serial device path for bridge mode",
+            ),
+            DeclareLaunchArgument(
+                "gimbal_serial_device",
+                default_value="/dev/ttyACM0",
+                description="IMPORTANT: gimbal serial device path; replay launch keeps this for consistent CLI",
+            ),
+            # ==================== Rosbag Replay Inputs ====================
             DeclareLaunchArgument(
                 "rosbag_file",
                 default_value="/home/user/DATA/rosbag.db3",
@@ -631,11 +723,6 @@ def generate_launch_description():
                 description="referee_serial_tx mode during replay",
             ),
             DeclareLaunchArgument(
-                "referee_serial_device",
-                default_value="/dev/ttyUSB0",
-                description="referee serial device path for bridge mode",
-            ),
-            DeclareLaunchArgument(
                 "referee_serial_baudrate",
                 default_value="115200",
                 description="referee serial baudrate for bridge mode",
@@ -646,6 +733,16 @@ def generate_launch_description():
                 description="publish raw referee serial RX bytes to /radar/debug/referee_raw_bytes",
             ),
             DeclareLaunchArgument(
+                "enable_referee_link_monitor",
+                default_value="true",
+                description="monitor referee game_status reception after replay launch startup",
+            ),
+            DeclareLaunchArgument(
+                "referee_link_warn_after_sec",
+                default_value="3.0",
+                description="warn if no referee game_status message is received within this many seconds",
+            ),
+            DeclareLaunchArgument(
                 "enable_pdu_bridge",
                 default_value="true",
                 description="start shared-memory PDU bridge during replay",
@@ -654,6 +751,33 @@ def generate_launch_description():
                 "pdu_poll_period_ms",
                 default_value="2",
                 description="shared-memory PDU poll period in milliseconds",
+            ),
+            DeclareLaunchArgument(
+                "record_rosbag",
+                default_value="false",
+                description=(
+                    "arm replay rosbag recording; starts when referee game_progress "
+                    "enters 4 or when rosbag_auto_start_after_sec expires"
+                ),
+            ),
+            DeclareLaunchArgument(
+                "rosbag_output_dir",
+                default_value="/home/user/DATA/RADAR_ROSBAG",
+                description="base directory for replay rosbag recordings",
+            ),
+            DeclareLaunchArgument(
+                "rosbag_record_duration_sec",
+                default_value="420.0",
+                description="replay rosbag recording duration in seconds",
+            ),
+            DeclareLaunchArgument(
+                "rosbag_auto_start_after_sec",
+                default_value="60.0",
+                description=(
+                    "automatically start replay rosbag recording this many seconds "
+                    "after the recorder is armed if referee game_progress has not "
+                    "triggered it; <=0 disables auto-start"
+                ),
             ),
             DeclareLaunchArgument(
                 "calib_first",

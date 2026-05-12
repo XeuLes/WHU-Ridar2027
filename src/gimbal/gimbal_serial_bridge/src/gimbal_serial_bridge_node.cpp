@@ -31,6 +31,9 @@ using namespace std::chrono_literals;
 
 namespace {
 
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+
 struct QuatWXYZ {
     double w{1.0};
     double x{0.0};
@@ -406,8 +409,8 @@ private:
         }
 
         RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 3000,
-                             "Failed to open serial. last_error: %s",
-                             last_err.c_str());
+                             "%sFailed to open serial. last_error: %s%s",
+                             kRedBold, last_err.c_str(), kColorReset);
         return false;
     }
 

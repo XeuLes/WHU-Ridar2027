@@ -7,6 +7,11 @@
 
 namespace hik_camera_ros2_driver {
 
+namespace {
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+}
+
 class ImageEnhancerNode : public rclcpp::Node {
 public:
     ImageEnhancerNode() : Node("image_enhancer_node")
@@ -150,7 +155,8 @@ private:
             const cv::Mat& image = cv_ptr->image;
 
             if (image.empty()) {
-                RCLCPP_WARN(this->get_logger(), "Received empty image");
+                RCLCPP_WARN(this->get_logger(), "%sReceived empty image%s",
+                            kRedBold, kColorReset);
                 return;
             }
 
@@ -178,12 +184,12 @@ private:
             }
         }
         catch (cv_bridge::Exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "cv_bridge exception: %s",
-                         e.what());
+            RCLCPP_ERROR(this->get_logger(), "%scv_bridge exception: %s%s",
+                         kRedBold, e.what(), kColorReset);
         }
         catch (cv::Exception& e) {
-            RCLCPP_ERROR(this->get_logger(), "OpenCV exception: %s",
-                         e.what());
+            RCLCPP_ERROR(this->get_logger(), "%sOpenCV exception: %s%s",
+                         kRedBold, e.what(), kColorReset);
         }
     }
 

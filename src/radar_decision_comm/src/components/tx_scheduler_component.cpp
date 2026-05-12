@@ -275,13 +275,14 @@ private:
     map_state_.has_last = true;
     map_state_.has_pending = false;
 
-    static int log_count = 0;
-    if ((log_count++ % 10) == 0) {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "TxScheduler published MAP robots=%zu",
-        map_state_.last_msg.robots.size());
-    }
+    // Noisy success log; WARN/ERROR paths remain visible.
+    // static int log_count = 0;
+    // if ((log_count++ % 10) == 0) {
+    //   RCLCPP_INFO(
+    //     this->get_logger(),
+    //     "TxScheduler published MAP robots=%zu",
+    //     map_state_.last_msg.robots.size());
+    // }
   }
 
   void flush_interactions(const TimePoint & now)
@@ -303,16 +304,17 @@ private:
       state.has_last = true;
       state.has_pending = false;
 
-      static int log_count = 0;
-      if ((log_count++ % 10) == 0) {
-        RCLCPP_INFO(
-          this->get_logger(),
-          "TxScheduler published INTERACTION bucket=%s data_cmd_id=0x%04x receiver=%u bytes=%zu",
-          kv.first.c_str(),
-          state.last_msg.data_cmd_id,
-          state.last_msg.receiver_id,
-          state.last_msg.user_data.size());
-      }
+      // Noisy success log; WARN/ERROR paths remain visible.
+      // static int log_count = 0;
+      // if ((log_count++ % 10) == 0) {
+      //   RCLCPP_INFO(
+      //     this->get_logger(),
+      //     "TxScheduler published INTERACTION bucket=%s data_cmd_id=0x%04x receiver=%u bytes=%zu",
+      //     kv.first.c_str(),
+      //     state.last_msg.data_cmd_id,
+      //     state.last_msg.receiver_id,
+      //     state.last_msg.user_data.size());
+      // }
     }
   }
 
@@ -333,16 +335,17 @@ private:
     radar_cmd_state_.has_last = true;
     radar_cmd_state_.has_pending = false;
 
-    static int log_count = 0;
-    if ((log_count++ % 10) == 0) {
-      RCLCPP_INFO(
-        this->get_logger(),
-        "TxScheduler published RADAR_CMD type=%u value=%u radar_cmd=%u password_cmd=%u",
-        radar_cmd_state_.last_msg.command_type,
-        radar_cmd_state_.last_msg.command_value,
-        radar_cmd_state_.last_msg.radar_cmd,
-        radar_cmd_state_.last_msg.password_cmd);
-    }
+    // Noisy success log; WARN/ERROR paths remain visible.
+    // static int log_count = 0;
+    // if ((log_count++ % 10) == 0) {
+    //   RCLCPP_INFO(
+    //     this->get_logger(),
+    //     "TxScheduler published RADAR_CMD type=%u value=%u radar_cmd=%u password_cmd=%u",
+    //     radar_cmd_state_.last_msg.command_type,
+    //     radar_cmd_state_.last_msg.command_value,
+    //     radar_cmd_state_.last_msg.radar_cmd,
+    //     radar_cmd_state_.last_msg.password_cmd);
+    // }
   }
 
   bool enabled_{true};

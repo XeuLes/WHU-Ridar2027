@@ -319,7 +319,8 @@ public:
             return false;
         }
 
-        engine_->print();
+        // Noisy TensorRT tensor dump; re-enable only when debugging UAV engine bindings.
+        // engine_->print();
 
         int num_bindings = engine_->num_bindings();
         for (int ib = 0; ib < num_bindings; ++ib) {

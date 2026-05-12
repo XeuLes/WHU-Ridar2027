@@ -34,6 +34,11 @@
 #include <Eigen/Dense>
 #include <Eigen/Geometry>
 
+namespace {
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
+}
+
 namespace tdt_radar {
 
 struct Grid {
@@ -92,10 +97,10 @@ public:
         this->declare_parameter<double>("downsample_leaf_size", 0.1);
 
         // ROI
-        this->declare_parameter<double>("roi_min_x", 5.0);
+        this->declare_parameter<double>("roi_min_x", 0.0);
         this->declare_parameter<double>("roi_max_x", 30.0);
-        this->declare_parameter<double>("roi_min_y", -6.0);
-        this->declare_parameter<double>("roi_max_y", 12.0);
+        this->declare_parameter<double>("roi_min_y", -5.0);
+        this->declare_parameter<double>("roi_max_y", 8.0);
         this->declare_parameter<double>("roi_max_z", 1.5);
 
         // TF 稳定播发频率
@@ -159,7 +164,8 @@ public:
         raw_target_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
         target_cloud_.reset(new pcl::PointCloud<pcl::PointXYZ>());
         if (pcl::io::loadPCDFile(target_pcd_file, *raw_target_cloud_)) {
-            RCLCPP_ERROR(this->get_logger(), "无法加载地图: %s", target_pcd_file.c_str());
+            RCLCPP_ERROR(this->get_logger(), "%s无法加载地图: %s%s",
+                         kRedBold, target_pcd_file.c_str(), kColorReset);
             return;
         }
         *target_cloud_ = *raw_target_cloud_;
@@ -179,13 +185,14 @@ public:
             init_ok = buildInitialTransformOnline();
         } else {
             RCLCPP_ERROR(this->get_logger(),
-                         "initial_pose_mode 必须是 'offline' 或 'online'，当前: %s",
-                         initial_pose_mode_.c_str());
+                         "%sinitial_pose_mode 必须是 'offline' 或 'online'，当前: %s%s",
+                         kRedBold, initial_pose_mode_.c_str(), kColorReset);
             return;
         }
 
         if (!init_ok) {
-            RCLCPP_ERROR(this->get_logger(), "初始位姿构建失败，节点退出。");
+            RCLCPP_ERROR(this->get_logger(), "%s初始位姿构建失败，节点退出。%s",
+                         kRedBold, kColorReset);
             return;
         }
 
@@ -427,14 +434,15 @@ private:
         this->get_parameter("camera_extrinsic_yaml", camera_extrinsic_yaml);
 
         if (camera_extrinsic_yaml.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "camera_extrinsic_yaml 为空");
+            RCLCPP_ERROR(this->get_logger(), "%scamera_extrinsic_yaml 为空%s",
+                         kRedBold, kColorReset);
             return false;
         }
 
         cv::FileStorage fs(camera_extrinsic_yaml, cv::FileStorage::READ);
         if (!fs.isOpened()) {
-            RCLCPP_ERROR(this->get_logger(), "无法打开 camera_extrinsic_yaml: %s",
-                         camera_extrinsic_yaml.c_str());
+            RCLCPP_ERROR(this->get_logger(), "%s无法打开 camera_extrinsic_yaml: %s%s",
+                         kRedBold, camera_extrinsic_yaml.c_str(), kColorReset);
             return false;
         }
 
@@ -445,7 +453,8 @@ private:
 
         if (rvec_cv.empty() || tvec_cv.empty()) {
             RCLCPP_ERROR(this->get_logger(),
-                         "camera_extrinsic_yaml 中缺少 world_rvec / world_tvec");
+                         "%scamera_extrinsic_yaml 中缺少 world_rvec / world_tvec%s",
+                         kRedBold, kColorReset);
             return false;
         }
 
@@ -471,14 +480,15 @@ private:
         this->get_parameter("camera_to_lidar_yaml", camera_to_lidar_yaml);
 
         if (camera_to_lidar_yaml.empty()) {
-            RCLCPP_ERROR(this->get_logger(), "camera_to_lidar_yaml 为空");
+            RCLCPP_ERROR(this->get_logger(), "%scamera_to_lidar_yaml 为空%s",
+                         kRedBold, kColorReset);
             return false;
         }
 
         cv::FileStorage fs(camera_to_lidar_yaml, cv::FileStorage::READ);
         if (!fs.isOpened()) {
-            RCLCPP_ERROR(this->get_logger(), "无法打开 camera_to_lidar_yaml: %s",
-                         camera_to_lidar_yaml.c_str());
+            RCLCPP_ERROR(this->get_logger(), "%s无法打开 camera_to_lidar_yaml: %s%s",
+                         kRedBold, camera_to_lidar_yaml.c_str(), kColorReset);
             return false;
         }
 

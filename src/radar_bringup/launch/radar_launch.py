@@ -58,6 +58,7 @@ def _build_launch(context):
     referee_tx_mode = LaunchConfiguration("referee_tx_mode").perform(context)
     referee_serial_device = LaunchConfiguration("referee_serial_device").perform(context)
     referee_serial_baudrate = int(LaunchConfiguration("referee_serial_baudrate").perform(context))
+    gimbal_serial_device = LaunchConfiguration("gimbal_serial_device").perform(context)
     referee_publish_raw_debug = ParameterValue(
         LaunchConfiguration("referee_publish_raw_debug"),
         value_type=bool,
@@ -200,14 +201,14 @@ def _build_launch(context):
                 "gicp_max_iterations": 100,
                 "gicp_transformation_epsilon": 1e-8,
                 "gicp_euclidean_fitness_epsilon": 1e-6,
-                "gicp_success_fitness_threshold": 0.12,
+                "gicp_success_fitness_threshold": 0.08,
                 "accumulate_time": 30,
                 "grid_size_degrees": 0.05,
                 "downsample_leaf_size": 0.2,
                 "roi_min_x": 0.0,
                 "roi_max_x": 32.0,
-                "roi_min_y": -8.0,
-                "roi_max_y": 10.0,
+                "roi_min_y": -6.0,
+                "roi_max_y": 8.0,
                 "roi_max_z": 1.5,
                 "tf_publish_rate_hz": 20.0,
                 "gicp_worker_rate_hz": 20.0,
@@ -511,7 +512,13 @@ def _build_launch(context):
         executable="gimbal_serial_bridge_node",
         name="gimbal_serial_bridge",
         output="screen",
-        parameters=[gimbal_bridge_cfg],
+        parameters=[
+            gimbal_bridge_cfg,
+            {
+                "serial_ports": [gimbal_serial_device],
+                "serial_port": gimbal_serial_device,
+            },
+        ],
     )
 
     livox_driver_node = Node(
@@ -580,6 +587,27 @@ def _build_launch(context):
         output="screen",
     )
 
+    referee_link_monitor_node = Node(
+        package="radar_bringup",
+        executable="referee_link_monitor.py",
+        name="referee_link_monitor",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("enable_referee_link_monitor")),
+        parameters=[
+            {
+                "enabled": ParameterValue(
+                    LaunchConfiguration("enable_referee_link_monitor"),
+                    value_type=bool,
+                ),
+                "game_status_topic": "/radar/referee/game_status",
+                "warn_after_sec": ParameterValue(
+                    LaunchConfiguration("referee_link_warn_after_sec"),
+                    value_type=float,
+                ),
+            }
+        ],
+    )
+
     rviz_node = Node(
         package="rviz2",
         executable="rviz2",
@@ -628,6 +656,10 @@ def _build_launch(context):
                 ),
                 "game_status_topic": "/radar/referee/game_status",
                 "start_game_progress": 4,
+                "auto_start_after_sec": ParameterValue(
+                    LaunchConfiguration("rosbag_auto_start_after_sec"),
+                    value_type=float,
+                ),
                 "record_topics": [
                     "/camera0/image",
                     "/camera0/camera_info",
@@ -660,6 +692,7 @@ def _build_launch(context):
         LogInfo(msg=f"decision params file: {decision_params_file}"),
         LogInfo(msg=f"referee rx_mode={referee_rx_mode} tx_mode={referee_tx_mode}"),
         LogInfo(msg=f"referee serial device={referee_serial_device} baudrate={referee_serial_baudrate}"),
+        LogInfo(msg=f"gimbal serial device={gimbal_serial_device}"),
         LogInfo(
             msg=["match rosbag recorder enabled, output_dir=", LaunchConfiguration("rosbag_output_dir")],
             condition=IfCondition(LaunchConfiguration("record_rosbag")),
@@ -671,6 +704,7 @@ def _build_launch(context):
         cloud_integrator_node,
         shm_pdu_broadcast_node,
         radar_decision_sync_shm_node,
+        referee_link_monitor_node,
         radar_hot_path_container,
         radar_debug_container,
         radar_decision_comm_container,
@@ -786,11 +820,26 @@ def generate_launch_description():
 
     return LaunchDescription(
         [
+            # ==================== MOST IMPORTANT MANUAL PARAMETERS ====================
+            # 1) our_color: fallback team color when referee identity is unavailable.
+            # 2) referee_serial_device: referee system serial port.
+            # 3) gimbal_serial_device: gimbal serial port.
             DeclareLaunchArgument(
                 "our_color",
-                default_value="blue",
-                description="our team color: red or blue",
+                default_value="red",
+                description="IMPORTANT: fallback team color when referee identity is unavailable: red or blue",
             ),
+            DeclareLaunchArgument(
+                "referee_serial_device",
+                default_value="/dev/ttyUSB0",
+                description="IMPORTANT: referee system serial device path, distinct from gimbal serial device",
+            ),
+            DeclareLaunchArgument(
+                "gimbal_serial_device",
+                default_value="/dev/ttyACM0",
+                description="IMPORTANT: gimbal serial device path",
+            ),
+            # ==================== Referee Communication ====================
             DeclareLaunchArgument(
                 "referee_rx_mode",
                 default_value="serial",
@@ -802,11 +851,6 @@ def generate_launch_description():
                 description="referee_serial_tx mode: topic/serial",
             ),
             DeclareLaunchArgument(
-                "referee_serial_device",
-                default_value="/dev/ttyUSB1",
-                description="referee serial device path, distinct from gimbal serial device",
-            ),
-            DeclareLaunchArgument(
                 "referee_serial_baudrate",
                 default_value="115200",
                 description="referee serial baudrate",
@@ -815,6 +859,16 @@ def generate_launch_description():
                 "referee_publish_raw_debug",
                 default_value="false",
                 description="publish raw referee serial RX bytes to /radar/debug/referee_raw_bytes",
+            ),
+            DeclareLaunchArgument(
+                "enable_referee_link_monitor",
+                default_value="true",
+                description="monitor referee game_status reception after launch startup",
+            ),
+            DeclareLaunchArgument(
+                "referee_link_warn_after_sec",
+                default_value="3.0",
+                description="warn if no referee game_status message is received within this many seconds",
             ),
             DeclareLaunchArgument(
                 "publish_detect_debug_image",
@@ -855,8 +909,17 @@ def generate_launch_description():
                 description="match-triggered rosbag recording duration in seconds",
             ),
             DeclareLaunchArgument(
+                "rosbag_auto_start_after_sec",
+                default_value="60.0",
+                description=(
+                    "automatically start rosbag recording this many seconds after "
+                    "the recorder is armed if referee game_progress has not triggered it; "
+                    "<=0 disables auto-start"
+                ),
+            ),
+            DeclareLaunchArgument(
                 "enable_calibration",
-                default_value="true",
+                default_value="false",
                 description="whether to run pnp_calib_new.launch.py before starting the normal radar flow",
             ),
             DeclareLaunchArgument(

@@ -20,6 +20,8 @@ namespace auto_aim_fast
 
 static constexpr float kRad2Deg = 57.29577951308232f;
 static constexpr float kDeg2Rad = 0.017453292519943295f;
+static constexpr const char* kRedBold = "\033[1;31m";
+static constexpr const char* kColorReset = "\033[0m";
 
 static cv::Mat makeK(double fx, double fy, double cx, double cy)
 {
@@ -534,8 +536,8 @@ bool AutoAimNode::isGimbalReady(const rclcpp::Time & now, double * age_s)
     updateImageSubscriptions(false);
     RCLCPP_ERROR(
       this->get_logger(),
-      "Gimbal feedback timed out after %.3fs; auto_aim inference is paused.",
-      age);
+      "%sGimbal feedback timed out after %.3fs; auto_aim inference is paused.%s",
+      kRedBold, age, kColorReset);
   }
 
   return false;
@@ -883,23 +885,25 @@ void AutoAimNode::onReport()
 {
   double gimbal_age_s = 0.0;
   if (!isGimbalReady(this->get_clock()->now(), &gimbal_age_s)) {
-    RCLCPP_INFO(
-      this->get_logger(),
-      "state=WAIT_GIMBAL skipped_frames=%lu gimbal_age=%.3f timeout=%.3f",
-      static_cast<unsigned long>(gimbal_wait_skipped_frames_.load(std::memory_order_relaxed)),
-      std::isfinite(gimbal_age_s) ? gimbal_age_s : -1.0,
-      gimbal_max_msg_age_s_);
+    // Noisy periodic status; keep disabled unless debugging gimbal freshness.
+    // RCLCPP_INFO(
+    //   this->get_logger(),
+    //   "state=WAIT_GIMBAL skipped_frames=%lu gimbal_age=%.3f timeout=%.3f",
+    //   static_cast<unsigned long>(gimbal_wait_skipped_frames_.load(std::memory_order_relaxed)),
+    //   std::isfinite(gimbal_age_s) ? gimbal_age_s : -1.0,
+    //   gimbal_max_msg_age_s_);
     return;
   }
 
-  const auto out = pipeline_.getLatestOutput();
-  RCLCPP_INFO(this->get_logger(),
-              "state=%s pairs=%d->%d roi_used=%d skipped_wait=%lu",
-              out.state.c_str(),
-              out.budget.pairs_in,
-              out.budget.pairs_used,
-              out.roi_dbg.used ? 1 : 0,
-              static_cast<unsigned long>(gimbal_wait_skipped_frames_.load(std::memory_order_relaxed)));
+  // Noisy periodic status; keep disabled unless debugging auto aim throughput.
+  // const auto out = pipeline_.getLatestOutput();
+  // RCLCPP_INFO(this->get_logger(),
+  //             "state=%s pairs=%d->%d roi_used=%d skipped_wait=%lu",
+  //             out.state.c_str(),
+  //             out.budget.pairs_in,
+  //             out.budget.pairs_used,
+  //             out.roi_dbg.used ? 1 : 0,
+  //             static_cast<unsigned long>(gimbal_wait_skipped_frames_.load(std::memory_order_relaxed)));
 }
 
 }  // namespace auto_aim_fast

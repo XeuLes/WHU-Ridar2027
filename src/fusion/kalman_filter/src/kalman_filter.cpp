@@ -935,30 +935,33 @@ void KalmanFilter::publish_tracks(const rclcpp::Time& time,
     output.header.stamp = detect_msg.header.stamp;
     pub_->publish(output);
 
-    bool has_kalman_data = false;
-    std::string kalman_log = "[KalmanFilter发布] /kalman_detect: ";
-    for (int i = 0; i < 7; i++) {
-        if (detect_msg.blue_x[i] != 0 || detect_msg.blue_y[i] != 0) {
-            kalman_log += "B" + std::to_string(i + 1) + "(";
-            kalman_log +=
-                std::to_string(static_cast<int>(detect_msg.blue_x[i])) + ",";
-            kalman_log +=
-                std::to_string(static_cast<int>(detect_msg.blue_y[i])) + ") ";
-            has_kalman_data = true;
+    constexpr bool kLogKalmanPublishSummary = false;
+    if (kLogKalmanPublishSummary) {
+        bool has_kalman_data = false;
+        std::string kalman_log = "[KalmanFilter发布] /kalman_detect: ";
+        for (int i = 0; i < 7; i++) {
+            if (detect_msg.blue_x[i] != 0 || detect_msg.blue_y[i] != 0) {
+                kalman_log += "B" + std::to_string(i + 1) + "(";
+                kalman_log +=
+                    std::to_string(static_cast<int>(detect_msg.blue_x[i])) + ",";
+                kalman_log +=
+                    std::to_string(static_cast<int>(detect_msg.blue_y[i])) + ") ";
+                has_kalman_data = true;
+            }
+            if (detect_msg.red_x[i] != 0 || detect_msg.red_y[i] != 0) {
+                kalman_log += "R" + std::to_string(i + 1) + "(";
+                kalman_log +=
+                    std::to_string(static_cast<int>(detect_msg.red_x[i])) + ",";
+                kalman_log +=
+                    std::to_string(static_cast<int>(detect_msg.red_y[i])) + ") ";
+                has_kalman_data = true;
+            }
         }
-        if (detect_msg.red_x[i] != 0 || detect_msg.red_y[i] != 0) {
-            kalman_log += "R" + std::to_string(i + 1) + "(";
-            kalman_log +=
-                std::to_string(static_cast<int>(detect_msg.red_x[i])) + ",";
-            kalman_log +=
-                std::to_string(static_cast<int>(detect_msg.red_y[i])) + ") ";
-            has_kalman_data = true;
-        }
-    }
 
-    if (has_kalman_data) {
-        RCLCPP_WARN(this->get_logger(), "%s [active=%zu published=%zu]",
-                    kalman_log.c_str(), active_count, published_count);
+        if (has_kalman_data) {
+            RCLCPP_WARN(this->get_logger(), "%s [active=%zu published=%zu]",
+                        kalman_log.c_str(), active_count, published_count);
+        }
     }
 
     radar_detect_pub_->publish(detect_msg);

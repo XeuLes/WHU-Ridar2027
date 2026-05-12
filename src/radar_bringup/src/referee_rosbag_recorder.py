@@ -13,6 +13,10 @@ from rclpy.node import Node
 from radar_decision_comm.msg import RefereeGameState
 
 
+RED_BOLD = "\033[1;31m"
+RESET = "\033[0m"
+
+
 def _as_bool(value):
     if isinstance(value, bool):
         return value
@@ -38,6 +42,9 @@ class RefereeRosbagRecorder(Node):
         self.start_game_progress = int(
             self.declare_parameter("start_game_progress", 4).value
         )
+        self.auto_start_after_sec = float(
+            self.declare_parameter("auto_start_after_sec", 60.0).value
+        )
         self.record_topics = [
             str(topic)
             for topic in self.declare_parameter(
@@ -55,6 +62,7 @@ class RefereeRosbagRecorder(Node):
         self._record_started = False
         self._stop_time = None
         self._last_game_progress = None
+        self._armed_time = time.monotonic()
 
         self._game_sub = self.create_subscription(
             RefereeGameState,
@@ -70,10 +78,11 @@ class RefereeRosbagRecorder(Node):
 
         self.get_logger().info(
             "referee rosbag recorder armed: topic=%s start_game_progress=%d "
-            "duration=%.1fs output_dir=%s record_topics=%s"
+            "auto_start_after=%.1fs duration=%.1fs output_dir=%s record_topics=%s"
             % (
                 self.game_status_topic,
                 self.start_game_progress,
+                self.auto_start_after_sec,
                 self.record_duration_sec,
                 self.output_dir,
                 ", ".join(self.record_topics),
@@ -92,12 +101,17 @@ class RefereeRosbagRecorder(Node):
         self._last_game_progress = msg.game_progress
 
         if should_start:
-            self._start_recording()
+            self._start_recording(
+                "referee game_progress reached %d" % self.start_game_progress
+            )
 
-    def _start_recording(self):
+    def _start_recording(self, reason):
         ros2_executable = shutil.which("ros2")
         if ros2_executable is None:
-            self.get_logger().error("cannot start rosbag recording: ros2 executable not found")
+            self.get_logger().error(
+                "%scannot start rosbag recording: ros2 executable not found%s"
+                % (RED_BOLD, RESET)
+            )
             self._record_started = True
             return
 
@@ -105,7 +119,8 @@ class RefereeRosbagRecorder(Node):
             os.makedirs(self.output_dir, exist_ok=True)
         except OSError as exc:
             self.get_logger().error(
-                "cannot create rosbag output dir %s: %s" % (self.output_dir, exc)
+                "%scannot create rosbag output dir %s: %s%s"
+                % (RED_BOLD, self.output_dir, exc, RESET)
             )
             self._record_started = True
             return
@@ -113,7 +128,10 @@ class RefereeRosbagRecorder(Node):
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         bag_path = os.path.join(self.output_dir, "radar_match_%s" % timestamp)
         if not self.record_topics:
-            self.get_logger().error("cannot start rosbag recording: record_topics is empty")
+            self.get_logger().error(
+                "%scannot start rosbag recording: record_topics is empty%s"
+                % (RED_BOLD, RESET)
+            )
             self._record_started = True
             return
 
@@ -125,18 +143,33 @@ class RefereeRosbagRecorder(Node):
                 preexec_fn=os.setsid,
             )
         except OSError as exc:
-            self.get_logger().error("failed to start rosbag recording: %s" % exc)
+            self.get_logger().error(
+                "%sfailed to start rosbag recording: %s%s"
+                % (RED_BOLD, exc, RESET)
+            )
             self._record_started = True
             return
 
         self._record_started = True
         self._stop_time = time.monotonic() + self.record_duration_sec
         self.get_logger().info(
-            "rosbag recording started: %s, will stop after %.1f seconds"
-            % (bag_path, self.record_duration_sec)
+            "rosbag recording started by %s: %s, will stop after %.1f seconds"
+            % (reason, bag_path, self.record_duration_sec)
         )
 
     def _on_timer(self):
+        if (
+            self.enabled
+            and not self._record_started
+            and self.auto_start_after_sec > 0.0
+            and time.monotonic() - self._armed_time >= self.auto_start_after_sec
+        ):
+            self._start_recording(
+                "auto-start timeout %.1fs without referee trigger"
+                % self.auto_start_after_sec
+            )
+            return
+
         if self._record_process is None:
             return
 
@@ -164,7 +197,10 @@ class RefereeRosbagRecorder(Node):
         except ProcessLookupError:
             return
         except OSError as exc:
-            self.get_logger().warning("failed to send SIGINT to rosbag recorder: %s" % exc)
+            self.get_logger().warning(
+                "%sfailed to send SIGINT to rosbag recorder: %s%s"
+                % (RED_BOLD, exc, RESET)
+            )
             return
 
         try:
@@ -174,7 +210,10 @@ class RefereeRosbagRecorder(Node):
             try:
                 os.killpg(os.getpgid(process.pid), signal.SIGTERM)
             except OSError as exc:
-                self.get_logger().warning("failed to terminate rosbag recorder: %s" % exc)
+                self.get_logger().warning(
+                    "%sfailed to terminate rosbag recorder: %s%s"
+                    % (RED_BOLD, exc, RESET)
+                )
 
     def destroy_node(self):
         self._stop_recording("node shutdown")

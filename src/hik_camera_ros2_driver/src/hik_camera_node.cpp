@@ -36,6 +36,8 @@
 namespace hik_camera_ros2_driver {
 
 constexpr int kRingSize = 8;
+constexpr const char* kRedBold = "\033[1;31m";
+constexpr const char* kColorReset = "\033[0m";
 
 [[maybe_unused]] static std::string cstr_to_string(const char* s)
 {
@@ -445,16 +447,17 @@ private:
             if (ret == MV_OK) {
                 return true;
             }
-            RCLCPP_WARN(this->get_logger(),
-                        "[%s] StartGrabbing retry %d/%d failed ret=%x",
-                        cam.prefix.c_str(), i + 1, start_retry_count_, ret);
+                RCLCPP_WARN(this->get_logger(),
+                            "%s[%s] StartGrabbing retry %d/%d failed ret=%x%s",
+                            kRedBold, cam.prefix.c_str(), i + 1, start_retry_count_, ret,
+                            kColorReset);
             std::this_thread::sleep_for(
                 std::chrono::milliseconds(start_retry_interval_ms_));
         }
 
-        RCLCPP_ERROR(this->get_logger(),
-                     "[%s] StartGrabbing failed ret=%x",
-                     cam.prefix.c_str(), ret);
+            RCLCPP_ERROR(this->get_logger(),
+                     "%s[%s] StartGrabbing failed ret=%x%s",
+                     kRedBold, cam.prefix.c_str(), ret, kColorReset);
         return false;
     }
 
@@ -580,16 +583,18 @@ private:
         int ret = MV_CC_EnumDevices(MV_USB_DEVICE | MV_GIGE_DEVICE,
                                     &device_list);
         if (ret != MV_OK) {
-            RCLCPP_WARN(this->get_logger(),
-                        "[%s] Failed to enumerate cameras, ret=%x. Will retry.",
-                        cam.prefix.c_str(), ret);
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 5000,
+                "%s[%s] Failed to enumerate cameras, ret=%x. Will retry.%s",
+                kRedBold, cam.prefix.c_str(), ret, kColorReset);
             return false;
         }
 
         if (device_list.nDeviceNum == 0) {
-            RCLCPP_WARN(this->get_logger(),
-                        "[%s] No Hik camera found. Will retry.",
-                        cam.prefix.c_str());
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 5000,
+                "%s[%s] No Hik camera found. Will retry.%s",
+                kRedBold, cam.prefix.c_str(), kColorReset);
             return false;
         }
 
@@ -598,15 +603,17 @@ private:
             selectDeviceForCamera(cam, device_list, selected_idx);
         if (!dev) {
             if (cam.match_by_serial) {
-                RCLCPP_WARN(this->get_logger(),
-                            "[%s] Requested serial '%s' not found among %u device(s). Will retry.",
-                            cam.prefix.c_str(), cam.serial.c_str(),
-                            device_list.nDeviceNum);
+                RCLCPP_WARN_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 5000,
+                    "%s[%s] Requested serial '%s' not found among %u device(s). Will retry.%s",
+                    kRedBold, cam.prefix.c_str(), cam.serial.c_str(),
+                    device_list.nDeviceNum, kColorReset);
             } else {
-                RCLCPP_WARN(this->get_logger(),
-                            "[%s] Device index %d not available among %u device(s). Will retry.",
-                            cam.prefix.c_str(), cam.index,
-                            device_list.nDeviceNum);
+                RCLCPP_WARN_THROTTLE(
+                    this->get_logger(), *this->get_clock(), 5000,
+                    "%s[%s] Device index %d not available among %u device(s). Will retry.%s",
+                    kRedBold, cam.prefix.c_str(), cam.index,
+                    device_list.nDeviceNum, kColorReset);
             }
             return false;
         }
@@ -618,9 +625,10 @@ private:
         ret = MV_CC_CreateHandle(&cam.handle,
                                  const_cast<MV_CC_DEVICE_INFO*>(dev));
         if (ret != MV_OK || cam.handle == nullptr) {
-            RCLCPP_WARN(this->get_logger(),
-                        "[%s] Failed to create camera handle, ret=%x. Will retry.",
-                        cam.prefix.c_str(), ret);
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 5000,
+                "%s[%s] Failed to create camera handle, ret=%x. Will retry.%s",
+                kRedBold, cam.prefix.c_str(), ret, kColorReset);
             cam.handle = nullptr;
             return false;
         }
@@ -632,18 +640,20 @@ private:
 
         ret = MV_CC_OpenDevice(cam.handle);
         if (ret != MV_OK) {
-            RCLCPP_WARN(this->get_logger(),
-                        "[%s] Failed to open camera serial=%s, ret=%x. Will retry.",
-                        cam.prefix.c_str(), cam.serial.c_str(), ret);
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 5000,
+                "%s[%s] Failed to open camera serial=%s, ret=%x. Will retry.%s",
+                kRedBold, cam.prefix.c_str(), cam.serial.c_str(), ret, kColorReset);
             cleanup_on_failure();
             return false;
         }
 
         ret = MV_CC_GetImageInfo(cam.handle, &cam.img_info);
         if (ret != MV_OK) {
-            RCLCPP_WARN(this->get_logger(),
-                        "[%s] Failed to get camera image info, ret=%x. Will retry.",
-                        cam.prefix.c_str(), ret);
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 5000,
+                "%s[%s] Failed to get camera image info, ret=%x. Will retry.%s",
+                kRedBold, cam.prefix.c_str(), ret, kColorReset);
             cleanup_on_failure();
             return false;
         }
@@ -686,9 +696,10 @@ private:
             MV_CC_SetEnumValueByString(cam.handle, "PixelFormat",
                                        pixel_format.c_str());
         if (status != MV_OK) {
-            RCLCPP_WARN(this->get_logger(),
-                        "[%s] Failed to set PixelFormat=%s, status=%d. Will retry.",
-                        cam.prefix.c_str(), pixel_format.c_str(), status);
+            RCLCPP_WARN_THROTTLE(
+                this->get_logger(), *this->get_clock(), 5000,
+                "%s[%s] Failed to set PixelFormat=%s, status=%d. Will retry.%s",
+                kRedBold, cam.prefix.c_str(), pixel_format.c_str(), status, kColorReset);
             cleanup_on_failure();
             return false;
         }
@@ -920,8 +931,8 @@ private:
         const int cvt_ret = MV_CC_ConvertPixelType(cam.handle, &cam.convert_param);
         if (cvt_ret != MV_OK) {
             RCLCPP_WARN(this->get_logger(),
-                        "[%s] ConvertPixelType failed: [%x]",
-                        cam.prefix.c_str(), cvt_ret);
+                        "%s[%s] ConvertPixelType failed: [%x]%s",
+                        kRedBold, cam.prefix.c_str(), cvt_ret, kColorReset);
             return false;
         }
         applyCpuGamma(cam, slot);
