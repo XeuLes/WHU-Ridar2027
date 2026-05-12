@@ -98,9 +98,9 @@ public:
 
         // ROI
         this->declare_parameter<double>("roi_min_x", 0.0);
-        this->declare_parameter<double>("roi_max_x", 30.0);
-        this->declare_parameter<double>("roi_min_y", -5.0);
-        this->declare_parameter<double>("roi_max_y", 8.0);
+        this->declare_parameter<double>("roi_max_x", 29.0);
+        this->declare_parameter<double>("roi_min_y", -6.5);
+        this->declare_parameter<double>("roi_max_y", 8.5);
         this->declare_parameter<double>("roi_max_z", 1.5);
 
         // TF 稳定播发频率
@@ -881,9 +881,9 @@ private:
     double downsample_leaf_size_ = 0.2;
 
     double roi_min_x_{5.0};
-    double roi_max_x_{30.0};
-    double roi_min_y_{-10.0};
-    double roi_max_y_{8.0};
+    double roi_max_x_{29.0};
+    double roi_min_y_{-6.5};
+    double roi_max_y_{8.5};
     double roi_max_z_{1.5};
 
     std::map<std::pair<int, int>, Grid> grid_map_;

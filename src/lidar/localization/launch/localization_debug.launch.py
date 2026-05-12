@@ -107,9 +107,9 @@ def generate_launch_description():
     )
 
     declare_roi_min_x = DeclareLaunchArgument('roi_min_x', default_value='5.0')
-    declare_roi_max_x = DeclareLaunchArgument('roi_max_x', default_value='40.0')
-    declare_roi_min_y = DeclareLaunchArgument('roi_min_y', default_value='-10.0')
-    declare_roi_max_y = DeclareLaunchArgument('roi_max_y', default_value='8.0')
+    declare_roi_max_x = DeclareLaunchArgument('roi_max_x', default_value='29.0')
+    declare_roi_min_y = DeclareLaunchArgument('roi_min_y', default_value='-6.5')
+    declare_roi_max_y = DeclareLaunchArgument('roi_max_y', default_value='8.5')
     declare_roi_max_z = DeclareLaunchArgument('roi_max_z', default_value='1.5')
 
     declare_tf_publish_rate_hz = DeclareLaunchArgument(
