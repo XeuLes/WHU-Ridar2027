@@ -126,6 +126,11 @@ install(DIRECTORY config launch
   DESTINATION share/${PROJECT_NAME}
 )
 
+install(PROGRAMS
+  tools/radar_0121_debug_panel.py
+  DESTINATION lib/${PROJECT_NAME}
+)
+
 ament_export_include_directories(include)
 
 ament_package()
