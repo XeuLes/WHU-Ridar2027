@@ -61,7 +61,6 @@ class RefereeRosbagRecorder(Node):
         self._record_process = None
         self._record_started = False
         self._stop_time = None
-        self._last_game_progress = None
         self._armed_time = time.monotonic()
 
         self._game_sub = self.create_subscription(
@@ -91,16 +90,9 @@ class RefereeRosbagRecorder(Node):
 
     def _on_game_status(self, msg):
         if not self.enabled or self._record_started:
-            self._last_game_progress = msg.game_progress
             return
 
-        should_start = (
-            msg.game_progress == self.start_game_progress
-            and self._last_game_progress != self.start_game_progress
-        )
-        self._last_game_progress = msg.game_progress
-
-        if should_start:
+        if msg.game_progress == self.start_game_progress:
             self._start_recording(
                 "referee game_progress reached %d" % self.start_game_progress
             )
