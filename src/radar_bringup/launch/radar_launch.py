@@ -818,6 +818,7 @@ def generate_launch_description():
         bringup_share, "config", "out_matrix_RMUC2026.yaml"
     )
 
+    # WHU
     return LaunchDescription(
         [
             # ==================== MOST IMPORTANT MANUAL PARAMETERS ====================
@@ -969,7 +970,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "calib_min_points",
-                default_value="5",
+                default_value="7",
                 description="minimum selected point count before pnp_calib_node_new solves",
             ),
             OpaqueFunction(function=_build_launch),

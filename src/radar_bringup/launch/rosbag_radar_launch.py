@@ -714,12 +714,12 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "referee_rx_mode",
-                default_value="topic",
+                default_value="serial",
                 description="referee_serial_rx mode during replay",
             ),
             DeclareLaunchArgument(
                 "referee_tx_mode",
-                default_value="topic",
+                default_value="serial",
                 description="referee_serial_tx mode during replay",
             ),
             DeclareLaunchArgument(

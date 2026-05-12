@@ -2,6 +2,7 @@
 #define RADAR_DETECT_H
 
 #include <atomic>
+#include <chrono>
 #include <future>
 #include <memory>
 #include <mutex>
@@ -130,6 +131,7 @@ private:
     std::vector<cv::Point2f> uav_cluster_points_;
     rclcpp::Time uav_cluster_stamp_{0, 0, RCL_ROS_TIME};
     int uav_intersection_timeout_ms_{120};
+    std::chrono::steady_clock::time_point last_detect_time_log_{};
 };
 class Car {
 public:

@@ -1356,7 +1356,10 @@ for (const auto& b : result) {
     // 5.2 计算检测耗时
     std::chrono::steady_clock::time_point end = std::chrono::steady_clock::now();
     std::chrono::duration<double> time_used = std::chrono::duration_cast<std::chrono::duration<double>>(end - begin);
-    std::cout << "\033[1;34mDetect Time: " << time_used.count() * 1000 << "ms\033[0m" << std::endl;
+    if (end - last_detect_time_log_ >= std::chrono::seconds(1)) {
+        last_detect_time_log_ = end;
+        std::cout << "\033[1;34mDetect Time: " << time_used.count() * 1000 << "ms\033[0m" << std::endl;
+    }
 
     // 5.3 可视化调试输出
     cv::Mat final_img;
