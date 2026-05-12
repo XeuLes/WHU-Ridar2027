@@ -539,6 +539,36 @@ def _build_launch(context):
         ],
     )
 
+    referee_status_window_node = Node(
+        package="debug_map",
+        executable="referee_status_window_node",
+        name="referee_status_window_node",
+        output="screen",
+        parameters=[
+            {
+                "game_status_topic": "/radar/referee/game_status",
+                "identity_topic": "/radar/referee/robot_identity",
+                "enemy_hp_topic": "/radar/referee/enemy_hp",
+                "dart_status_topic": "/radar/referee/dart_status",
+                "mark_progress_topic": "/radar/referee/mark_progress",
+                "radar_sync_topic": "/radar/referee/radar_decision_sync",
+                "raw_rx_topic": "/radar/debug/referee_raw_bytes",
+                "raw_tx_topic": "/radar/debug/referee_tx_raw_bytes",
+                "pdu_all_topic": "/radar/all_pdu",
+                "pdu_info_topic": "/radar/info_pdu",
+                "pdu_jam_topic": "/radar/jam_pdu",
+                "wireless_hp_topic": "/radar/wireless/enemy_hp",
+                "wireless_ammo_topic": "/radar/wireless/enemy_ammo",
+                "wireless_macro_topic": "/radar/wireless/enemy_macro_state",
+                "wireless_buffs_topic": "/radar/wireless/enemy_buffs",
+                "wireless_key_topic": "/radar/wireless/interference_key",
+                "tx_map_topic": "/radar/tx/map_robot_data",
+                "tx_interaction_topic": "/radar/tx/robot_interaction",
+                "tx_radar_cmd_topic": "/radar/tx/radar_cmd",
+            }
+        ],
+    )
+
     referee_rosbag_recorder_node = Node(
         package="radar_bringup",
         executable="referee_rosbag_recorder.py",
@@ -592,6 +622,7 @@ def _build_launch(context):
         map_pcd_publisher,
         referee_rosbag_recorder_node,
         track_status_window_node,
+        referee_status_window_node,
         rviz_node,
     ]
 

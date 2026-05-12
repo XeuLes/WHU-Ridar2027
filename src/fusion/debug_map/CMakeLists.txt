@@ -18,6 +18,10 @@ ament_auto_add_executable(track_status_window_node
   src/track_status_window.cpp
 )
 
+ament_auto_add_executable(referee_status_window_node
+  src/referee_status_window.cpp
+)
+
 target_link_libraries(debug_map_component
   ${OpenCV_LIBRARIES}
 )
@@ -27,6 +31,10 @@ target_link_libraries(debug_map_homo_node
 )
 
 target_link_libraries(track_status_window_node
+  ${OpenCV_LIBRARIES}
+)
+
+target_link_libraries(referee_status_window_node
   ${OpenCV_LIBRARIES}
 )
 

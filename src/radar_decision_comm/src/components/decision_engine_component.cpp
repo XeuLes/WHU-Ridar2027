@@ -124,12 +124,16 @@ public:
     enable_radar_double_effect_command_ = this->declare_parameter<bool>("enable_radar_double_effect_command", true);
     enable_interference_key_command_ =
       this->declare_parameter<bool>("enable_interference_key_command", true);
+    enable_radar_decision_fallback_command_ =
+      this->declare_parameter<bool>("enable_radar_decision_fallback_command", true);
     interference_key_vote_window_ms_ =
       this->declare_parameter<int>("interference_key_vote_window_ms", 10000);
     interference_key_update_period_ms_ =
       this->declare_parameter<int>("interference_key_update_period_ms", 1000);
     interference_key_verify_cooldown_ms_ =
       this->declare_parameter<int>("interference_key_verify_cooldown_ms", 10000);
+    radar_decision_fallback_period_ms_ =
+      this->declare_parameter<int>("radar_decision_fallback_period_ms", 10000);
     default_interference_verify_key_text_ =
       this->declare_parameter<std::string>("default_interference_verify_key", "RM2026");
     default_interference_key_repeat_threshold_ =
@@ -441,6 +445,7 @@ private:
       default_interference_verify_key_pending_ = false;
       last_submitted_interference_verify_key_.reset();
       repeated_interference_verify_key_count_ = 0;
+      have_last_radar_decision_fallback_tp_ = false;
       save_radar_cmd_counter_state(true);
       RCLCPP_INFO(
         this->get_logger(),
@@ -757,6 +762,14 @@ private:
   bool can_update_own_interference_key() const
   {
     return !last_blackboard_.referee_stale && last_blackboard_.radar_sync.can_change_key;
+  }
+
+  bool can_send_radar_decision_fallback() const
+  {
+    return (
+      enable_radar_decision_fallback_command_ &&
+      (!have_last_radar_decision_fallback_tp_ ||
+       due(current_tick_now_, last_radar_decision_fallback_tp_, radar_decision_fallback_period_ms_)));
   }
 
   void note_interference_verify_key_submitted(const std::array<uint8_t, 6> & key)
@@ -1210,7 +1223,29 @@ private:
     std::array<uint8_t, 6> password{};
     const bool password_changed = take_password_action(&password_cmd, &password);
 
-    if (!double_effect_changed && !password_changed) {
+    bool fallback_changed = false;
+    if (
+      !double_effect_changed && !password_changed && can_send_radar_decision_fallback() &&
+      enable_interference_key_command_ && can_submit_interference_verify_key())
+    {
+      if (enable_radar_double_effect_command_ && radar_cmd_counter_ < 255U) {
+        ++radar_cmd_counter_;
+        double_effect_changed = true;
+        save_radar_cmd_counter_state(true);
+      }
+
+      password_cmd = 2U;
+      password = default_interference_verify_key_;
+      note_interference_verify_key_submitted(password);
+      fallback_changed = true;
+
+      if (double_effect_changed || fallback_changed) {
+        last_radar_decision_fallback_tp_ = current_tick_now_;
+        have_last_radar_decision_fallback_tp_ = true;
+      }
+    }
+
+    if (!double_effect_changed && !password_changed && !fallback_changed) {
       return false;
     }
 
@@ -1231,7 +1266,10 @@ private:
     } else if (double_effect_changed) {
       note << "|double_effect=" << static_cast<int>(radar_cmd_counter_) << "|no_target";
     }
-    if (password_changed) {
+    if (fallback_changed) {
+      note << "|fallback=upstream_blocked";
+    }
+    if (password_changed || fallback_changed) {
       note << "|password_cmd=" << static_cast<int>(password_cmd);
       if (password_cmd == 2U) {
         note << "|verify=" << key_to_string(password);
@@ -1411,6 +1449,7 @@ private:
   bool enable_double_effect_forward_{true};
   bool enable_radar_double_effect_command_{true};
   bool enable_interference_key_command_{true};
+  bool enable_radar_decision_fallback_command_{true};
   bool derive_ids_from_my_color_{true};
   bool use_referee_identity_color_{true};
 
@@ -1436,6 +1475,7 @@ private:
   int interference_key_vote_window_ms_{10000};
   int interference_key_update_period_ms_{1000};
   int interference_key_verify_cooldown_ms_{10000};
+  int radar_decision_fallback_period_ms_{10000};
   int default_interference_key_repeat_threshold_{3};
   int radar_cmd_counter_save_period_ms_{1000};
   int hero_lob_min_samples_{10};
@@ -1523,6 +1563,8 @@ private:
   bool have_last_interference_update_tp_{false};
   TimePoint last_interference_verify_tp_{};
   bool have_last_interference_verify_tp_{false};
+  TimePoint last_radar_decision_fallback_tp_{};
+  bool have_last_radar_decision_fallback_tp_{false};
   std::array<uint8_t, 6> default_interference_verify_key_{
     static_cast<uint8_t>('R'),
     static_cast<uint8_t>('M'),

@@ -33,7 +33,6 @@
 
       <Fallback name="RadarDecisionBranch">
         <Sequence>
-          <RefereeFresh/>
           <RadarCommandNeeded/>
           <SendRadarDecision/>
         </Sequence>
