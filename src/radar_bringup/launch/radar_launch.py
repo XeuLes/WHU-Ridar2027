@@ -86,7 +86,7 @@ def _build_launch(context):
 
     bringup_config = os.path.join(bringup_share, "config")
     hik_params_file = os.path.join(hik_share, "config", "camera_params.yaml")
-    map_pcd_path = os.path.join(localization_share, "config", "RM2025.pcd")
+    map_pcd_path = os.path.join(localization_share, "config", "RM2026_new.pcd")
     camera_extrinsic_yaml = LaunchConfiguration("calib_out_matrix_yaml").perform(context)
     resolve_camera_params_yaml = os.path.join(bringup_config, "camera_params_rect.yaml")
     resolve_region_points_yaml = os.path.join(bringup_config, "RM2025_Points.yaml")
@@ -205,7 +205,7 @@ def _build_launch(context):
                 "accumulate_time": 30,
                 "grid_size_degrees": 0.05,
                 "downsample_leaf_size": 0.2,
-                "roi_min_x": 2.0,
+                "roi_min_x": 0.0,
                 "roi_max_x": 29.0,
                 "roi_min_y": -6.5,
                 "roi_max_y": 8.5,
@@ -291,7 +291,7 @@ def _build_launch(context):
                 "box_iou_confirm_threshold": 0.25,
                 "box_center_diag_ratio": 0.75,
                 "publish_lost_prediction_to_decision": False,
-                "blind_guess_enabled": True,
+                "blind_guess_enabled": False,
                 "blind_guess_config_path": os.path.join(bringup_config, "guess_pts.yaml"),
                 "blind_guess_after_ms": 250,
                 "blind_guess_hold_ms": 1200,
@@ -742,7 +742,13 @@ def _build_launch(context):
         ],
     )
 
-    normal_flow_actions = [
+    referee_startup_actions = [
+        radar_decision_comm_container,
+        referee_link_monitor_node,
+        referee_status_window_node,
+    ]
+
+    post_calibration_flow_actions = [
         LogInfo(msg=f"radar_launch our_color={team['decision_my_color']}"),
         LogInfo(msg=f"decision params file: {decision_params_file}"),
         LogInfo(msg=f"referee rx_mode={referee_rx_mode} tx_mode={referee_tx_mode}"),
@@ -760,16 +766,17 @@ def _build_launch(context):
         radar_decision_sync_shm_node,
         gnuradio_rx_launcher_node,
         shm_pdu_broadcast_node,
-        referee_link_monitor_node,
         radar_hot_path_container,
         radar_debug_container,
-        radar_decision_comm_container,
         map_pcd_publisher,
         referee_rosbag_recorder_node,
         track_status_window_node,
-        referee_status_window_node,
         detect_debug_image_view_node,
         rviz_node,
+    ]
+    normal_flow_actions = [
+        *referee_startup_actions,
+        *post_calibration_flow_actions,
     ]
 
     if not enable_calibration:
@@ -813,7 +820,7 @@ def _build_launch(context):
             on_exit=[
                 LogInfo(msg="Calibration image source exited."),
                 LogInfo(msg="Starting normal radar flow with the saved out_matrix_gc.yaml."),
-                *normal_flow_actions,
+                *post_calibration_flow_actions,
             ],
         )
     )
@@ -850,6 +857,8 @@ def _build_launch(context):
     )
 
     return [
+        LogInfo(msg="Starting referee communication and referee status panel before calibration."),
+        *referee_startup_actions,
         LogInfo(msg="enable_calibration=true: start PnP calibration first. Press P to solve, S to save and continue."),
         LogInfo(msg=calib_source_msg),
         LogInfo(msg=f"calibration output: {camera_extrinsic_yaml}"),

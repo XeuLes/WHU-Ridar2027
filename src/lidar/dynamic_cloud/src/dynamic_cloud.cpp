@@ -467,7 +467,7 @@ void DynamicCloud::callback(const sensor_msgs::msg::PointCloud2::SharedPtr msg)
     };
 
     auto fly_alarm_filter = [](const pcl::PointXYZ& point) {
-        return (point.x > 13 && point.x < 20.5) &&
+        return (point.x > 8 && point.x < 20.5) &&
                (point.y > 0.2 && point.y < 1.356 + 2.4 + 0.8) &&
                (point.z > 1.5 && point.z < 3.5);
     };

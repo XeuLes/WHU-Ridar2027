@@ -73,7 +73,7 @@ def _build_launch(context):
     debug_map_share = get_package_share_directory("debug_map")
 
     bringup_config = os.path.join(bringup_share, "config")
-    map_pcd_path = os.path.join(localization_share, "config", "RM2025.pcd")
+    map_pcd_path = os.path.join(localization_share, "config", "RM2026_new.pcd")
     camera_extrinsic_yaml = LaunchConfiguration("calib_out_matrix_yaml").perform(context)
     camera_to_lidar_yaml = os.path.join(localization_share, "config", "camera_to_lidar.yaml")
     manual_yaml = os.path.join(localization_share, "config", "livox_rm_manual.yaml")
@@ -146,16 +146,16 @@ def _build_launch(context):
                 "camera_to_lidar_yaml": camera_to_lidar_yaml,
                 "online_initial_y_offset": 15.0,
                 "enable_gicp_total_timeout": True,
-                "gicp_total_timeout_sec": 20.0,
+                "gicp_total_timeout_sec": 40.0,
                 "fallback_to_initial_after_timeout": True,
                 "gicp_max_iterations": 100,
                 "gicp_transformation_epsilon": 1e-8,
                 "gicp_euclidean_fitness_epsilon": 1e-6,
-                "gicp_success_fitness_threshold": 0.2,
-                "accumulate_time": 30,
+                "gicp_success_fitness_threshold": 0.08,
+                "accumulate_time": 40,
                 "grid_size_degrees": 0.05,
-                "downsample_leaf_size": 0.2,
-                "roi_min_x": 5.0,
+                "downsample_leaf_size": 0.08,
+                "roi_min_x": 0.0,
                 "roi_max_x": 29.0,
                 "roi_min_y": -6.5,
                 "roi_max_y": 8.5,
@@ -730,7 +730,7 @@ def generate_launch_description():
             # 3) gimbal_serial_device: gimbal serial port, kept here for consistent launch CLI.
             DeclareLaunchArgument(
                 "our_color",
-                default_value="blue",
+                default_value="red",
                 description="IMPORTANT: fallback team color when referee identity is unavailable: red or blue",
             ),
             DeclareLaunchArgument(
@@ -746,7 +746,7 @@ def generate_launch_description():
             # ==================== Rosbag Replay Inputs ====================
             DeclareLaunchArgument(
                 "rosbag_file",
-                default_value="/home/user/DATA/rosbag.db3",
+                default_value="/home/user/DATA/RADAR_ROSBAG/radar_match_20260513_111025/radar_match_20260513_111025_0.db3",
                 description="input rosbag path for replay",
             ),
             DeclareLaunchArgument(
@@ -836,7 +836,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "record_rosbag",
-                default_value="true",
+                default_value="false",
                 description=(
                     "arm replay rosbag recording; starts when referee game_progress "
                     "enters 4 or when rosbag_auto_start_after_sec expires"
@@ -903,7 +903,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "calib_min_points",
-                default_value="5",
+                default_value="7",
                 description="minimum selected point count before pnp_calib_node_new solves",
             ),
             OpaqueFunction(function=_build_launch),

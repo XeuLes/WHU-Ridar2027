@@ -859,6 +859,7 @@ private:
     bool fallback_to_initial_after_timeout_{true};
     bool publish_full_pcd_map_{false};
     bool publish_live_scan_map_on_gicp_timeout_{false};
+    int publish_map_max_points_{0};
     rclcpp::Time gicp_start_time_{0, 0, RCL_ROS_TIME};
 
     int gicp_max_iterations_{100};

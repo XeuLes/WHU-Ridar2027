@@ -283,10 +283,10 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<double>("uav_w_vision_xy", 0.5);  // 降低相机权重(透视变换外推不准)
     this->declare_parameter<double>("uav_w_lidar_xy", 0.7);   // 提高雷达权重
     this->declare_parameter<double>("uav_assign_gate_m", 5.0);
-    this->declare_parameter<double>("uav_bbox_roi_x_ratio", 0.30);
+    this->declare_parameter<double>("uav_bbox_roi_x_ratio", 0.00);
     this->declare_parameter<double>("uav_bbox_roi_y_ratio", 0.00);
-    this->declare_parameter<double>("uav_bbox_roi_w_ratio", 0.40);
-    this->declare_parameter<double>("uav_bbox_roi_h_ratio", 0.40);
+    this->declare_parameter<double>("uav_bbox_roi_w_ratio", 1.00);
+    this->declare_parameter<double>("uav_bbox_roi_h_ratio", 1.00);
     this->declare_parameter<double>("uav_proj_pixel_margin", 6.0);
     this->declare_parameter<double>("uav_point_min_z", 1.2);
     this->declare_parameter<double>("uav_point_max_z", 4.5);

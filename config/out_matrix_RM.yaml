@@ -4,13 +4,13 @@ world_rvec: !!opencv-matrix
    rows: 3
    cols: 1
    dt: d
-   data: [ 1.5059076452535749, -1.2714487597783131, 0.97687396280212779 ]
+   data: [ 1.3920429850507083, -1.3440600140317858, 1.0361533143873207 ]
 world_tvec: !!opencv-matrix
    rows: 3
    cols: 1
    dt: d
-   data: [ -10.050005028994782, 2.7741635949585093, 3.3153646082539394 ]
-num_points: 5
-reproj_rmse: 4.110955330602887
-reproj_max: 5.8457079816306114
+   data: [ -8.3760196861824916, 3.5558512693603457, 6.8662743468411875 ]
+num_points: 7
+reproj_rmse: 85.128695040936066
+reproj_max: 125.26566260680053
 image_topic: /calib_camera_image

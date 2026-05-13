@@ -165,10 +165,10 @@ private:
     double uav_w_vision_xy_{1.0};
     double uav_w_lidar_xy_{0.7};
     double uav_assign_gate_m_{3.0};
-    double uav_bbox_roi_x_ratio_{0.30};
+    double uav_bbox_roi_x_ratio_{0.00};
     double uav_bbox_roi_y_ratio_{0.00};
-    double uav_bbox_roi_w_ratio_{0.40};
-    double uav_bbox_roi_h_ratio_{0.40};
+    double uav_bbox_roi_w_ratio_{1.00};
+    double uav_bbox_roi_h_ratio_{1.00};
     double uav_proj_pixel_margin_{6.0};
     double uav_point_min_z_{1.2};
     double uav_point_max_z_{4.5};

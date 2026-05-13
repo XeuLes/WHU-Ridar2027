@@ -376,7 +376,7 @@ Detect::Detect(const rclcpp::NodeOptions& node_options)
     fs["armor_path"] >> armor_path;
     fs["classify_path"] >> classify_path;
     fs["uav_path"] >> uav_path;
-    double uav_conf_threshold = 0.5;
+    double uav_conf_threshold = 0.15;
     if (!fs["uav_conf_threshold"].empty()) {
         fs["uav_conf_threshold"] >> uav_conf_threshold;
     }

@@ -1,9 +1,9 @@
 %YAML:1.0
 reference_points:
-  - {name: "self_FORTRESS", pos: [5.480, 7.5, 0.0]}
-  - {name: "self_Tower", pos: [10.934, 3.822, 0.858]}
-  - {name: "enemy_High", pos: [22.975, 4.422, 0.600]}
-  - {name: "left_goudong", pos: [12.492, 13.060, 0.347]}
-  - {name: "enemy_Tower", pos: [16.991, 11.355, 1.815]}
-  - {name: "enemy_Home", pos: [24.366, 13.380, 1.100]}
-  - {name: "right_nengliangjg", pos: [13.101, 6.743, 2.862]}
+  - {name: "self_FORTRESS", pos: [5.480, -7.5, 0.0]}
+  - {name: "self_Tower", pos: [10.934, -11.18, 0.858]}
+  - {name: "enemy_High", pos: [22.975, -10.58, 0.600]}
+  - {name: "left_goudong", pos: [12.492, -1.94, 0.347]}
+  - {name: "enemy_Tower", pos: [16.991, -3.645, 1.815]}
+  - {name: "self_High", pos: [5.024, -4.423, 0.600]}
+  - {name: "enemy_Home", pos: [24.334, -3.951, 0.731]}

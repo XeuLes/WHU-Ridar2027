@@ -24,7 +24,7 @@ def generate_launch_description():
         localization_share_dir, 'config', 'camera_to_lidar.yaml'
     )
     default_camera_extrinsic_yaml = (
-        '/home/user/code/T-DT_Radar-main/config/out_matrix_guanggu.yaml'
+        '/home/user/code/T-DT_Radar-main/config/out_matrix_RM.yaml'
     )
     rviz_config_path = os.path.join(
         localization_share_dir, 'config', 'gicp_initial_cloud_debug.rviz'
@@ -35,7 +35,7 @@ def generate_launch_description():
 
     declare_use_rosbag = DeclareLaunchArgument('use_rosbag', default_value='false')
     declare_rosbag_file = DeclareLaunchArgument(
-        'rosbag_file', default_value='/home/user/DATA/rosbag.db3'
+        'rosbag_file', default_value='/home/user/DATA/RADAR_ROSBAG/radar_match_20260513_111025/radar_match_20260513_111025_0.db3'
     )
     declare_target_pcd_path = DeclareLaunchArgument(
         'target_pcd_path', default_value=default_map_path
