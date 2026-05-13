@@ -43,6 +43,6 @@
     cam2.output_encoding: "bgr8"
 
     cam2.acquisition_frame_rate: 250.0
-    cam2.exposure_time: 3500
+    cam2.exposure_time: 6500
     cam2.gain: 16.95
-    cam2.gamma: 0.75
+    cam2.gamma: 0.99

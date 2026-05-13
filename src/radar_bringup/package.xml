@@ -41,6 +41,8 @@
   <exec_depend>radar_pdu_bridge</exec_depend>
   <exec_depend>camera_field_calib_tool</exec_depend>
   <exec_depend>image_publisher</exec_depend>
+  <exec_depend>image_transport</exec_depend>
+  <exec_depend>compressed_image_transport</exec_depend>
 
   <!-- 运行依赖：点云处理 -->
   <exec_depend>pcl_ros</exec_depend>

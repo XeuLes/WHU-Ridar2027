@@ -166,7 +166,7 @@ def _build_launch(context):
         parameters=[
             {
                 "image_topic": "/camera0_rect/image",
-                "show_debug_window": False,
+                "show_debug_window": True,
                 "publish_debug_image": publish_detect_debug_image,
                 "debug_image_topic": "/detect/debug_image",
             }
@@ -175,6 +175,24 @@ def _build_launch(context):
     )
 
     camera0_rectifier_component = make_rectifier_component("camera0")
+
+    def make_image_compressor_node(camera_name: str):
+        image_topic = f"/{camera_name}/image"
+        return Node(
+            package="image_transport",
+            executable="republish",
+            name=f"{camera_name}_image_compressor",
+            output="screen",
+            condition=IfCondition(LaunchConfiguration("record_rosbag")),
+            arguments=["raw", "compressed"],
+            remappings=[
+                ("in", image_topic),
+                ("out", image_topic),
+            ],
+        )
+
+    camera0_image_compressor_node = make_image_compressor_node("camera0")
+    camera2_image_compressor_node = make_image_compressor_node("camera2")
 
     localization_component = ComposableNode(
         package="localization",
@@ -716,8 +734,10 @@ def _build_launch(context):
                     value_type=float,
                 ),
                 "record_topics": [
-                    "/camera0/image",
+                    "/camera0/image/compressed",
                     "/camera0/camera_info",
+                    "/camera2/image/compressed",
+                    "/camera2/camera_info",
                     "/livox/lidar",
                     "/livox/imu",
                 ],
@@ -769,6 +789,8 @@ def _build_launch(context):
         radar_hot_path_container,
         radar_debug_container,
         map_pcd_publisher,
+        camera0_image_compressor_node,
+        camera2_image_compressor_node,
         referee_rosbag_recorder_node,
         track_status_window_node,
         detect_debug_image_view_node,
@@ -986,8 +1008,9 @@ def generate_launch_description():
                 "record_rosbag",
                 default_value="false",
                 description=(
-                    "arm match-triggered rosbag recording; records Hik camera and "
-                    "Livox lidar driver topics when referee game_progress enters 4"
+                    "arm match-triggered rosbag recording; records compressed "
+                    "camera0/camera2 images, camera_info, and Livox topics when "
+                    "referee game_progress enters 4"
                 ),
             ),
             DeclareLaunchArgument(

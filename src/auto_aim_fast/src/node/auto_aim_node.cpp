@@ -98,7 +98,7 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<std::string>("debug.debug_topic", "/auto_aim/debug_image");
   this->declare_parameter<std::string>("debug.binary_topic", "/auto_aim/binary_image");
 
-  this->declare_parameter<bool>("camera.use_camera_info", false);
+  this->declare_parameter<bool>("camera.use_camera_info", true);
   this->declare_parameter<bool>("camera.set_once", true);
 
   // tracker
@@ -117,10 +117,10 @@ AutoAimNode::AutoAimNode(const rclcpp::NodeOptions & options)
   this->declare_parameter<int>("budget.max_pnp", 2);
 
   // fallback camera
-  this->declare_parameter<double>("camera.fx", 1.0);
-  this->declare_parameter<double>("camera.fy", 1.0);
-  this->declare_parameter<double>("camera.cx", 0.0);
-  this->declare_parameter<double>("camera.cy", 0.0);
+  this->declare_parameter<double>("camera.fx", 43478.26);
+  this->declare_parameter<double>("camera.fy", 43478.26);
+  this->declare_parameter<double>("camera.cx", 720.0);
+  this->declare_parameter<double>("camera.cy", 540.0);
   this->declare_parameter<std::vector<double>>("camera.dist", std::vector<double>{0,0,0,0,0});
 
   // detector
@@ -565,6 +565,13 @@ void AutoAimNode::onImage(const sensor_msgs::msg::Image::SharedPtr msg)
   double gimbal_age_s = 0.0;
   if (!isGimbalReady(this->get_clock()->now(), &gimbal_age_s)) {
     gimbal_wait_skipped_frames_.fetch_add(1, std::memory_order_relaxed);
+    return;
+  }
+
+  if (use_camera_info_ && !camera_set_) {
+    RCLCPP_WARN_THROTTLE(
+      this->get_logger(), *this->get_clock(), 1000,
+      "CameraInfo has not arrived yet; auto_aim inference is paused.");
     return;
   }
 

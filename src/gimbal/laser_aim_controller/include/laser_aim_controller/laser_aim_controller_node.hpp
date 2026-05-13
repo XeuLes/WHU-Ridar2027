@@ -154,10 +154,10 @@ private:
 
   double fine_single_step_max_abs_deg_{0.30};
 
-  double camera_fx_{1.0};
-  double camera_fy_{1.0};
-  double camera_cx_{0.0};
-  double camera_cy_{0.0};
+  double camera_fx_{43478.26};
+  double camera_fy_{43478.26};
+  double camera_cx_{720.0};
+  double camera_cy_{540.0};
 
   double laser_pixel_u_{923.0};
   double laser_pixel_v_{368.0};

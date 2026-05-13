@@ -79,10 +79,10 @@ laser_aim_controller_node:
     fine_single_step_max_abs_deg: 2.0
 
     # ==================== camera intrinsics ====================
-    camera_fx: 33000.0
-    camera_fy: 33000.0
-    camera_cx: 426.297277
-    camera_cy: 567.094694
+    camera_fx: 43478.26
+    camera_fy: 43478.26
+    camera_cx: 720.0
+    camera_cy: 540.0
 
     # Laser spot expected pixel uses PnP distance D in meters:
     # pixel = ref_px + slope * (D - ref_distance) + quadratic * (D - ref_distance)^2.

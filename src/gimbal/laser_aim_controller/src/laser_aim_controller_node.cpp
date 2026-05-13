@@ -605,10 +605,10 @@ void LaserAimControllerNode::declareAndLoadParameters()
   this->declare_parameter<double>("pitch_inc_max_deg", 5.0);
   this->declare_parameter<double>("fine_single_step_max_abs_deg", 2.0);
 
-  this->declare_parameter<double>("camera_fx", 33000.0);
-  this->declare_parameter<double>("camera_fy", 33000.0);
-  this->declare_parameter<double>("camera_cx", 426.297277);
-  this->declare_parameter<double>("camera_cy", 567.094694);
+  this->declare_parameter<double>("camera_fx", 43478.26);
+  this->declare_parameter<double>("camera_fy", 43478.26);
+  this->declare_parameter<double>("camera_cx", 720.0);
+  this->declare_parameter<double>("camera_cy", 540.0);
   this->declare_parameter<std::vector<double>>(
     "laser_pixel_uv", std::vector<double>{923.0, 368.0});
   this->declare_parameter<bool>("laser_pixel_u_depth_comp_enable", false);
