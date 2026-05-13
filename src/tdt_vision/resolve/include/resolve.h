@@ -133,6 +133,8 @@ private:
 
     // parameters
     bool is_test_{false};
+    double vision_field_x_margin_m_{0.5};
+    double vision_field_y_margin_m_{0.5};
     bool uav_publish_default_output_{true};
     bool use_match_info_color_{true};
     bool use_referee_identity_color_{true};

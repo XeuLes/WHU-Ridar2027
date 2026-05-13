@@ -159,6 +159,8 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<bool>("use_match_info_color", true);
     this->declare_parameter<bool>("use_referee_identity_color", true);
     this->declare_parameter<int>("self_color_override", -1);
+    this->declare_parameter<double>("vision_field_x_margin_m", 3.0);
+    this->declare_parameter<double>("vision_field_y_margin_m", 3.0);
     this->declare_parameter<std::string>(
         "referee_identity_topic", "/radar/referee/robot_identity");
     this->declare_parameter<bool>("uav_use_enemy_default_by_identity", true);
@@ -182,6 +184,10 @@ Resolve::Resolve(const rclcpp::NodeOptions& node_options)
     const std::string minimap_path       = this->get_parameter("minimap_path").as_string();
 
     is_test_ = this->get_parameter("is_test").as_bool();
+    vision_field_x_margin_m_ =
+        std::max(0.0, this->get_parameter("vision_field_x_margin_m").as_double());
+    vision_field_y_margin_m_ =
+        std::max(0.0, this->get_parameter("vision_field_y_margin_m").as_double());
     uav_publish_default_output_ =
         this->get_parameter("uav_publish_default_output").as_bool();
     use_match_info_color_ =
@@ -2349,6 +2355,27 @@ void Resolve::DetectCallback(
         pub_uav_resolve_debug_status_->publish(debug_msg);
     }
 
+    const auto assign_field_point = [this](float x, float y,
+                                           float& out_x, float& out_y) {
+        constexpr float field_min_x = 0.0f;
+        constexpr float field_max_x = 28.0f;
+        constexpr float field_min_y = 0.0f;
+        constexpr float field_max_y = 15.0f;
+        const float margin_x = static_cast<float>(vision_field_x_margin_m_);
+        const float margin_y = static_cast<float>(vision_field_y_margin_m_);
+
+        if (!std::isfinite(x) || !std::isfinite(y) ||
+            x < field_min_x - margin_x || x > field_max_x + margin_x ||
+            y < field_min_y - margin_y || y > field_max_y + margin_y) {
+            out_x = 0.0f;
+            out_y = 0.0f;
+            return;
+        }
+
+        out_x = x;
+        out_y = y;
+    };
+
     // Now keep original car outputs (i=0..5) and fill UAV slot from KF/measurement
     for (int i = 0; i < 7; i++) {
         // blue
@@ -2366,16 +2393,14 @@ void Resolve::DetectCallback(
             auto cp = parser_->parse_with_height(p, h);
 
             if (is_test_) {
-                // 测试模式：直接使用投影原始值，不做y偏移和clamp
+                // 测试模式：直接使用投影原始值，不做y偏移和场地范围过滤
                 send_data.blue_x[i] = cp.x;
                 send_data.blue_y[i] = cp.y;
             } else {
-                // 原逻辑：做y偏移和clamp
                 float y_offset = cp.y + static_cast<float>(uav_world_to_field_y_offset_);
-                float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
-                float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-                send_data.blue_x[i] = clamp_x;
-                send_data.blue_y[i] = clamp_y;
+                assign_field_point(cp.x, y_offset,
+                                   send_data.blue_x[i],
+                                   send_data.blue_y[i]);
             }
         } else {
             send_data.blue_x[i] = 0;
@@ -2396,16 +2421,14 @@ void Resolve::DetectCallback(
             float h = parser_->get_height(p);
             auto cp = parser_->parse_with_height(p, h);
             if (is_test_) {
-                // 测试模式：直接使用投影原始值，不做y偏移和clamp
+                // 测试模式：直接使用投影原始值，不做y偏移和场地范围过滤
                 send_data.red_x[i] = cp.x;
                 send_data.red_y[i] = cp.y;
             } else {
-                // 原逻辑：做y偏移和clamp
                 float y_offset = cp.y + static_cast<float>(uav_world_to_field_y_offset_);
-                float clamp_x = std::clamp(cp.x, 0.0f, 28.0f);
-                float clamp_y = std::clamp(y_offset, 0.0f, 15.0f);
-                send_data.red_x[i] = clamp_x;
-                send_data.red_y[i] = clamp_y;
+                assign_field_point(cp.x, y_offset,
+                                   send_data.red_x[i],
+                                   send_data.red_y[i]);
             }
         } else {
             send_data.red_x[i] = 0;

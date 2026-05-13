@@ -357,7 +357,7 @@ KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options)
     this->declare_parameter<int>("pending_seed_confirm_hits", 2);
     this->declare_parameter<int>("semantic_vote_history_size", 6);
     this->declare_parameter<int>("tentative_miss_limit", 2);
-    this->declare_parameter<int>("lost_miss_limit", 8);
+    this->declare_parameter<int>("lost_miss_limit", 100);
     this->declare_parameter<int>("lost_prediction_publish_ms", 0);
     this->declare_parameter<int>("camera_publish_hold_ms", 120);
     this->declare_parameter<int>("lidar_publish_hold_ms", 100);
@@ -382,8 +382,8 @@ KalmanFilter::KalmanFilter(const rclcpp::NodeOptions& node_options)
                                          "config/guess_pts.yaml");
     this->declare_parameter<int>("blind_guess_after_ms", 250);
     this->declare_parameter<int>("blind_guess_hold_ms", 1200);
-    this->declare_parameter<int>("kf_predict_hold_ms", 150);
-    this->declare_parameter<double>("max_predict_step_m", 0.8);
+    this->declare_parameter<int>("kf_predict_hold_ms", 1500);
+    this->declare_parameter<double>("max_predict_step_m", 7.5);
     this->declare_parameter<double>("max_predict_speed_mps", 5.0);
     this->declare_parameter<double>("blind_guess_distance_weight", 0.6);
     this->declare_parameter<double>("blind_guess_direction_weight", 0.4);

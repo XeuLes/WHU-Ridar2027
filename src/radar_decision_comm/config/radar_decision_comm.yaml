@@ -1,12 +1,12 @@
 /**:
   ros__parameters:
     use_sim_time: false
-    my_color: "Blue"           # Red / Blue
-    my_radar_id: 109
-    my_hero_id: 101
-    my_sentinel_id: 107
-    enemy_hero_id: 1
-    enemy_sentinel_id: 7
+    my_color: "Red"            # Red / Blue
+    my_radar_id: 9
+    my_hero_id: 1
+    my_sentinel_id: 7
+    enemy_hero_id: 101
+    enemy_sentinel_id: 107
 
 referee_serial_bridge:
   ros__parameters:
@@ -26,7 +26,7 @@ referee_serial_bridge:
     publish_rate_hz: 100.0
     debug_mock_publish: true
     debug_mock_rate_hz: 2.0
-    my_color: "Blue"
+    my_color: "Red"
     legacy_mark_progress: false
     legacy_dart_bits: false
     use_referee_identity_color: true
@@ -56,16 +56,16 @@ referee_serial_rx:
     publish_rate_hz: 100.0
     debug_mock_publish: true
     debug_mock_rate_hz: 2.0
-    my_color: "Blue"
+    my_color: "Red"
     legacy_mark_progress: false
     legacy_dart_bits: false
-    rx_mode: "topic"             # mock / topic / serial
+    rx_mode: "serial"            # mock / topic / serial
     debug_raw_bytes_topic: "/radar/debug/referee_raw_bytes"
 
 radar_wireless_rx:
   ros__parameters:
     enabled: true
-    my_color: "Blue"
+    my_color: "Red"
     input_pdu_topic: "/radar/all_pdu"
     input_queue_depth: 50
 
@@ -120,13 +120,13 @@ decision_engine:
     enable_groot_monitoring: true
     groot_publisher_port: 1666
     groot_server_port: 1667
-    my_color: "Blue"
+    my_color: "Red"
     derive_ids_from_my_color: true
-    my_hero_id: 101
-    my_sentinel_id: 107
-    infantry_3_id: 103
-    infantry_4_id: 104
-    enemy_hero_id: 1
+    my_hero_id: 1
+    my_sentinel_id: 7
+    infantry_3_id: 3
+    infantry_4_id: 4
+    enemy_hero_id: 101
 
     decision_rate_hz: 50.0
     map_publish_period_ms: 200
@@ -241,8 +241,8 @@ tx_scheduler:
 referee_serial_tx:
   ros__parameters:
     enabled: true
-    tx_mode: "topic"           # topic / serial
-    my_color: "Blue"
+    tx_mode: "serial"          # topic / serial
+    my_color: "Red"
     map_0305_layout: "rm2026_48"   # rm2026_48 / legacy24
     device: "/dev/ttyUSB0"
     baudrate: 115200

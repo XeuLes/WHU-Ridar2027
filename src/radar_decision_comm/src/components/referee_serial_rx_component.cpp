@@ -66,7 +66,7 @@ public:
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
     legacy_mark_progress_ = this->declare_parameter<bool>("legacy_mark_progress", false);
     legacy_dart_bits_ = this->declare_parameter<bool>("legacy_dart_bits", false);
-    rx_mode_ = this->declare_parameter<std::string>("rx_mode", "mock");
+    rx_mode_ = this->declare_parameter<std::string>("rx_mode", "serial");
     debug_raw_bytes_topic_ = this->declare_parameter<std::string>(
       "debug_raw_bytes_topic", "/radar/debug/referee_raw_bytes");
     output_identity_topic_ = this->declare_parameter<std::string>(
@@ -360,7 +360,7 @@ private:
   double debug_mock_rate_hz_{2.0};
   std::string device_;
   std::string my_color_{"Red"};
-  std::string rx_mode_{"mock"};
+  std::string rx_mode_{"serial"};
   std::string debug_raw_bytes_topic_{"/radar/debug/referee_raw_bytes"};
   std::string output_identity_topic_{"/radar/referee/robot_identity"};
 

@@ -271,7 +271,7 @@ def _build_launch(context):
                 "pending_seed_confirm_hits": 2,
                 "semantic_vote_history_size": 6,
                 "tentative_miss_limit": 2,
-                "lost_miss_limit": 8,
+                "lost_miss_limit": 100,
                 "lost_prediction_publish_ms": 0,
                 "camera_publish_hold_ms": 120,
                 "lidar_publish_hold_ms": 100,
@@ -295,8 +295,8 @@ def _build_launch(context):
                 "blind_guess_config_path": os.path.join(bringup_config, "guess_pts.yaml"),
                 "blind_guess_after_ms": 250,
                 "blind_guess_hold_ms": 1200,
-                "kf_predict_hold_ms": 150,
-                "max_predict_step_m": 0.8,
+                "kf_predict_hold_ms": 1500,
+                "max_predict_step_m": 7.5,
                 "max_predict_speed_mps": 5.0,
                 "blind_guess_distance_weight": 0.6,
                 "blind_guess_direction_weight": 0.4,
@@ -944,7 +944,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "show_detect_debug_window",
-                default_value="false",
+                default_value="true",
                 description="open image_view window for /detect/debug_image",
             ),
             DeclareLaunchArgument(
@@ -984,7 +984,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "record_rosbag",
-                default_value="true",
+                default_value="false",
                 description=(
                     "arm match-triggered rosbag recording; records Hik camera and "
                     "Livox lidar driver topics when referee game_progress enters 4"
@@ -1011,7 +1011,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "enable_calibration",
-                default_value="true",
+                default_value="false",
                 description="whether to run pnp_calib_new.launch.py before starting the normal radar flow",
             ),
             DeclareLaunchArgument(

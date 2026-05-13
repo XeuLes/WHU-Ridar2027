@@ -245,7 +245,7 @@ def _build_launch(context):
                 "pending_seed_confirm_hits": 2,
                 "semantic_vote_history_size": 6,
                 "tentative_miss_limit": 2,
-                "lost_miss_limit": 8,
+                "lost_miss_limit": 100,
                 "lost_prediction_publish_ms": 0,
                 "camera_publish_hold_ms": 120,
                 "lidar_publish_hold_ms": 100,
@@ -269,8 +269,8 @@ def _build_launch(context):
                 "blind_guess_config_path": os.path.join(bringup_config, "guess_pts.yaml"),
                 "blind_guess_after_ms": 250,
                 "blind_guess_hold_ms": 1200,
-                "kf_predict_hold_ms": 150,
-                "max_predict_step_m": 0.8,
+                "kf_predict_hold_ms": 1500,
+                "max_predict_step_m": 7.5,
                 "max_predict_speed_mps": 5.0,
                 "blind_guess_distance_weight": 0.6,
                 "blind_guess_direction_weight": 0.4,
@@ -746,7 +746,7 @@ def generate_launch_description():
             # ==================== Rosbag Replay Inputs ====================
             DeclareLaunchArgument(
                 "rosbag_file",
-                default_value="/home/user/DATA/RADAR_ROSBAG/radar_match_20260513_111025/radar_match_20260513_111025_0.db3",
+                default_value="/home/user/DATA/RADAR_ROSBAG/test_compressed/test_compressed_0.db3",
                 description="input rosbag path for replay",
             ),
             DeclareLaunchArgument(

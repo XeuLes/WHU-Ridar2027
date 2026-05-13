@@ -382,22 +382,14 @@ private:
 
   void load_radar_cmd_counter_state()
   {
+    radar_cmd_counter_ = 0U;
+    save_radar_cmd_counter_state(true);
     if (radar_cmd_counter_state_path_.empty()) {
       return;
     }
-
-    std::ifstream in(radar_cmd_counter_state_path_);
-    int value = 0;
-    if (!(in >> value)) {
-      return;
-    }
-
-    value = std::clamp(value, 0, 255);
-    radar_cmd_counter_ = static_cast<uint8_t>(value);
     RCLCPP_INFO(
       this->get_logger(),
-      "Loaded 0x0121 radar_cmd counter=%d from %s",
-      value,
+      "Initialized 0x0121 radar_cmd counter=0 and wrote %s",
       radar_cmd_counter_state_path_.c_str());
   }
 
@@ -770,6 +762,11 @@ private:
       enable_radar_decision_fallback_command_ &&
       (!have_last_radar_decision_fallback_tp_ ||
        due(current_tick_now_, last_radar_decision_fallback_tp_, radar_decision_fallback_period_ms_)));
+  }
+
+  bool referee_allows_double_effect_command() const
+  {
+    return !last_blackboard_.referee_stale && last_blackboard_.radar_sync.double_effect_chance > 0U;
   }
 
   void note_interference_verify_key_submitted(const std::array<uint8_t, 6> & key)
@@ -1209,7 +1206,11 @@ private:
   {
     bool double_effect_changed = false;
     uint8_t outgoing_radar_cmd = radar_cmd_counter_;
-    if (enable_radar_double_effect_command_ && current_fsm_output_.should_send_radar_command) {
+    if (
+      enable_radar_double_effect_command_ &&
+      current_fsm_output_.should_send_radar_command &&
+      referee_allows_double_effect_command())
+    {
       if (!double_effect_request_latched_ && radar_cmd_counter_ < 255U) {
         ++radar_cmd_counter_;
         outgoing_radar_cmd = radar_cmd_counter_;
@@ -1230,12 +1231,7 @@ private:
       !double_effect_changed && !password_changed && can_send_radar_decision_fallback() &&
       enable_interference_key_command_ && can_submit_interference_verify_key())
     {
-      if (enable_radar_double_effect_command_) {
-        const uint8_t fallback_radar_cmd =
-          (radar_cmd_counter_ == 0U) ? 1U : radar_cmd_counter_;
-        outgoing_radar_cmd = fallback_radar_cmd;
-      }
-
+      outgoing_radar_cmd = radar_cmd_counter_;
       password_cmd = 2U;
       password = default_interference_verify_key_;
       note_interference_verify_key_submitted(password);
@@ -1269,7 +1265,7 @@ private:
       note << "|double_effect=" << static_cast<int>(radar_cmd_counter_) << "|no_target";
     }
     if (fallback_changed) {
-      note << "|fallback=upstream_blocked|radar_probe=" << static_cast<int>(outgoing_radar_cmd);
+      note << "|fallback=upstream_blocked|radar_cmd_kept=" << static_cast<int>(outgoing_radar_cmd);
     }
     if (password_changed || fallback_changed) {
       note << "|password_cmd=" << static_cast<int>(password_cmd);

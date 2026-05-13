@@ -84,7 +84,7 @@ struct TrackStateMachineParams {
     int pending_seed_confirm_hits{2};
     int semantic_vote_history_size{6};
     int tentative_miss_limit{2};
-    int lost_miss_limit{8};
+    int lost_miss_limit{100};
     int lost_prediction_publish_ms{0};
     int camera_publish_hold_ms{120};
     int lidar_publish_hold_ms{100};
@@ -107,8 +107,8 @@ struct TrackStateMachineParams {
     bool blind_guess_enabled{true};
     int blind_guess_after_ms{250};
     int blind_guess_hold_ms{1200};
-    int kf_predict_hold_ms{150};
-    float max_predict_step_m{0.8f};
+    int kf_predict_hold_ms{1500};
+    float max_predict_step_m{7.5f};
     float max_predict_speed_mps{5.0f};
     double blind_guess_distance_weight{0.6};
     double blind_guess_direction_weight{0.4};

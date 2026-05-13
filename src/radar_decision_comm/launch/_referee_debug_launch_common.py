@@ -12,7 +12,7 @@ def common_args():
         DeclareLaunchArgument("device", default_value="/dev/ttyUSB0"),
         DeclareLaunchArgument("baudrate", default_value="115200"),
         DeclareLaunchArgument("my_color", default_value="Blue"),
-        DeclareLaunchArgument("tx_mode", default_value="topic"),
+        DeclareLaunchArgument("tx_mode", default_value="serial"),
         DeclareLaunchArgument("rx_mode", default_value="serial"),
         DeclareLaunchArgument("rate", default_value="1.0"),
         DeclareLaunchArgument("times", default_value="1"),
@@ -71,7 +71,7 @@ def rx_bridge_container(mock=False):
                     {
                         "enabled": True,
                         "rx_mode": rx_mode,
-                        "tx_mode": "topic",
+                        "tx_mode": "serial",
                         "device": LaunchConfiguration("device"),
                         "baudrate": LaunchConfiguration("baudrate"),
                         "my_color": LaunchConfiguration("my_color"),

@@ -38,7 +38,7 @@ public:
   : Node("referee_serial_tx", options)
   {
     enabled_ = this->declare_parameter<bool>("enabled", true);
-    tx_mode_ = this->declare_parameter<std::string>("tx_mode", "topic");
+    tx_mode_ = this->declare_parameter<std::string>("tx_mode", "serial");
     my_color_ = this->declare_parameter<std::string>("my_color", "Red");
     map_0305_layout_ = this->declare_parameter<std::string>("map_0305_layout", "rm2026_48");
     device_ = this->declare_parameter<std::string>("device", "/dev/ttyUSB1");
@@ -362,7 +362,7 @@ private:
   uint16_t last_cmd_id_{0};
   std::vector<uint8_t> last_frame_;
 
-  std::string tx_mode_{"topic"};
+  std::string tx_mode_{"serial"};
   std::string my_color_{"Red"};
   std::string map_0305_layout_{"rm2026_48"};
   std::string device_;

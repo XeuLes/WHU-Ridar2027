@@ -12,6 +12,8 @@ find_package(ament_cmake REQUIRED)
 find_package(rclcpp REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
+find_package(sensor_msgs REQUIRED)
+find_package(cv_bridge REQUIRED)
 find_package(radar_decision_comm REQUIRED)
 find_package(OpenCV REQUIRED)
 find_package(Eigen3 REQUIRED)
@@ -42,8 +44,26 @@ target_link_libraries(gimbal_aim_solver_node
   ${OpenCV_LIBS}
 )
 
+add_executable(gimbal_camera_translation_debug_node
+  src/gimbal_camera_translation_debug_node.cpp
+  src/gimbal_geometry.cpp
+  src/angle_solver.cpp
+)
+
+ament_target_dependencies(gimbal_camera_translation_debug_node
+  rclcpp
+  std_msgs
+  sensor_msgs
+  cv_bridge
+)
+
+target_link_libraries(gimbal_camera_translation_debug_node
+  ${OpenCV_LIBS}
+)
+
 install(TARGETS
   gimbal_aim_solver_node
+  gimbal_camera_translation_debug_node
   DESTINATION lib/${PROJECT_NAME}
 )
 
