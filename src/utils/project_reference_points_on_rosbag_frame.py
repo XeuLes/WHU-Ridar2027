@@ -134,14 +134,22 @@ def read_image(path):
     return image
 
 
-def draw_points(image, names, image_points):
+def draw_points(image, names, image_points, marker_color="auto"):
     output = image.copy()
     h, w = output.shape[:2]
+    fixed_colors = {
+        "yellow": (0, 255, 255),
+        "green": (0, 255, 0),
+        "red": (0, 0, 255),
+        "white": (255, 255, 255),
+        "cyan": (255, 255, 0),
+    }
+    fixed_color = fixed_colors.get(marker_color)
 
     for name, point in zip(names, image_points.reshape(-1, 2)):
         x, y = float(point[0]), float(point[1])
         inside = 0 <= x < w and 0 <= y < h
-        color = (0, 255, 0) if inside else (0, 0, 255)
+        color = fixed_color if fixed_color is not None else ((0, 255, 0) if inside else (0, 0, 255))
         center = (int(round(x)), int(round(y)))
 
         cv2.drawMarker(
@@ -191,6 +199,12 @@ def parse_args():
         default="/tmp/reference_points_projection.png",
         help="output debug image path",
     )
+    parser.add_argument(
+        "--marker-color",
+        choices=("auto", "yellow", "green", "red", "white", "cyan"),
+        default="auto",
+        help="marker color; auto uses green for in-frame points and red for out-of-frame points",
+    )
     parser.add_argument("--show", action="store_true", help="show result with cv2.imshow")
     return parser.parse_args()
 
@@ -218,7 +232,7 @@ def main():
         camera_matrix,
         dist_coeffs,
     )
-    output = draw_points(frame, names, image_points)
+    output = draw_points(frame, names, image_points, args.marker_color)
 
     output_dir = os.path.dirname(os.path.abspath(args.output))
     if output_dir:

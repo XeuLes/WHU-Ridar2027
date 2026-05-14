@@ -112,7 +112,7 @@ def _build_launch(context):
     auto_aim_info_cfg = os.path.join(auto_aim_share, "config", "camera_info.yaml")
 
     intra = [{"use_intra_process_comms": True}]
-    enemy_uav_coord = (26.831, 1.969, 1.7)
+    enemy_uav_coord = (26.831, 1.969, 1.5)
     enemy_uav_default = {
         "uav_enemy_default_x": enemy_uav_coord[0],
         "uav_enemy_default_y": enemy_uav_coord[1],
@@ -180,24 +180,6 @@ def _build_launch(context):
 
     camera0_rectifier_component = make_rectifier_component("camera0")
 
-    def make_image_compressor_node(camera_name: str):
-        image_topic = f"/{camera_name}/image"
-        return Node(
-            package="image_transport",
-            executable="republish",
-            name=f"{camera_name}_image_compressor",
-            output="screen",
-            condition=IfCondition(LaunchConfiguration("record_rosbag")),
-            arguments=["raw", "compressed"],
-            remappings=[
-                ("in", image_topic),
-                ("out", image_topic),
-            ],
-        )
-
-    camera0_image_compressor_node = make_image_compressor_node("camera0")
-    camera2_image_compressor_node = make_image_compressor_node("camera2")
-
     localization_component = ComposableNode(
         package="localization",
         plugin="tdt_radar::Localization",
@@ -223,7 +205,7 @@ def _build_launch(context):
                 "gicp_max_iterations": 100,
                 "gicp_transformation_epsilon": 1e-8,
                 "gicp_euclidean_fitness_epsilon": 1e-6,
-                "gicp_success_fitness_threshold": 0.08,
+                "gicp_success_fitness_threshold": 0.25,
                 "accumulate_time": 30,
                 "grid_size_degrees": 0.05,
                 "downsample_leaf_size": 0.2,
@@ -739,9 +721,9 @@ def _build_launch(context):
                     value_type=float,
                 ),
                 "record_topics": [
-                    "/camera0/image/compressed",
+                    "/camera0/image",
                     "/camera0/camera_info",
-                    "/camera2/image/compressed",
+                    "/camera2/image",
                     "/camera2/camera_info",
                     "/livox/lidar",
                     "/livox/imu",
@@ -795,8 +777,6 @@ def _build_launch(context):
         radar_hot_path_container,
         radar_debug_container,
         map_pcd_publisher,
-        camera0_image_compressor_node,
-        camera2_image_compressor_node,
         referee_rosbag_recorder_node,
         track_status_window_node,
         detect_debug_image_view_node,
@@ -909,7 +889,7 @@ def generate_launch_description():
         calib_tool_share, "config", "reference_points_RM.yaml"
     )
     default_calib_out_matrix = os.path.join(
-        bringup_share, "config", "out_matrix_RMUC2026.yaml"
+        bringup_share, "config", "out_matrix_RM_CS.yaml"
     )
 
     # WHU
@@ -1017,9 +997,9 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "record_rosbag",
-                default_value="true",
+                default_value="false",
                 description=(
-                    "arm match-triggered rosbag recording; records compressed "
+                    "arm match-triggered rosbag recording; records raw "
                     "camera0/camera2 images, camera_info, and Livox topics when "
                     "referee game_progress enters 4"
                 ),
@@ -1045,7 +1025,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "enable_calibration",
-                default_value="true",
+                default_value="false",
                 description="whether to run pnp_calib_new.launch.py before starting the normal radar flow",
             ),
             DeclareLaunchArgument(

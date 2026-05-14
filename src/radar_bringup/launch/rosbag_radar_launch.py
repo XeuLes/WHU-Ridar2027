@@ -62,9 +62,6 @@ def _build_launch(context):
     rosbag_file = LaunchConfiguration("rosbag_file").perform(context)
     lidar_input_topic = LaunchConfiguration("lidar_input_topic").perform(context)
     image_input_topic = LaunchConfiguration("image_input_topic").perform(context)
-    compressed_image_input_topic = LaunchConfiguration(
-        "compressed_image_input_topic"
-    ).perform(context)
     calib_first = LaunchConfiguration("calib_first").perform(context).strip().lower()
     calib_first = calib_first in ("1", "true", "yes", "on")
 
@@ -111,7 +108,7 @@ def _build_launch(context):
             "rosbag_file": rosbag_file,
             "lidar_input_topic": lidar_input_topic,
             "image_input_topic": image_input_topic,
-            "compressed_image_input_topic": compressed_image_input_topic,
+            "compressed_image_input_topic": "",
         }
         if extra_params:
             params.update(extra_params)
@@ -212,8 +209,8 @@ def _build_launch(context):
         parameters=[
             {
                 "out_matrix_path": camera_extrinsic_yaml,
-                # RosbagPlayer decodes /compressed_image directly and does not
-                # rectify it, so resolve must use the raw camera model here.
+                # RosbagPlayer republishes the raw bag image without rectifying it,
+                # so resolve must use the raw camera model here.
                 "camera_params_path": os.path.join(bringup_config, "camera_params.yaml"),
                 "region_points_path": os.path.join(bringup_config, "RM2025_Points.yaml"),
                 "minimap_path": os.path.join(bringup_config, "RM2025.png"),
@@ -696,7 +693,7 @@ def _build_launch(context):
 
     return [
         LogInfo(msg="calib_first=true: start PnP calibration first. Press P to solve, S to save, then Q/Esc to continue."),
-        LogInfo(msg="calibration uses the first /compressed_image frame from the rosbag and keeps it still."),
+        LogInfo(msg="calibration uses the first raw image frame from the rosbag and keeps it still."),
         LogInfo(msg=f"calibration output: {LaunchConfiguration('calib_out_matrix_yaml').perform(context)}"),
         calib_rosbag_container,
         pnp_calib_node,
@@ -746,23 +743,18 @@ def generate_launch_description():
             # ==================== Rosbag Replay Inputs ====================
             DeclareLaunchArgument(
                 "rosbag_file",
-                default_value="/home/user/DATA/RADAR_ROSBAG/test_compressed/test_compressed_0.db3",
+                default_value="/home/user/DATA/RADAR_ROSBAG/radar_match_camera_lidar/radar_match_camera_lidar_0.db3",
                 description="input rosbag path for replay",
             ),
             DeclareLaunchArgument(
                 "lidar_input_topic",
-                default_value="/livox/lidar",
+                default_value="/livox/lidar_integrated",
                 description="input PointCloud2 topic in the rosbag",
             ),
             DeclareLaunchArgument(
                 "image_input_topic",
                 default_value="/camera0/image",
                 description="input raw sensor_msgs/Image topic in the rosbag",
-            ),
-            DeclareLaunchArgument(
-                "compressed_image_input_topic",
-                default_value="/compressed_image",
-                description="input sensor_msgs/CompressedImage topic in the rosbag",
             ),
             DeclareLaunchArgument(
                 "decision_params_file",
