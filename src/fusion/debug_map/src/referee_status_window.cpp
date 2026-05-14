@@ -352,9 +352,13 @@ public:
       [](const auto & msg) {
         std::ostringstream oss;
         oss << "radar_cmd=" << static_cast<int>(msg.radar_cmd)
-            << " password_cmd=" << static_cast<int>(msg.password_cmd)
-            << " key=" << keyString(msg.password)
-            << " note=" << msg.note;
+            << " password_cmd=" << static_cast<int>(msg.password_cmd);
+        if (msg.password_cmd == 2U) {
+          oss << " verify_key=" << keyString(msg.password);
+        } else if (msg.password_cmd == 1U) {
+          oss << " set_key=" << keyString(msg.password);
+        }
+        oss << " note=" << msg.note;
         return oss.str();
       });
 

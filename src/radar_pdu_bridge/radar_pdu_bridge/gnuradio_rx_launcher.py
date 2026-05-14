@@ -25,7 +25,7 @@ class GnuradioRxLauncher(Node):
             "script_path",
             "/home/user/gnuradio_grc/0416/rx_red_gfsk.py",
         )
-        self.declare_parameter("default_identity", "red")
+        self.declare_parameter("default_identity", "blue")
         self.declare_parameter("allow_direct_13", True)
         self.declare_parameter("access_code0", "2F6F4C74B914492E")
         self.declare_parameter("access_code1", "16E8D377151C712D")

@@ -730,7 +730,7 @@ def generate_launch_description():
             # 3) gimbal_serial_device: gimbal serial port, kept here for consistent launch CLI.
             DeclareLaunchArgument(
                 "our_color",
-                default_value="red",
+                default_value="blue",
                 description="IMPORTANT: fallback team color when referee identity is unavailable: red or blue",
             ),
             DeclareLaunchArgument(

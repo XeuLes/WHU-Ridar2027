@@ -13,6 +13,7 @@
 #include <sstream>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include <ament_index_cpp/get_package_share_directory.hpp>
@@ -140,6 +141,7 @@ public:
       this->declare_parameter<int>("default_interference_key_repeat_threshold", 3);
     default_interference_verify_key_ =
       ascii_key_from_string(default_interference_verify_key_text_, make_ascii_key("RM2026"));
+    reset_submitted_interference_verify_keys();
     radar_cmd_counter_state_path_ =
       this->declare_parameter<std::string>(
         "radar_cmd_counter_state_path", "/tmp/radar_decision_0121_counter.txt");
@@ -437,6 +439,9 @@ private:
       default_interference_verify_key_pending_ = false;
       last_submitted_interference_verify_key_.reset();
       repeated_interference_verify_key_count_ = 0;
+      reset_submitted_interference_verify_keys();
+      interference_key_samples_.clear();
+      interference_key_window_active_ = false;
       have_last_radar_decision_fallback_tp_ = false;
       save_radar_cmd_counter_state(true);
       RCLCPP_INFO(
@@ -695,12 +700,23 @@ private:
   {
     const auto & msg = last_blackboard_.wireless_interference_key;
     const int64_t stamp_ns = rclcpp::Time(msg.header.stamp).nanoseconds();
+    if (!is_match_running()) {
+      if (stamp_ns > 0 && is_alnum_ascii_key(msg.key)) {
+        last_interference_key_stamp_ns_ = stamp_ns;
+      }
+      interference_key_samples_.clear();
+      interference_key_window_active_ = false;
+      return;
+    }
+
     if (stamp_ns > 0 && stamp_ns != last_interference_key_stamp_ns_ && is_alnum_ascii_key(msg.key)) {
-      interference_key_samples_.push_back(InterferenceKeySample{msg.key, now});
       last_interference_key_stamp_ns_ = stamp_ns;
-      if (!interference_key_window_active_) {
-        interference_key_window_start_ = now;
-        interference_key_window_active_ = true;
+      if (!has_submitted_interference_verify_key(msg.key)) {
+        interference_key_samples_.push_back(InterferenceKeySample{msg.key, now});
+        if (!interference_key_window_active_) {
+          interference_key_window_start_ = now;
+          interference_key_window_active_ = true;
+        }
       }
     }
 
@@ -723,6 +739,9 @@ private:
     std::unordered_map<std::string, std::array<uint8_t, 6>> keys;
     for (const auto & sample : interference_key_samples_) {
       const auto key_text = key_to_string(sample.key);
+      if (submitted_interference_verify_keys_.count(key_text) != 0U) {
+        continue;
+      }
       ++counts[key_text];
       keys[key_text] = sample.key;
     }
@@ -753,7 +772,28 @@ private:
 
   bool can_update_own_interference_key() const
   {
-    return !last_blackboard_.referee_stale && last_blackboard_.radar_sync.can_change_key;
+    return is_match_running() && !last_blackboard_.referee_stale && last_blackboard_.radar_sync.can_change_key;
+  }
+
+  bool is_match_running() const
+  {
+    return static_cast<int>(last_blackboard_.game_state.game_progress) == 4;
+  }
+
+  bool has_submitted_interference_verify_key(const std::array<uint8_t, 6> & key) const
+  {
+    return submitted_interference_verify_keys_.count(key_to_string(key)) != 0U;
+  }
+
+  bool can_submit_default_interference_verify_key() const
+  {
+    return !has_submitted_interference_verify_key(default_interference_verify_key_);
+  }
+
+  void reset_submitted_interference_verify_keys()
+  {
+    submitted_interference_verify_keys_.clear();
+    submitted_interference_verify_keys_.insert(key_to_string(default_interference_verify_key_));
   }
 
   bool can_send_radar_decision_fallback() const
@@ -773,6 +813,7 @@ private:
   {
     last_interference_verify_tp_ = current_tick_now_;
     have_last_interference_verify_tp_ = true;
+    submitted_interference_verify_keys_.insert(key_to_string(key));
 
     if (last_submitted_interference_verify_key_ && *last_submitted_interference_verify_key_ == key) {
       ++repeated_interference_verify_key_count_;
@@ -783,6 +824,7 @@ private:
 
     if (
       key != default_interference_verify_key_ &&
+      can_submit_default_interference_verify_key() &&
       default_interference_key_repeat_threshold_ > 0 &&
       repeated_interference_verify_key_count_ >= default_interference_key_repeat_threshold_)
     {
@@ -804,8 +846,19 @@ private:
     if (!enable_interference_key_command_ || password_cmd == nullptr || password == nullptr) {
       return false;
     }
+    if (!is_match_running()) {
+      return false;
+    }
 
-    if (default_interference_verify_key_pending_ && can_submit_interference_verify_key()) {
+    if (default_interference_verify_key_pending_ && !can_submit_default_interference_verify_key()) {
+      default_interference_verify_key_pending_ = false;
+      repeated_interference_verify_key_count_ = 0;
+    }
+    if (
+      default_interference_verify_key_pending_ &&
+      can_submit_default_interference_verify_key() &&
+      can_submit_interference_verify_key())
+    {
       *password_cmd = 2U;
       *password = default_interference_verify_key_;
       default_interference_verify_key_pending_ = false;
@@ -836,6 +889,7 @@ private:
         return true;
       }
       interference_key_window_active_ = false;
+      interference_key_samples_.clear();
     }
 
     if (
@@ -1229,7 +1283,10 @@ private:
     bool fallback_changed = false;
     if (
       !double_effect_changed && !password_changed && can_send_radar_decision_fallback() &&
-      enable_interference_key_command_ && can_submit_interference_verify_key())
+      enable_interference_key_command_ &&
+      is_match_running() &&
+      can_submit_default_interference_verify_key() &&
+      can_submit_interference_verify_key())
     {
       outgoing_radar_cmd = radar_cmd_counter_;
       password_cmd = 2U;
@@ -1272,7 +1329,7 @@ private:
       if (password_cmd == 2U) {
         note << "|verify=" << key_to_string(password);
       } else if (password_cmd == 1U) {
-        note << "|update";
+        note << "|set_key=" << key_to_string(password);
       }
     }
     cmd.note = note.str();
@@ -1574,6 +1631,7 @@ private:
   int repeated_interference_verify_key_count_{0};
   bool default_interference_verify_key_pending_{false};
   int64_t last_interference_key_stamp_ns_{0};
+  std::unordered_set<std::string> submitted_interference_verify_keys_;
   std::mt19937 rng_{std::random_device{}()};
 
   radar_decision_comm::msg::BattleBlackboard last_blackboard_;

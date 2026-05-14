@@ -52,6 +52,10 @@ def _team_config(our_color: str):
     raise RuntimeError(f"our_color must be 'red' or 'blue', got: {our_color}")
 
 
+def _as_bool(value: str) -> bool:
+    return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+
 def _build_launch(context):
     team = _team_config(LaunchConfiguration("our_color").perform(context))
     referee_rx_mode = LaunchConfiguration("referee_rx_mode").perform(context)
@@ -69,8 +73,8 @@ def _build_launch(context):
     )
     decision_params_file = LaunchConfiguration("decision_params_file").perform(context)
     pdu_poll_period_ms = int(LaunchConfiguration("pdu_poll_period_ms").perform(context))
-    enable_calibration = LaunchConfiguration("enable_calibration").perform(context).strip().lower()
-    enable_calibration = enable_calibration in ("1", "true", "yes", "on")
+    enable_calibration = _as_bool(LaunchConfiguration("enable_calibration").perform(context))
+    show_debug_map = _as_bool(LaunchConfiguration("show_debug_map").perform(context))
     calib_image_file = LaunchConfiguration("calib_image_file").perform(context).strip()
 
     bringup_share = get_package_share_directory("radar_bringup")
@@ -349,7 +353,7 @@ def _build_launch(context):
         name="debug_map_node",
         parameters=[
             {
-                "map_path": os.path.join(debug_map_share, "config", "RM2025.png"),
+                "map_path": os.path.join(debug_map_share, "config", "RM2026.png"),
                 "use_match_info_color": False,
                 "self_color_override": team["match_self_color"],
                 "use_referee_identity_color": True,
@@ -357,6 +361,7 @@ def _build_launch(context):
         ],
         extra_arguments=intra,
     )
+    debug_map_components = [debug_map_component] if show_debug_map else []
 
     auto_aim_component = ComposableNode(
         package="auto_aim_fast",
@@ -404,7 +409,7 @@ def _build_launch(context):
             resolve_component,
             kalman_filter_component,
             kalman_tracks_adapter_component,
-            # debug_map_component,
+            *debug_map_components,
         ],
         output="both",
         emulate_tty=True,
@@ -774,6 +779,7 @@ def _build_launch(context):
         LogInfo(msg=f"referee rx_mode={referee_rx_mode} tx_mode={referee_tx_mode}"),
         LogInfo(msg=f"referee serial device={referee_serial_device} baudrate={referee_serial_baudrate}"),
         LogInfo(msg=f"gimbal serial device={gimbal_serial_device}"),
+        LogInfo(msg=f"debug map enabled={show_debug_map}"),
         LogInfo(
             msg=["match rosbag recorder enabled, output_dir=", LaunchConfiguration("rosbag_output_dir")],
             condition=IfCondition(LaunchConfiguration("record_rosbag")),
@@ -915,7 +921,7 @@ def generate_launch_description():
             # 3) gimbal_serial_device: gimbal serial port.
             DeclareLaunchArgument(
                 "our_color",
-                default_value="red",
+                default_value="blue",
                 description="IMPORTANT: fallback team color when referee identity is unavailable: red or blue",
             ),
             DeclareLaunchArgument(
@@ -970,6 +976,11 @@ def generate_launch_description():
                 description="open image_view window for /detect/debug_image",
             ),
             DeclareLaunchArgument(
+                "show_debug_map",
+                default_value="true",
+                description="open debug_map minimap window and publish /map_2d, /debug_map_result",
+            ),
+            DeclareLaunchArgument(
                 "decision_params_file",
                 default_value=default_decision_params,
                 description="radar_decision_comm parameter file",
@@ -1006,7 +1017,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "record_rosbag",
-                default_value="false",
+                default_value="true",
                 description=(
                     "arm match-triggered rosbag recording; records compressed "
                     "camera0/camera2 images, camera_info, and Livox topics when "
@@ -1034,7 +1045,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "enable_calibration",
-                default_value="false",
+                default_value="true",
                 description="whether to run pnp_calib_new.launch.py before starting the normal radar flow",
             ),
             DeclareLaunchArgument(
