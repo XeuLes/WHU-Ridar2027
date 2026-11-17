@@ -743,7 +743,7 @@ def generate_launch_description():
             # ==================== Rosbag Replay Inputs ====================
             DeclareLaunchArgument(
                 "rosbag_file",
-                default_value="/home/user/DATA/RADAR_ROSBAG/radar_match_camera_lidar/radar_match_camera_lidar_0.db3",
+                default_value="/home/user/DATA/rosbag.db3",
                 description="input rosbag path for replay",
             ),
             DeclareLaunchArgument(

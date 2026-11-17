@@ -889,7 +889,7 @@ def generate_launch_description():
         calib_tool_share, "config", "reference_points_RM.yaml"
     )
     default_calib_out_matrix = os.path.join(
-        bringup_share, "config", "out_matrix_RM_CS.yaml"
+        bringup_share, "config", "out_matrix_RM.yaml"
     )
 
     # WHU
@@ -901,7 +901,7 @@ def generate_launch_description():
             # 3) gimbal_serial_device: gimbal serial port.
             DeclareLaunchArgument(
                 "our_color",
-                default_value="blue",
+                default_value="red",
                 description="IMPORTANT: fallback team color when referee identity is unavailable: red or blue",
             ),
             DeclareLaunchArgument(
@@ -952,7 +952,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "show_detect_debug_window",
-                default_value="true",
+                default_value="true ",
                 description="open image_view window for /detect/debug_image",
             ),
             DeclareLaunchArgument(

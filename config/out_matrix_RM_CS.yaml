@@ -13,4 +13,4 @@ world_tvec: !!opencv-matrix
 num_points: 7
 reproj_rmse: 85.128695040936066
 reproj_max: 125.26566260680053
-image_topic: /calib_camera_image
+image_topic: /camera0/image
